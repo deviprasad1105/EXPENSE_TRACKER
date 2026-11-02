@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Expense Tracker (Python + React + Oracle)
 
 Daily expense tracker with customisable daily items, a balance dashboard with charts, Excel/PDF reports,
@@ -181,3 +182,6 @@ frontend/src/
                    Splits, SplitGroup, Subscriptions, Notifications, Profile, Settings, Admin, Login, Register, ForgotPassword,
                    ResetPassword
 ```
+=======
+# EXPENSE_TRACKER
+>>>>>>> origin/main
