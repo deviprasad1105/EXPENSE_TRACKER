@@ -167,7 +167,7 @@ def trading_doc(r: dict, business: str) -> Doc:
         left.append(("Gross Profit c/o", gp, True, 0))
     elif gp < 0:
         right.append(("Gross Loss c/o", -gp, True, 0))
-    note = None if r["closing_stock_entered"] else "Closing stock for this year hasn't been entered."
+    note = "Closing stock for this year hasn't been entered." if r["closing_stock_missing"] else None
     return _t_doc("Trading Account", r["period"], business, "Particulars (Dr)", "Particulars (Cr)", left, right,
                   t["total"], t["total"], note)
 
@@ -187,7 +187,7 @@ def profit_loss_doc(r: dict, business: str) -> Doc:
 
 
 def balance_sheet_doc(r: dict, business: str) -> Doc:
-    note = None if r["closing_stock_entered"] else "Closing stock for this year hasn't been entered."
+    note = "Closing stock for this year hasn't been entered." if r["closing_stock_missing"] else None
     return _t_doc("Balance Sheet", r["period"], business, "Liabilities", "Assets", _side(r["liabilities"]),
                   _side(r["assets"]), r["total_liabilities"], r["total_assets"], note)
 
@@ -205,7 +205,7 @@ def cash_flow_doc(r: dict, business: str) -> Doc:
         Row(["Cash and cash equivalents at the beginning", None, r["opening_cash"]]),
         Row(["Cash and cash equivalents at the end", None, r["closing_cash"]], bold=True, shade=True),
     ]
-    if not r["closing_stock_entered"]:
+    if r["closing_stock_missing"]:
         doc.note = "Closing stock for this year hasn't been entered."
     return doc
 

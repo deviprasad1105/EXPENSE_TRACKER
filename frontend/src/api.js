@@ -27,14 +27,29 @@ export function errorMessage(err) {
 }
 
 export async function download(url, params, fallbackName) {
-  const res = await api.get(url, { params, responseType: 'blob' })
+  let res
+  try {
+    res = await api.get(url, { params, responseType: 'blob' })
+  } catch (err) {
+    // The error body arrives as a Blob too: read it so the server's message ("range too long"…) is shown
+    const data = err.response?.data
+    if (data instanceof Blob) {
+      try {
+        err.response.data = JSON.parse(await data.text())
+      } catch {
+        /* not JSON: keep the generic message */
+      }
+    }
+    throw err
+  }
   const disposition = res.headers['content-disposition'] || ''
   const match = disposition.match(/filename="?([^"]+)"?/)
   const link = document.createElement('a')
   link.href = URL.createObjectURL(res.data)
   link.download = match ? match[1] : fallbackName
   link.click()
-  URL.revokeObjectURL(link.href)
+  // Revoking at once can cancel the download in some browsers
+  setTimeout(() => URL.revokeObjectURL(link.href), 10_000)
 }
 
 export const money = (v) =>

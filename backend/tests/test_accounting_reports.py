@@ -337,3 +337,17 @@ def test_reversed_voucher_loses_its_bank_match(books, client):
     ws = books.get("/bank/workspace", ledger_id=hdfc)
     salary = next(s for s in ws["statement"] if s["description"] == "SALARY CREDIT")
     assert salary["matched_line_id"] is None
+
+
+def test_closing_stock_warning_only_when_the_business_holds_stock(client, make_user, books):
+    # The fixture business entered this year's closing stock
+    assert books.get("/reports/trading", fy=FY1)["closing_stock_missing"] is False
+    # A service business (no stock, no purchases) is never warned
+    me = make_user("ravi", accounting=True)
+    client.post("/api/expenses", json={"expense_date": str(TODAY), "item_name": "Rent", "category": "Rent", "amount": 100}, headers=headers(me))
+    service = Books(client, me)
+    assert service.get("/reports/trading")["closing_stock_missing"] is False
+    assert service.get("/reports/balance-sheet")["closing_stock_missing"] is False
+    # Once it buys goods, the missing closing stock is flagged
+    service.voucher("PAYMENT", TODAY, ("Purchases", 500, 0), ("Cash", 0, 500))
+    assert service.get("/reports/trading")["closing_stock_missing"] is True

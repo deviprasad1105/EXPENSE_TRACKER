@@ -96,7 +96,11 @@ export function AuthProvider({ children }) {
 
 export const useAuth = () => useContext(AuthContext)
 
-/** Features ("subscriptions") the admin grants per user: 'expense' or 'split'. Admins have all of them. */
-export const hasFeature = (user, feature) => !!user && (user.role === 'ADMIN' || !!user[`feature_${feature}`])
+/** Features ("subscriptions") the admin grants per user: 'expense', 'split', 'subscription' or 'accounting'.
+ * Admins have all of them. Accounting is built from expense tracking, so it needs that too. */
+export const hasFeature = (user, feature) =>
+  !!user &&
+  (user.role === 'ADMIN' ||
+    (!!user[`feature_${feature}`] && (feature !== 'accounting' || !!user.feature_expense)))
 /** Split bills can be used by anyone added to a group, but only users with the plan can create groups. */
 export const canUseSplits = (user) => hasFeature(user, 'split') || !!user?.in_split_group

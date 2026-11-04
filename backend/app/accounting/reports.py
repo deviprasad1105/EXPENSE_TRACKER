@@ -30,6 +30,7 @@ from .balances import (
     opening_difference,
     retained_profit,
     stock_for,
+    stock_missing,
     year_profit,
 )
 from .chart import ASSET, BS, CASH, EXPENSE, FINANCING, GROUPS, INCOME, INVESTING, LIABILITY, OPERATING, PL, TRADING
@@ -238,7 +239,7 @@ def trading_and_pl(db: Session, books: AccSettings, p: Period) -> dict:
 
     return {
         "period": p.label, "start": fy_start(p.fy), "end": p.end, "fy": p.fy,
-        "closing_stock_entered": stock_close is not None,
+        "closing_stock_missing": stock_missing(db, uid, p.fy, p.end, first, ledgers),
         "trading": {
             "debit": [sec("Opening Stock", [{"name": "Opening Stock", "amount": stock_open}] if stock_open else []),
                       sec("Purchase Accounts", purchases), sec("Direct Expenses", direct_exp)],
@@ -309,7 +310,8 @@ def balance_sheet(db: Session, books: AccSettings, as_of: date) -> dict:
     return {
         "as_of": as_of, "fy": fy, "period": f"As at {as_of:%d %b %Y} (FY {fy_label(fy)})",
         "liabilities": liabilities, "assets": assets, "total_liabilities": total_l, "total_assets": total_a,
-        "balanced": total_l == total_a, "net_profit": net, "closing_stock_entered": closing_stock is not None,
+        "balanced": total_l == total_a, "net_profit": net,
+        "closing_stock_missing": stock_missing(db, uid, fy, as_of, first, ledgers),
     }
 
 
@@ -367,7 +369,7 @@ def cash_flow(db: Session, books: AccSettings, p: Period) -> dict:
         "sections": [operating, investing, financing], "net_change": net_change,
         "opening_cash": opening_cash, "closing_cash": closing_cash,
         "reconciled": opening_cash + net_change == closing_cash,
-        "closing_stock_entered": stock_close is not None,
+        "closing_stock_missing": stock_missing(db, uid, p.fy, p.end, first, ledgers),
     }
 
 

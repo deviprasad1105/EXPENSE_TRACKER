@@ -81,6 +81,19 @@ def stock_for(db: Session, user_id: int, fy: int, first_fy: int) -> tuple[Decima
     return opening, closing
 
 
+def stock_missing(db: Session, user_id: int, fy: int, end: date, first_fy: int, ledgers: list[AccLedger]) -> bool:
+    """Closing stock not entered although the business holds stock (opening stock, or purchases this year).
+    A business with no stock at all is never nagged about it."""
+    opening, closing = stock_for(db, user_id, fy, first_fy)
+    if closing is not None:
+        return False
+    if opening:
+        return True
+    purchases = {g.id for g in ledgers if g.group_code == "PURCHASE"}
+    moves = movements(db, user_id, fy_start(fy), end)
+    return any(moves.get(i, (ZERO, ZERO))[0] for i in purchases)
+
+
 def first_opening_stock(db: Session, user_id: int, first_fy: int) -> Decimal:
     return stock_for(db, user_id, first_fy, first_fy)[0]
 

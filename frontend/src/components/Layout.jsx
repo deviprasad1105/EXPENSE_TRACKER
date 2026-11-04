@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import AccountBalanceOutlined from '@mui/icons-material/AccountBalanceOutlined'
 import AccountBalanceWalletOutlined from '@mui/icons-material/AccountBalanceWalletOutlined'
+import AccountTreeOutlined from '@mui/icons-material/AccountTreeOutlined'
 import AdminPanelSettingsOutlined from '@mui/icons-material/AdminPanelSettingsOutlined'
 import AssessmentOutlined from '@mui/icons-material/AssessmentOutlined'
 import AutoAwesomeOutlined from '@mui/icons-material/AutoAwesomeOutlined'
@@ -12,11 +14,14 @@ import EventRepeatOutlined from '@mui/icons-material/EventRepeatOutlined'
 import GroupsOutlined from '@mui/icons-material/GroupsOutlined'
 import LightModeOutlined from '@mui/icons-material/LightModeOutlined'
 import LogoutOutlined from '@mui/icons-material/LogoutOutlined'
+import MenuBookOutlined from '@mui/icons-material/MenuBookOutlined'
 import NotificationsNoneOutlined from '@mui/icons-material/NotificationsNoneOutlined'
 import PersonOutlineOutlined from '@mui/icons-material/PersonOutlineOutlined'
 import ReceiptLongOutlined from '@mui/icons-material/ReceiptLongOutlined'
 import SettingsOutlined from '@mui/icons-material/SettingsOutlined'
 import SpaceDashboardOutlined from '@mui/icons-material/SpaceDashboardOutlined'
+import SummarizeOutlined from '@mui/icons-material/SummarizeOutlined'
+import TuneOutlined from '@mui/icons-material/TuneOutlined'
 import VisibilityOutlined from '@mui/icons-material/VisibilityOutlined'
 import WalletRounded from '@mui/icons-material/WalletRounded'
 import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded'
@@ -48,6 +53,7 @@ export default function Layout() {
   const split = canUseSplits(user)
   const splitPlan = hasFeature(user, 'split')
   const subscription = hasFeature(user, 'subscription')
+  const accounting = hasFeature(user, 'accounting')
 
   // Welcome tour: once per login session until the user ticks "Don't show again"
   useEffect(() => {
@@ -149,6 +155,18 @@ export default function Layout() {
             ['/funds', 'Balance', AccountBalanceWalletOutlined, 'nav-funds'],
             ['/reports', 'Reports', AssessmentOutlined, 'nav-reports'],
             ['/sharing', 'Team & Sharing', GroupsOutlined, 'nav-sharing'],
+          ]
+        : [],
+    },
+    {
+      title: 'Accounting',
+      items: accounting
+        ? [
+            ['/accounting/vouchers', 'Vouchers', MenuBookOutlined, 'nav-vouchers'],
+            ['/accounting/ledgers', 'Chart of Accounts', AccountTreeOutlined, 'nav-ledgers'],
+            ['/accounting/reports', 'Financial Reports', SummarizeOutlined, 'nav-acc-reports'],
+            ['/accounting/bank', 'Bank Reconciliation', AccountBalanceOutlined, 'nav-bank'],
+            ['/accounting/settings', 'Accounting Settings', TuneOutlined, 'nav-acc-settings'],
           ]
         : [],
     },

@@ -19,6 +19,11 @@ import ResetPassword from './pages/ResetPassword'
 import Splits from './pages/Splits'
 import SplitGroup from './pages/SplitGroup'
 import Subscriptions from './pages/Subscriptions'
+import Vouchers from './accounting/Vouchers'
+import Ledgers from './accounting/Ledgers'
+import AccountingReports from './accounting/Reports'
+import BankReconciliation from './accounting/Bank'
+import AccountingSettings from './accounting/AccountingSettings'
 
 function Protected({ children, adminOnly }) {
   const { user, loading, serverDown, refresh, logout } = useAuth()
@@ -83,6 +88,11 @@ export default function App() {
         <Route path="splits" element={<Feature name="split"><Splits /></Feature>} />
         <Route path="splits/:groupId" element={<Feature name="split"><SplitGroup /></Feature>} />
         <Route path="subscriptions" element={<Feature name="subscription"><Subscriptions /></Feature>} />
+        <Route path="accounting/vouchers" element={<Feature name="accounting"><Vouchers /></Feature>} />
+        <Route path="accounting/ledgers" element={<Feature name="accounting"><Ledgers /></Feature>} />
+        <Route path="accounting/reports" element={<Feature name="accounting"><AccountingReports /></Feature>} />
+        <Route path="accounting/bank" element={<Feature name="accounting"><BankReconciliation /></Feature>} />
+        <Route path="accounting/settings" element={<Feature name="accounting"><AccountingSettings /></Feature>} />
         <Route path="notifications" element={<Notifications />} />
         <Route path="profile" element={<Profile />} />
         <Route path="settings" element={<Settings />} />
