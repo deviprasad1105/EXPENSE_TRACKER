@@ -1,24 +1,24 @@
-# Expense Tracker (Python + React + Oracle)
+# Expense Tracker (Python + React + Postgres)
 
 Daily expense tracker with customisable daily items, a balance dashboard with charts, Excel/PDF reports,
 missed-entry reminders, a manager hierarchy, read-only sharing, profiles, and admin approval of new users.
 
 | Layer    | Tech |
 |----------|------|
-| Backend  | FastAPI, SQLAlchemy 2, python-oracledb (thin mode, no Instant Client needed), APScheduler, openpyxl, reportlab |
+| Backend  | FastAPI, SQLAlchemy 2, psycopg 3, APScheduler, openpyxl, reportlab |
 | Frontend | React 18 + Vite, React Router, Recharts, Material UI icons (and lucide-react on older pages), Inter font |
-| Database | Oracle 23ai Free: existing `face_tracker_oracle` container, schema **`DEV_DR`** in `FREEPDB1` |
+| Database | Postgres 17: existing `LOCAL_FCHUB_DB` container (port 5445), user and database **`dev_dr_expense`** |
 
 ## Run it
 
 ```bash
-# 1. Database: no new container. Uses face_tracker_oracle (localhost:1521), schema DEV_DR.
-#    Put the DEV_DR password in backend/.env (DATABASE_URL). DEV_DR needs CREATE TABLE + CREATE SEQUENCE.
+# 1. Database: no new container. Uses LOCAL_FCHUB_DB (localhost:5445), user/database dev_dr_expense
+#    (docker start LOCAL_FCHUB_DB). Put its password in backend/.env (DATABASE_URL).
 
 # 2. Backend → http://localhost:8000   API docs → http://localhost:8000/api/docs
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp .env.example .env            # set the DEV_DR password, JWT secret, reminder time, SMTP
+cp .env.example .env            # set the dev_dr_expense password, JWT secret, reminder time, SMTP
 .venv/bin/uvicorn app.main:app --reload --port 8000
 
 # 3. Frontend → http://localhost:5173
@@ -27,10 +27,28 @@ npm install
 npm run dev
 ```
 
-On first start the backend creates its 22 tables in `DEV_DR` and an admin from `.env`
+On first start the backend creates its 22 tables in `dev_dr_expense` and an admin from `.env`
 (default **admin / admin123**, change it: with `ENVIRONMENT=production` the backend refuses to start while the admin
 password is the default or `JWT_SECRET` is shorter than 32 characters). **[docs/DATABASE.md](docs/DATABASE.md)** describes every table,
-what it stores, and how the rules work. `backend/sql/schema.sql` holds the equivalent Oracle DDL.
+what it stores, and how the rules work. `backend/sql/schema.sql` holds the equivalent Postgres DDL.
+Data from the old Oracle schema was copied with `backend/scripts/oracle_to_postgres.py`.
+
+## Deploy to Vercel (one project: React + Python)
+
+`vercel.json` builds the React app into static files and serves the FastAPI backend as one Python function
+(`api/index.py`) under `/api`, so the frontend's relative `/api` calls work on the same domain with no CORS setup.
+
+1. Create a hosted Postgres (Vercel Marketplace → Neon, or Supabase). Vercel's servers cannot reach the local
+   Docker database. Use the provider's **pooled** connection string.
+2. Import the repo in Vercel and leave *Root Directory* as the repo root (the settings come from `vercel.json`).
+3. Environment variables: `DATABASE_URL`, `ENVIRONMENT=production`, `JWT_SECRET` (32+ chars), `ADMIN_PASSWORD`,
+   `ADMIN_EMAIL`, `CRON_SECRET`, `FRONTEND_URL=https://<your-app>.vercel.app`, and the `SMTP_*` settings for email.
+4. Deploy. The first request creates the tables and the admin user.
+
+Scheduled jobs: there is no long-running process on Vercel, so APScheduler is off there (`VERCEL` is set) and
+Vercel Cron calls `/api/cron/daily-reminder` (15:30 UTC = 21:00 IST) and `/api/cron/subscriptions` (once a day).
+The Hobby plan allows only daily crons; on Pro set the subscriptions schedule to `5 * * * *` for hourly runs.
+To move local data to the hosted DB: `pg_dump` the local database and `psql` it into the new one.
 
 ### Tests
 
@@ -40,7 +58,7 @@ cd backend
 .venv/bin/python -m pytest
 ```
 
-They run against an in-memory SQLite database, so they need neither Oracle nor a running server.
+They run against an in-memory SQLite database, so they need neither Postgres nor a running server.
 
 ## Features
 
@@ -172,7 +190,9 @@ backend/app/
                    accounts (balances, primary account), budgets (limits and alerts),
                    insights (month-by-month comparison for the dashboard)
 backend/tests/           pytest suite (auth, access rules, splits, subscriptions, accounts, budgets, insights)
-backend/sql/schema.sql   Oracle DDL reference
+backend/sql/schema.sql   Postgres DDL reference
+backend/scripts/         oracle_to_postgres.py (one-off data copy)
+api/index.py             Vercel entry point for the backend
 docs/DATABASE.md         table-by-table guide
 frontend/src/
   auth.jsx         session, theme, "viewing user" selection
