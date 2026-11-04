@@ -50,6 +50,7 @@ Everyone who can log in, plus their role, approval state, reporting line and pre
 | `feature_expense` | SMALLINT | 1 = the user's plan includes expense tracking (default 1). |
 | `feature_split` | SMALLINT | 1 = the user's plan includes split bills (default 0). Set by an admin. |
 | `feature_subscription` | SMALLINT | 1 = the user's plan includes the subscription tracker (default 0). Set by an admin. Admins always have every feature. |
+| `feature_accounting` | SMALLINT | 1 = the user's plan includes accounting (default 0). Needs `feature_expense` too. Set by an admin. |
 | `token_version` | INTEGER | Written into every sign-in token. Raised on a password change or reset, "sign out other devices" and an admin lock, which revokes every older token. |
 | `failed_logins` | INTEGER | Wrong passwords in a row. Reset by a successful sign-in. |
 | `login_blocked_until` | DATE, nullable | After `LOGIN_MAX_FAILURES` (5) wrong passwords, sign-in is refused until this time (`LOGIN_LOCK_MINUTES`, 15). |
@@ -422,6 +423,83 @@ the avatar. Deleted by *Settings → Appearance → Reset to default*.
 One row per run of a scheduled job (`job_name`, `run_key` unique, e.g. `daily_reminder` / `2026-10-30`, or
 `subscriptions` / `2026-10-30T09`). With several worker processes each has its own scheduler; only the one that
 inserts the row first runs the job. Rows older than 60 days are removed on startup.
+
+## Accounting (double-entry books)
+
+Each user with the Accounting feature has their own books. Everything in the reports is computed from
+`VOUCHER_LINES`; expenses, funds and the rest reach the books only through vouchers.
+The Tally group tree (Capital Account, Loans, Current Liabilities, Fixed Assets, Current Assets, Sales, Purchase,
+Direct / Indirect Incomes and Expenses, Suspense, with their sub-groups) is fixed in `backend/app/accounting/chart.py`,
+so ledgers store a `group_code` instead of pointing at a groups table.
+
+### ACC_SETTINGS
+One row per user; the books exist once it does.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `user_id` | INTEGER, FK, unique | Whose books. |
+| `business_name`, `state`, `gstin` | VARCHAR2 | Shown on reports. `state` decides CGST + SGST or IGST on invoices. |
+| `books_start` | DATE | 1 April of the first financial year (the year of the earliest transaction). |
+| `lock_date` | DATE, nullable | Nothing dated on or before it may be posted, edited, deleted or reversed. |
+| `locked_by`, `locked_at` | | Who set the lock and when. |
+| `synced_at` | DATE | Last full re-sync with the user's transactions. |
+
+### ACC_LEDGERS
+
+| Column | Type | Meaning |
+|---|---|---|
+| `name` | VARCHAR2(100) | Unique per user. |
+| `group_code` | VARCHAR2(30) | One of the fixed Tally groups. |
+| `code` | VARCHAR2(30), nullable | Standard ledgers the app posts to (`CAPITAL`, `DRAWINGS`, `CASH`, `SUSPENSE`, `OUT_CGST`…). Unique per user, checked in code. |
+| `opening_balance` | NUMBER(15,2) | Signed: debit positive, credit negative. Only balance-sheet ledgers have one. |
+| `is_active`, `is_depreciation` | SMALLINT | Inactive ledgers can't be used in new manual vouchers. Depreciation ledgers are added back in the cash flow. |
+| `account_id` | FK → `accounts`, unique, nullable | The bank account / card / wallet / cash this ledger stands for. |
+| `split_group_id` | FK → `split_groups`, nullable | "Split – group": what the others in that group owe this user. |
+| `gstin`, `state` | | For customers and suppliers. |
+
+### VOUCHERS
+
+| Column | Type | Meaning |
+|---|---|---|
+| `voucher_type` | VARCHAR2(10) | `PAYMENT`, `RECEIPT`, `CONTRA`, `JOURNAL`, `SALES`, `PURCHASE`. |
+| `voucher_no`, `fy` | INTEGER | Numbered per type within the financial year (`fy` 2026 = 2026-27). Unique per user, type and year. |
+| `voucher_date`, `narration` | | |
+| `status` | VARCHAR2(10) | `POSTED`, or `REVERSED` once a reversal has been posted for it. |
+| `is_reversal`, `reversal_of_id` | | A reversal mirrors the lines of the voucher it reverses, on the same date. Both stay in the books. |
+| `source_type`, `source_id`, `source_version` | nullable | Auto-posted from an `EXPENSE`, `FUND`, `TRANSFER`, `SUB_CHARGE`, `SPLIT_BILL` or `SPLIT_SETTLEMENT`. Each change to the source reverses the old version and posts the next one. |
+| `source_key` | VARCHAR2(80), unique, nullable | `EXPENSE:12:u3:v2`: makes posting the same version twice impossible (retries, concurrent requests). |
+| `party_ledger_id`, `invoice_no`, `place_of_supply` | nullable | GST invoices. |
+
+### VOUCHER_LINES
+`voucher_id`, `ledger_id`, `line_no`, `debit`, `credit` (NUMBER(15,2); exactly one of them is non-zero) and, on the
+sales / purchase line of a GST invoice, `gst_rate`. Every voucher's debits equal its credits.
+
+### ACC_POSTING_RULES
+Which ledger an expense category (`kind` = `EXPENSE_CATEGORY`) or a fund's source (`FUND_SOURCE`) posts to.
+`rule_key` is the case-folded name, unique per user and kind. A missing rule is created on first use: a ledger of
+the same name in an expense (income) group if there is one, otherwise **Drawings** (**Capital**), so personal
+spending and personal money never change the business's profit. Changing a rule re-posts that category's
+transactions in open periods.
+
+### ACC_STOCK
+Opening stock (first year only) and closing stock per financial year, entered by hand. Later years open with the
+previous year's closing stock.
+
+### BANK_IMPORTS / BANK_STATEMENT_LINES
+An imported statement and its lines (`txn_date`, `description`, `reference`, `withdrawal`, `deposit`, `balance`).
+`fingerprint` (unique per bank ledger) makes re-importing the same file a no-op. `matched_line_id` links a line to
+the `VOUCHER_LINES` row it was reconciled with (`match_kind` `AUTO` or `MANUAL`); matches to reversed vouchers are
+released automatically.
+
+**How it works**
+- **Auto-posting:** SQLAlchemy session hooks (`accounting/autopost.py`) note every expense, fund, transfer,
+  subscription charge, split bill or settlement that is added, changed or deleted, and sync its voucher just before
+  the commit. If that fails (for example a locked period), the whole change is rolled back.
+- **Year end:** income and expense ledgers start each year at zero; earlier years' profit is carried into capital by
+  calculation, so there is no closing entry to forget.
+- **Deleting a user** (admin) backs up and deletes their books with the rest of their data.
+
+---
 
 ## Who can see and change what
 

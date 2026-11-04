@@ -2,6 +2,9 @@
 
 Daily expense tracker with customisable daily items, a balance dashboard with charts, Excel/PDF reports,
 missed-entry reminders, a manager hierarchy, read-only sharing, profiles, and admin approval of new users.
+An optional **Accounting** module keeps Tally-style double-entry books for a sole proprietor, with the Journal,
+General Ledger, Trial Balance, Trading and Profit & Loss Accounts, Balance Sheet, Cash Flow Statement and Bank
+Reconciliation.
 
 | Layer    | Tech |
 |----------|------|
@@ -49,6 +52,25 @@ Scheduled jobs: there is no long-running process on Vercel, so APScheduler is of
 Vercel Cron calls `/api/cron/daily-reminder` (15:30 UTC = 21:00 IST) and `/api/cron/subscriptions` (once a day).
 The Hobby plan allows only daily crons; on Pro set the subscriptions schedule to `5 * * * *` for hourly runs.
 To move local data to the hosted DB: `pg_dump` the local database and `psql` it into the new one.
+
+### On Windows (PowerShell)
+
+```powershell
+# Backend → http://localhost:8000
+cd backend
+py -3.12 -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+copy .env.example .env          # then edit it
+.venv\Scripts\uvicorn app.main:app --reload --port 8000   # run it from backend\ so .env is found
+
+# Frontend → http://localhost:5173 (in a second window)
+cd frontend
+npm install
+npm run dev
+```
+
+Without the Postgres container, local development can use SQLite: `DATABASE_URL=sqlite:///./expense_tracker.db`
+in `backend/.env` (the tests run on SQLite too).
 
 ### Tests
 
@@ -152,6 +174,35 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
   a password, *Settings → Sign out other devices*, and an admin lock sign out every other session at once.
   Passwords need at least 8 characters. Responses carry security headers; in production the API docs are hidden
   and HSTS is sent.
+- **Accounting** (plan feature, needs Expenses; *Administration → Users → Plan*): double-entry books per user,
+  Tally style, for a sole proprietor. Financial year 1 April – 31 March.
+  - **Chart of Accounts**: Tally's groups (Capital Account, Loans, Current Liabilities → Duties & Taxes / Provisions /
+    Sundry Creditors, Fixed Assets, Investments, Current Assets → Bank Accounts / Cash-in-Hand / Sundry Debtors /
+    Loans & Advances, Sales, Purchase, Direct / Indirect Incomes and Expenses, Suspense) with standard ledgers
+    (Capital, Drawings, Cash, Output / Input CGST, SGST, IGST, TDS Payable / Receivable, Outstanding and Prepaid
+    Expenses, Accrued Income, Depreciation…). Add your own ledgers with opening balances. Each bank account gets a
+    ledger (credit cards as liabilities), and each split group a "Split – group" debtor ledger.
+  - **Vouchers**: Payment, Receipt, Contra, Journal, Sales and Purchase. Every voucher must balance (debits =
+    credits, in whole paise), and is numbered per type within the financial year. A posted voucher is never
+    edited: it is **reversed** (a mirror entry) and posted again. Sales and Purchase can be **GST invoices**:
+    CGST + SGST when the place of supply is the business's state, IGST otherwise (no return filing). TDS and
+    year-end adjustments (depreciation, outstanding / prepaid expenses, accrued income) are journal vouchers.
+  - **Automatic posting**: expenses, money received, transfers, subscription charges (unless already logged as an
+    expense), split bills (your share; what you paid for others becomes owed to you) and split settlements post
+    themselves, and follow every edit or deletion (reverse and re-post, never twice). **Posting rules** decide the
+    ledger per expense category / money source: personal spending defaults to **Drawings** and personal money in
+    to **Capital**, so neither touches the business's profit; map business categories to expense ledgers.
+  - **Period lock**: nothing dated on or before the lock date can be posted, edited, deleted or reversed, not even
+    by an admin (the subscription job skips a charge that would fall there). Corrections go in an open period.
+  - **Reports** (screen, Excel, PDF; Indian digit grouping): Journal, General Ledger, Trial Balance (grouped or
+    ledger-wise), Trading Account, Profit & Loss Account, Balance Sheet (horizontal, sole proprietor: capital +
+    profit − drawings), Cash Flow Statement (indirect method, AS-3) and Bank Reconciliation Statement. Opening and
+    closing **stock** are entered per year (no item inventory); earlier years' profit is carried into capital.
+  - **Bank reconciliation**: import a CSV or Excel statement from any bank (pick the columns; re-importing adds
+    nothing), auto-match by amount, direction and date (±3 days, only when unambiguous), match by hand, and book
+    bank charges or interest straight from a statement line.
+  - An account whose ledger has entries can't be deleted (deactivate it). Managers and shared viewers see the books
+    read-only, as everywhere else.
 - **Welcome tour**: a spotlight walkthrough after sign-in. Ticking **"Don't show again"** turns it off for the
   account. **Settings** lets you turn it back on, replay it, or switch between light and dark themes.
 
@@ -189,7 +240,12 @@ backend/app/
                    subscription_import (SMS parsing, detection in expenses), jobs (one run per period),
                    accounts (balances, primary account), budgets (limits and alerts),
                    insights (month-by-month comparison for the dashboard)
-backend/tests/           pytest suite (auth, access rules, splits, subscriptions, accounts, budgets, insights)
+  accounting/      double-entry books: models, chart (Tally groups, financial years), engine (the only code that
+                   posts vouchers), autopost (session hooks that post expenses, funds, transfers, charges, splits),
+                   balances + reports (all reports), exports (Excel/PDF), gst (invoices), bank (statement import,
+                   matching, reconciliation), router + router_reports (/api/accounting/...)
+backend/tests/           pytest suite (auth, access rules, splits, subscriptions, accounts, budgets, insights,
+                         accounting engine, auto-posting, every accounting report against a hand-worked example)
 backend/sql/schema.sql   Postgres DDL reference
 backend/scripts/         oracle_to_postgres.py (one-off data copy)
 api/index.py             Vercel entry point for the backend
@@ -197,6 +253,8 @@ docs/DATABASE.md         table-by-table guide
 frontend/src/
   auth.jsx         session, theme, "viewing user" selection
   components/      Layout, Tour, Avatar, Charts, Modal, BillForm, Accounts (account picker), ui helpers
+  accounting/      Vouchers (+ VoucherForm with GST invoices), Ledgers, Reports (+ ReportViews), Bank,
+                   AccountingSettings, common helpers
   pages/           Dashboard, DailyEntry, Expenses, DailyItems, Funds, Reports, Sharing,
                    Splits, SplitGroup, Subscriptions, Notifications, Profile, Settings, Admin, Login, Register, ForgotPassword,
                    ResetPassword
