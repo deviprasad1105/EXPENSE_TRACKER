@@ -20,6 +20,8 @@ from .database import Base
 from .timeutil import now_local
 
 ROLE_ADMIN = "ADMIN"
+# Admin of one organisation (the customer who bought the app for their people): manages only their members
+ROLE_ORG_ADMIN = "ORG_ADMIN"
 ROLE_USER = "USER"
 
 STATUS_PENDING = "PENDING"
@@ -39,6 +41,9 @@ class User(Base):
     status: Mapped[str] = mapped_column(String(10), nullable=False, default=STATUS_PENDING)
     # Reporting line: a manager can view (read-only) the data of everyone below them, at any depth
     manager_id: Mapped[int | None] = mapped_column(ForeignKey("app_users.id", ondelete="SET NULL"))
+    # Organisation: the ORG_ADMIN this user belongs to. The org admin can view (read-only), add, remove, lock and
+    # unlock their members; members are never told. Locking the org admin locks every member too.
+    org_admin_id: Mapped[int | None] = mapped_column(ForeignKey("app_users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime)
     # Set whenever the username changes; the user cannot change it again for USERNAME_LOCK_DAYS
@@ -66,8 +71,19 @@ class User(Base):
     ask_account: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     background_updated_at: Mapped[datetime | None] = mapped_column(DateTime)
 
-    manager: Mapped["User | None"] = relationship(remote_side="User.id", back_populates="reports")
-    reports: Mapped[list["User"]] = relationship(back_populates="manager")
+    manager: Mapped["User | None"] = relationship(
+        remote_side="User.id", back_populates="reports", foreign_keys="User.manager_id"
+    )
+    reports: Mapped[list["User"]] = relationship(back_populates="manager", foreign_keys="User.manager_id")
+    org_admin: Mapped["User | None"] = relationship(
+        remote_side="User.id", back_populates="org_members", foreign_keys="User.org_admin_id"
+    )
+    org_members: Mapped[list["User"]] = relationship(back_populates="org_admin", foreign_keys="User.org_admin_id")
+
+    @property
+    def org_locked(self) -> bool:
+        """Locked because their organisation's admin is locked (the member's own lock is `is_locked`)."""
+        return bool(self.org_admin_id and self.org_admin and self.org_admin.is_locked)
 
     @property
     def in_split_group(self) -> bool:

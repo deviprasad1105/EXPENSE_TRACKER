@@ -54,6 +54,15 @@ def _upgrade_split_tables(engine: Engine) -> None:
     log.warning("Schema update: split bill tables moved to member-based participants")
 
 
+def _data_fixups(engine: Engine) -> None:
+    """Idempotent corrections for rules newer versions enforce on existing rows."""
+    with engine.begin() as conn:
+        # Nobody can be an admin's manager
+        conn.execute(text("UPDATE app_users SET manager_id = NULL WHERE role = 'ADMIN' AND manager_id IS NOT NULL"))
+        # Users are no longer told when access is taken away; hide such notices sent by older versions
+        conn.execute(text("DELETE FROM notifications WHERE message LIKE '% removed from your plan by %'"))
+
+
 def sync_schema(engine: Engine) -> None:
     _upgrade_split_tables(engine)
     Base.metadata.create_all(engine)
@@ -74,3 +83,4 @@ def sync_schema(engine: Engine) -> None:
                 sql = f"ALTER TABLE {table.name} ADD ({ddl})" if oracle else f"ALTER TABLE {table.name} ADD COLUMN {ddl}"
                 conn.execute(text(sql))
                 log.warning("Schema update: added column %s.%s", table.name, col.name)
+    _data_fixups(engine)

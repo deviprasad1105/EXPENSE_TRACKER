@@ -10,6 +10,7 @@ CREATE TABLE app_users (
 	role VARCHAR(10) NOT NULL, 
 	status VARCHAR(10) NOT NULL, 
 	manager_id INTEGER, 
+	org_admin_id INTEGER, 
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL, 
 	approved_at TIMESTAMP WITHOUT TIME ZONE, 
 	username_changed_at TIMESTAMP WITHOUT TIME ZONE, 
@@ -32,7 +33,8 @@ CREATE TABLE app_users (
 	PRIMARY KEY (id), 
 	UNIQUE (username), 
 	UNIQUE (email), 
-	FOREIGN KEY(manager_id) REFERENCES app_users (id) ON DELETE SET NULL
+	FOREIGN KEY(manager_id) REFERENCES app_users (id) ON DELETE SET NULL, 
+	FOREIGN KEY(org_admin_id) REFERENCES app_users (id) ON DELETE SET NULL
 );
 
 CREATE TABLE data_backups (

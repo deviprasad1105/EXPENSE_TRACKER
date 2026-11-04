@@ -1,13 +1,12 @@
-import { BellRing, FileSpreadsheet, PieChart, Users, Wallet } from 'lucide-react'
+import { BellRing, FileSpreadsheet, PieChart, Users } from 'lucide-react'
+import Logo from './Logo'
 
 export default function AuthShell({ children }) {
   return (
     <div className="auth-page">
       <section className="auth-side">
         <div className="brand" style={{ padding: 0 }}>
-          <span className="brand-mark">
-            <Wallet size={18} />
-          </span>
+          <Logo size={34} />
           Expense Tracker
         </div>
         <div>

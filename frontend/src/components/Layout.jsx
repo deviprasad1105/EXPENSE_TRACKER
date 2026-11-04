@@ -6,6 +6,7 @@ import AccountTreeOutlined from '@mui/icons-material/AccountTreeOutlined'
 import AdminPanelSettingsOutlined from '@mui/icons-material/AdminPanelSettingsOutlined'
 import AssessmentOutlined from '@mui/icons-material/AssessmentOutlined'
 import AutoAwesomeOutlined from '@mui/icons-material/AutoAwesomeOutlined'
+import BusinessOutlined from '@mui/icons-material/BusinessOutlined'
 import CallSplitOutlined from '@mui/icons-material/CallSplitOutlined'
 import ChecklistOutlined from '@mui/icons-material/ChecklistOutlined'
 import DarkModeOutlined from '@mui/icons-material/DarkModeOutlined'
@@ -23,19 +24,21 @@ import SpaceDashboardOutlined from '@mui/icons-material/SpaceDashboardOutlined'
 import SummarizeOutlined from '@mui/icons-material/SummarizeOutlined'
 import TuneOutlined from '@mui/icons-material/TuneOutlined'
 import VisibilityOutlined from '@mui/icons-material/VisibilityOutlined'
-import WalletRounded from '@mui/icons-material/WalletRounded'
 import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded'
 import api, { todayISO } from '../api'
 import { canUseSplits, hasFeature, useAuth } from '../auth'
 import Avatar from './Avatar'
 import Tour from './Tour'
+import Logo from './Logo'
 
 const ACCESS = {
   OWNER: { label: 'Your data', cls: 'ok' },
   ADMIN: { label: 'Admin · full access', cls: 'info' },
   MANAGER: { label: 'Your team · view only', cls: 'warn' },
   SHARED: { label: 'Shared · view only', cls: 'warn' },
+  ORG: { label: 'Your organisation · view only', cls: 'warn' },
 }
+const ROLE_LABEL = { ADMIN: 'Administrator', ORG_ADMIN: 'Organisation admin', USER: 'User' }
 const REMIND_AFTER_HOUR = 18
 
 export default function Layout() {
@@ -177,18 +180,19 @@ export default function Layout() {
         ['/profile', 'Profile', PersonOutlineOutlined, 'nav-profile'],
         ['/settings', 'Settings', SettingsOutlined, 'nav-settings'],
         ...(user.role === 'ADMIN' ? [['/admin', 'Administration', AdminPanelSettingsOutlined, 'nav-admin', pendingAdmin]] : []),
+        ...(user.role === 'ORG_ADMIN' ? [['/organisation', 'Organisation', BusinessOutlined, 'nav-org']] : []),
       ],
     },
   ]
   const access = ACCESS[target?.access] || ACCESS.OWNER
+  // Only worth showing when there is someone else's data to switch to (team, organisation, shares; everyone for admin)
+  const canSwitch = accessible.some((a) => a.id !== user.id)
 
   return (
     <div className={`layout ${background ? 'has-bg' : ''}`} style={background ? { backgroundImage: `url(${background})` } : undefined}>
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand-mark">
-            <WalletRounded style={{ fontSize: 19 }} />
-          </span>
+          <Logo size={34} />
           Expense Tracker
         </div>
         <nav className="nav">
@@ -221,7 +225,7 @@ export default function Layout() {
 
       <main className="main">
         <header className="topbar">
-          {(expense || subscription) && !location.pathname.startsWith('/splits') ? (
+          {canSwitch && (expense || subscription) && !location.pathname.startsWith('/splits') ? (
           <div className="viewing" data-tour="view-switch">
             <VisibilityOutlined style={{ fontSize: 18 }} className="muted" />
             <select value={target?.id || ''} onChange={(e) => setViewUserId(Number(e.target.value))} aria-label="Whose data to view">
@@ -253,7 +257,7 @@ export default function Layout() {
                   <div className="menu-head">
                     <b>{user.full_name}</b>
                     <span>
-                      @{user.username} · {user.role === 'ADMIN' ? 'Administrator' : 'User'}
+                      @{user.username} · {ROLE_LABEL[user.role] || 'User'}
                     </span>
                   </div>
                   <button onClick={() => navigate('/profile')}>

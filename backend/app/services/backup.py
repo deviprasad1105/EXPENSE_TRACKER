@@ -198,6 +198,8 @@ def restore_backup(db: Session, backup: DataBackup, admin: User) -> dict:
             # Drop references to users / items that no longer exist instead of failing
             if model is User and data.get("manager_id") and not exists(User, data["manager_id"]):
                 data["manager_id"] = None
+            if model is User and data.get("org_admin_id") and not exists(User, data["org_admin_id"]):
+                data["org_admin_id"] = None
             if model in (Expense, Fund) and data.get("account_id") and not exists(Account, data["account_id"]):
                 data["account_id"] = None
             if model is AccountTransfer and not (exists(Account, data["from_account_id"]) and exists(Account, data["to_account_id"])):
@@ -234,6 +236,11 @@ def restore_backup(db: Session, backup: DataBackup, admin: User) -> dict:
         member = db.get(User, report_id)
         if member and member.manager_id is None and users_rows:
             member.manager_id = users_rows[0]["id"]
+    # ...and the members of a restored org admin (only if they haven't joined another organisation since)
+    for member_id in doc.get("org_members", []):
+        member = db.get(User, member_id)
+        if member and member.org_admin_id is None and users_rows:
+            member.org_admin_id = users_rows[0]["id"]
 
     backup.restored_at = now_local()
     backup.restored_by = admin.username
