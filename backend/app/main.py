@@ -14,7 +14,7 @@ from .deps import FEATURE_EXPENSE, FEATURE_SUBSCRIPTION, require_feature
 from .migrate import sync_schema
 from .models import ROLE_ADMIN, STATUS_APPROVED, JobRun, User
 from .routers import (
-    accounts, admin, auth, budgets, daily_items, dashboard, expenses, funds, notifications, profile, reports, shares, splits,
+    accounts, admin, auth, budgets, cron, daily_items, dashboard, expenses, funds, notifications, profile, reports, shares, splits,
     subscriptions,
 )
 from .security import hash_password
@@ -61,12 +61,28 @@ def prune_job_runs():
         db.commit()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+_initialised = False
+
+
+def init_app():
+    """Check settings, sync the schema and seed the admin. Runs once per process (on Vercel: once per cold start)."""
+    global _initialised
+    if _initialised:
+        return
     check_settings()
     sync_schema(engine)
     seed_admin()
     prune_job_runs()
+    _initialised = True
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_app()
+    if settings.serverless:
+        # Serverless instances are frozen between requests, so Vercel Cron calls /api/cron/* instead
+        yield
+        return
     scheduler = BackgroundScheduler(timezone=settings.timezone)
     scheduler.add_job(
         daily_reminder_job,
@@ -117,7 +133,7 @@ app.add_middleware(
     expose_headers=["Content-Disposition"],
 )
 
-for r in (auth, admin, profile, notifications, splits):
+for r in (auth, admin, profile, notifications, splits, cron):
     app.include_router(r.router)
 # Expense tracking is a feature the admin grants per user
 for r in (expenses, daily_items, funds, dashboard, reports, shares, accounts, budgets):

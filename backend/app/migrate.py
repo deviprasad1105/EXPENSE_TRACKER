@@ -45,6 +45,9 @@ def _upgrade_split_tables(engine: Engine) -> None:
         if engine.dialect.name == "oracle":
             conn.execute(text("ALTER TABLE split_members DROP CONSTRAINT uq_split_member"))
             conn.execute(text("ALTER TABLE split_members MODIFY (user_id NULL)"))
+        elif engine.dialect.name == "postgresql":
+            conn.execute(text("ALTER TABLE split_members DROP CONSTRAINT IF EXISTS uq_split_member"))
+            conn.execute(text("ALTER TABLE split_members ALTER COLUMN user_id DROP NOT NULL"))
     log.warning("Schema update: split bill tables moved to member-based participants")
 
 

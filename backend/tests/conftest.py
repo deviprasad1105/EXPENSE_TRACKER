@@ -1,4 +1,4 @@
-"""Tests run against an in-memory SQLite database, so they need neither Oracle nor a running server."""
+"""Tests run against an in-memory SQLite database, so they need neither Postgres nor a running server."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -40,7 +40,7 @@ def db():
 
 @pytest.fixture
 def client(db):
-    # Not used as a context manager, so the lifespan (Oracle schema sync, scheduler) doesn't run
+    # Not used as a context manager, so the lifespan (schema sync, scheduler) doesn't run
     return TestClient(app)
 
 

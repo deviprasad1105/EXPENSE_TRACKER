@@ -1,3 +1,5 @@
+import os
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,7 +13,7 @@ class Settings(BaseSettings):
     # "production" refuses to start with default secrets, hides the API docs and sends HSTS
     environment: str = "development"
 
-    database_url: str = "oracle+oracledb://dev_dr:YOUR_DEV_DR_PASSWORD@localhost:1521/?service_name=FREEPDB1"
+    database_url: str = "postgresql+psycopg://dev_dr_expense:YOUR_PASSWORD@localhost:5445/dev_dr_expense"
 
     jwt_secret: str = DEFAULT_JWT_SECRET
     jwt_expire_minutes: int = 720
@@ -53,6 +55,23 @@ class Settings(BaseSettings):
     subscription_job_minute: int = 5
 
     cors_origins: str = "http://localhost:5173"
+
+    # Vercel Cron sends "Authorization: Bearer <CRON_SECRET>" to /api/cron/*; empty disables those endpoints
+    cron_secret: str = ""
+
+    @property
+    def serverless(self) -> bool:
+        """True on Vercel: no background scheduler (Vercel Cron calls /api/cron/*) and no connection pool."""
+        return bool(os.environ.get("VERCEL"))
+
+    @property
+    def sqlalchemy_url(self) -> str:
+        """Hosted Postgres providers hand out postgres:// or postgresql:// URLs; SQLAlchemy needs the psycopg driver."""
+        url = self.database_url
+        for prefix in ("postgres://", "postgresql://"):
+            if url.startswith(prefix):
+                return "postgresql+psycopg://" + url[len(prefix):]
+        return url
 
     @property
     def is_production(self) -> bool:

@@ -1,7 +1,7 @@
 # Database guide
 
-The app stores everything in Oracle, in the **`DEV_DR`** schema of the `FREEPDB1` database
-(the `face_tracker_oracle` container, port 1521). The backend creates any missing tables on startup
+The app stores everything in Postgres: locally the **`dev_dr_expense`** database (owned by the `dev_dr_expense` user)
+in the `LOCAL_FCHUB_DB` container, port 5445; on Vercel, a hosted Postgres. The backend creates any missing tables on startup
 from `backend/app/models.py`, and `backend/sql/schema.sql` holds the same DDL for reference.
 
 All dates and times are stored in the app's timezone (`TIMEZONE` in `.env`, default `Asia/Kolkata`).
