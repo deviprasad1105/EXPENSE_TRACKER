@@ -51,21 +51,23 @@ export default function AccountingReports() {
     return q
   })()
   const key = JSON.stringify(query)
-  const report = useLoad(async () => (query ? (await api.get(`/accounting/reports/${tab}`, { params: { ...params, ...query } })).data : null), [tab, key, params])
+  // Each result remembers which report it belongs to: while another tab loads, the old data is never shown in the new view
+  const report = useLoad(async () => (query ? { tab, body: (await api.get(`/accounting/reports/${tab}`, { params: { ...params, ...query } })).data } : null), [tab, key, params])
+  const data = report.data?.tab === tab ? report.data.body : null
 
   const openLedger = (id) => {
     setLedgerId(String(id))
     setSearch({ r: 'ledger', ledger: String(id) })
   }
 
-  const view = report.data && {
-    journal: <JournalView r={report.data} />,
-    ledger: <LedgerView r={report.data} />,
-    'trial-balance': <TrialBalanceView r={report.data} grouped={tbView === 'grouped'} onLedger={openLedger} />,
-    trading: <TradingView r={report.data} onLedger={openLedger} />,
-    'profit-loss': <ProfitLossView r={report.data} onLedger={openLedger} />,
-    'balance-sheet': <BalanceSheetView r={report.data} onLedger={openLedger} />,
-    'cash-flow': <CashFlowView r={report.data} />,
+  const view = data && {
+    journal: <JournalView r={data} />,
+    ledger: <LedgerView r={data} />,
+    'trial-balance': <TrialBalanceView r={data} grouped={tbView === 'grouped'} onLedger={openLedger} />,
+    trading: <TradingView r={data} onLedger={openLedger} />,
+    'profit-loss': <ProfitLossView r={data} onLedger={openLedger} />,
+    'balance-sheet': <BalanceSheetView r={data} onLedger={openLedger} />,
+    'cash-flow': <CashFlowView r={data} />,
   }[tab]
 
   return (
@@ -121,21 +123,21 @@ export default function AccountingReports() {
             </div>
           )}
           <span className="spacer" />
-          {query && report.data && (
+          {query && data && (
             <ExportButtons url={`/accounting/reports/${tab}`} params={{ ...params, ...query }} name={tab} onError={(text) => setMsg({ type: 'error', text })} />
           )}
         </div>
         <div className="report-body">
           {tab === 'ledger' && !ledgerId && <p className="muted">Choose a ledger to see its entries.</p>}
           {report.error && <Msg msg={{ type: 'error', text: report.error }} />}
-          {report.loading && !report.data && <p className="muted">Loading…</p>}
-          {report.data && (
+          {report.loading && !data && <p className="muted">Loading…</p>}
+          {data && (
             <>
               <div className="report-title">
                 <h2>{REPORTS.find(([k]) => k === tab)[1]}</h2>
-                <span className="muted">{report.data.period}</span>
+                <span className="muted">{data.period}</span>
               </div>
-              {report.data.closing_stock_missing ? (
+              {data.closing_stock_missing ? (
                 <Msg msg={{ type: 'warn', text: 'Closing stock for this year hasn’t been entered (Accounting settings → Stock). It is taken as zero.' }} />
               ) : null}
               {view}
