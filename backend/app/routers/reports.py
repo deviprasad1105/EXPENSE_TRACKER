@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,7 @@ from ..deps import get_current_user, resolve_target
 from ..models import User
 from ..services.reports import build_excel, build_pdf
 from ..services.summary import balance, expenses_between, summarize, trend
-from ..timeutil import today_local
+from ..timeutil import today_local, validate_range
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -28,8 +28,7 @@ def export(
     today = today_local()
     start = start or today.replace(day=1)
     end = end or today
-    if start > end:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Start date must be before end date")
+    validate_range(start, end)
 
     expenses = expenses_between(db, target.user.id, start, end)
     summary = summarize(expenses, start, end, (target.user.approved_at or target.user.created_at).date())

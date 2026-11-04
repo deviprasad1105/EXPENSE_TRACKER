@@ -164,7 +164,7 @@ class ProfileOut(BaseModel):
 class DailyItemIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     category: str = Field(default="General", max_length=50)
-    default_amount: Decimal = Field(ge=0)
+    default_amount: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
     default_quantity: int = Field(default=1, ge=1)
     is_constant: bool = False
     is_active: bool = True
@@ -182,7 +182,7 @@ class ExpenseIn(BaseModel):
     item_name: str = Field(min_length=1, max_length=100)
     category: str = Field(default="General", max_length=50)
     quantity: int = Field(default=1, ge=1)
-    amount: Decimal = Field(gt=0)
+    amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
     note: str | None = Field(default=None, max_length=500)
     is_extra: bool = False
     daily_item_id: int | None = None
@@ -194,7 +194,7 @@ class ExpenseUpdate(BaseModel):
     item_name: str | None = Field(default=None, min_length=1, max_length=100)
     category: str | None = Field(default=None, max_length=50)
     quantity: int | None = Field(default=None, ge=1)
-    amount: Decimal | None = Field(default=None, gt=0)
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
     note: str | None = Field(default=None, max_length=500)
     account_id: int | None = None
 
@@ -230,7 +230,7 @@ class ExpenseOut(ORM):
 # ---------- funds ----------
 class FundIn(BaseModel):
     fund_date: date
-    amount: Decimal = Field(gt=0)
+    amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
     source: str = Field(default="Income", max_length=100)
     note: str | None = Field(default=None, max_length=500)
     account_id: int | None = None
@@ -410,7 +410,7 @@ class AccountIn(BaseModel):
     bank: str | None = Field(default=None, max_length=60)
     kind: str = Field(default="SAVINGS", pattern="^(SAVINGS|CURRENT|SALARY|CREDIT_CARD|WALLET|CASH)$")
     last4: str | None = Field(default=None, pattern=r"^\d{4}$")
-    opening_balance: Decimal = Decimal(0)
+    opening_balance: Decimal = Field(default=Decimal(0), max_digits=12, decimal_places=2)
     is_primary: bool = False
     is_active: bool = True
 
@@ -429,7 +429,7 @@ class AccountOut(ORM, AccountIn):
 class TransferIn(BaseModel):
     from_account_id: int
     to_account_id: int
-    amount: Decimal = Field(gt=0)
+    amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
     transfer_date: date
     note: str | None = Field(default=None, max_length=200)
 
@@ -443,7 +443,7 @@ class TransferOut(ORM, TransferIn):
 class BudgetIn(BaseModel):
     scope: str = Field(default="OVERALL", pattern="^(OVERALL|CATEGORY|ITEM)$")
     target: str | None = Field(default=None, max_length=100)
-    monthly_limit: Decimal = Field(gt=0)
+    monthly_limit: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
     alert_percent: int = Field(default=90, ge=10, le=100)
     is_active: bool = True
 

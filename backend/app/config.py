@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # Subscriptions: charges and "renews tomorrow" reminders are processed every hour at this minute
     subscription_job_minute: int = 5
 
+    # Longest date range a dashboard or report request may cover (reports build one entry per day)
+    max_report_days: int = 3660
+
     cors_origins: str = "http://localhost:5173"
 
     # Vercel Cron sends "Authorization: Bearer <CRON_SECRET>" to /api/cron/*; empty disables those endpoints

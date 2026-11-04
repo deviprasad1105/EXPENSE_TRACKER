@@ -12,6 +12,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 from ..models import Expense, User
 from ..timeutil import now_local
+from .export_safe import defuse_formulas, pdf_text
 
 HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
 HEADER_FONT = Font(bold=True, color="FFFFFF")
@@ -137,6 +138,7 @@ def build_excel(user: User, expenses: list[Expense], summary: dict, bal: dict) -
     _autosize(wl)
 
     buf = BytesIO()
+    defuse_formulas(wb)
     wb.save(buf)
     return buf.getvalue()
 
@@ -167,7 +169,7 @@ def build_pdf(user: User, expenses: list[Expense], summary: dict, bal: dict) -> 
     story = [
         Paragraph("Expense Report", styles["Title"]),
         Paragraph(
-            f"<b>User:</b> {user.full_name} ({user.username}) &nbsp;&nbsp; <b>Period:</b> {summary['start']} to {summary['end']}"
+            f"<b>User:</b> {pdf_text(user.full_name)} ({pdf_text(user.username)}) &nbsp;&nbsp; <b>Period:</b> {summary['start']} to {summary['end']}"
             f" &nbsp;&nbsp; <b>Generated:</b> {now_local().strftime('%Y-%m-%d %H:%M')}",
             styles["Normal"],
         ),
@@ -233,7 +235,7 @@ def build_pdf(user: User, expenses: list[Expense], summary: dict, bal: dict) -> 
     rows = [["Date", "Item", "Category", "Qty", "Amount", "Note"]]
     for e in expenses:
         name = e.item_name + (" (extra)" if e.is_extra else "")
-        rows.append([e.expense_date.isoformat(), Paragraph(name, small), e.category, str(e.quantity), money(float(e.amount)), Paragraph(e.note or "", small)])
+        rows.append([e.expense_date.isoformat(), Paragraph(pdf_text(name), small), e.category, str(e.quantity), money(float(e.amount)), Paragraph(pdf_text(e.note), small)])
     rows.append(["", "", "", "TOTAL", money(summary["total"]), ""])
     detail = table(rows, [22 * mm, 45 * mm, 28 * mm, 12 * mm, 25 * mm, 48 * mm], money_cols=(4,))
     detail.setStyle(TableStyle([("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold")]))
