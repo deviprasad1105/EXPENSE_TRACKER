@@ -14,8 +14,11 @@ from .database import Base
 log = logging.getLogger(__name__)
 
 
-def _literal(value) -> str:
+def _literal(value, dialect: str = "") -> str:
     if isinstance(value, bool):
+        # Postgres booleans are a real type and refuse DEFAULT 0 / 1; Oracle and SQLite store them as numbers
+        if dialect == "postgresql":
+            return "true" if value else "false"
         return "1" if value else "0"
     if isinstance(value, (int, float)):
         return str(value)
@@ -65,7 +68,7 @@ def sync_schema(engine: Engine) -> None:
                 ddl = f"{col.name} {col.type.compile(dialect=engine.dialect)}"
                 default = col.default.arg if col.default is not None and col.default.is_scalar else None
                 if default is not None:
-                    ddl += f" DEFAULT {_literal(default)}"
+                    ddl += f" DEFAULT {_literal(default, engine.dialect.name)}"
                 if not col.nullable and default is not None:
                     ddl += " NOT NULL"
                 sql = f"ALTER TABLE {table.name} ADD ({ddl})" if oracle else f"ALTER TABLE {table.name} ADD COLUMN {ddl}"

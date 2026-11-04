@@ -72,3 +72,13 @@ def test_pdf_export_survives_markup_characters(client, make_user):
     _expense(client, me, 10, item_name="Tea <b & co", note="<img src='x'> & more")
     r = client.get("/api/reports/export", params={"format": "pdf"}, headers=headers(me))
     assert r.status_code == 200 and r.content.startswith(b"%PDF")
+
+
+# ---------- schema sync ----------
+def test_new_boolean_column_default_suits_each_database():
+    from app.migrate import _literal
+
+    # Postgres rejects "BOOLEAN DEFAULT 0" when a new boolean column (e.g. feature_accounting) is added on startup
+    assert _literal(False, "postgresql") == "false" and _literal(True, "postgresql") == "true"
+    assert _literal(False, "oracle") == "0" and _literal(True, "sqlite") == "1"
+    assert _literal("it's", "postgresql") == "'it''s'"
