@@ -17,7 +17,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from ..database import get_db
 from ..deps import FEATURE_SPLIT, get_current_user, has_feature, require_feature
@@ -468,6 +468,10 @@ def _apply_bill(group: SplitGroup, bill: SplitBill, data: SplitBillIn):
     bill.title, bill.total_amount, bill.bill_date = data.title.strip(), data.total_amount, data.bill_date
     bill.paid_by, bill.note = data.paid_by, data.note
     bill.shares.clear()
+    session = object_session(bill)
+    if session is not None and bill.id is not None:
+        # Delete the old shares before adding new ones for the same people: (bill, member) is unique
+        session.flush()
     for s, amount in zip(data.shares, amounts):
         value = None if s.share_type == SHARE_EQUAL else s.share_value
         bill.shares.append(SplitShare(member_id=s.member_id, share_type=s.share_type, share_value=value, amount=amount))
