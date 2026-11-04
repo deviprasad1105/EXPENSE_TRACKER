@@ -408,3 +408,7 @@ def register_error_handler(app) -> None:
     @app.exception_handler(AccountingError)
     async def _accounting_error(request, exc: AccountingError):
         return JSONResponse({"detail": exc.message}, status_code=exc.status_code)
+
+
+# Reports, stock, GST invoices and bank reconciliation add their routes to the same router
+from . import router_reports  # noqa: E402,F401
