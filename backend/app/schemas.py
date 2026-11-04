@@ -53,6 +53,7 @@ class UserOut(ORM):
     feature_expense: bool = True
     feature_split: bool = False
     feature_subscription: bool = False
+    feature_accounting: bool = False
     in_split_group: bool = False
     ask_account: bool = True
     background_updated_at: datetime | None = None
@@ -78,6 +79,7 @@ class AdminUserUpdate(BaseModel):
     feature_expense: bool | None = None
     feature_split: bool | None = None
     feature_subscription: bool | None = None
+    feature_accounting: bool | None = None
 
 
 class PasswordChange(BaseModel):

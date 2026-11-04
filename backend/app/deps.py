@@ -36,11 +36,20 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
 FEATURE_EXPENSE = "expense"
 FEATURE_SPLIT = "split"
 FEATURE_SUBSCRIPTION = "subscription"
-FEATURE_LABEL = {FEATURE_EXPENSE: "Expense tracking", FEATURE_SPLIT: "Split bills", FEATURE_SUBSCRIPTION: "Subscriptions"}
+FEATURE_ACCOUNTING = "accounting"
+FEATURE_LABEL = {
+    FEATURE_EXPENSE: "Expense tracking", FEATURE_SPLIT: "Split bills", FEATURE_SUBSCRIPTION: "Subscriptions",
+    FEATURE_ACCOUNTING: "Accounting",
+}
 
 
 def has_feature(user: User, feature: str) -> bool:
-    return user.role == ROLE_ADMIN or bool(getattr(user, f"feature_{feature}"))
+    if user.role == ROLE_ADMIN:
+        return True
+    if feature == FEATURE_ACCOUNTING and not user.feature_expense:
+        # The books are built from expense tracking, so accounting needs it too
+        return False
+    return bool(getattr(user, f"feature_{feature}"))
 
 
 def require_feature(feature: str):

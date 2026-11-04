@@ -8,9 +8,10 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import delete, select
 
+from .accounting import router as accounting
 from .config import settings
 from .database import SessionLocal, engine
-from .deps import FEATURE_EXPENSE, FEATURE_SUBSCRIPTION, require_feature
+from .deps import FEATURE_ACCOUNTING, FEATURE_EXPENSE, FEATURE_SUBSCRIPTION, require_feature
 from .migrate import sync_schema
 from .models import ROLE_ADMIN, STATUS_APPROVED, JobRun, User
 from .routers import (
@@ -139,6 +140,8 @@ for r in (auth, admin, profile, notifications, splits, cron):
 for r in (expenses, daily_items, funds, dashboard, reports, shares, accounts, budgets):
     app.include_router(r.router, dependencies=[Depends(require_feature(FEATURE_EXPENSE))])
 app.include_router(subscriptions.router, dependencies=[Depends(require_feature(FEATURE_SUBSCRIPTION))])
+app.include_router(accounting.router, dependencies=[Depends(require_feature(FEATURE_ACCOUNTING))])
+accounting.register_error_handler(app)
 
 
 @app.get("/api/health")

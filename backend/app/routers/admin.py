@@ -5,6 +5,7 @@ from fastapi.responses import Response
 from sqlalchemy import delete, exists, or_, select
 from sqlalchemy.orm import Session, defer
 
+from ..accounting.lifecycle import delete_books
 from ..database import get_db
 from ..deps import require_admin, would_create_cycle
 from ..models import (
@@ -113,6 +114,7 @@ def update_user(user_id: int, data: AdminUserUpdate, admin: User = Depends(requi
     granted, revoked = [], []
     for feature, label in (
         ("feature_expense", "Expense tracking"), ("feature_split", "Split bills"), ("feature_subscription", "Subscriptions"),
+        ("feature_accounting", "Accounting"),
     ):
         value = getattr(data, feature)
         if value is not None and value != getattr(user, feature):
@@ -127,7 +129,8 @@ def update_user(user_id: int, data: AdminUserUpdate, admin: User = Depends(requi
 
 def _delete_user_data(db: Session, user_id: int):
     """Expenses, funds, daily items, subscriptions, budgets and accounts of a user (explicit deletes, so it doesn't rely
-    on DB cascades)."""
+    on DB cascades). Accounting books go first: their ledgers point at the accounts deleted below."""
+    delete_books(db, user_id)
     subs = select(Subscription.id).where(Subscription.user_id == user_id)
     db.execute(delete(SubscriptionCharge).where(SubscriptionCharge.subscription_id.in_(subs)))
     db.execute(delete(Subscription).where(Subscription.user_id == user_id))

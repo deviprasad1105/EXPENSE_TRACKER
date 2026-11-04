@@ -55,6 +55,8 @@ class User(Base):
     feature_expense: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     feature_split: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     feature_subscription: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Double-entry books and reports; needs feature_expense as well
+    feature_accounting: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Part of every sign-in token: raising it (password change, "sign out everywhere", lock) revokes all tokens
     token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # Wrong passwords in a row; at LOGIN_MAX_FAILURES sign-in is blocked until login_blocked_until

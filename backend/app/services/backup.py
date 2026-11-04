@@ -15,6 +15,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import Boolean, Date, DateTime, LargeBinary, Numeric, or_, select
 from sqlalchemy.orm import Session
 
+from ..accounting.lifecycle import BACKUP_MODELS, snapshot_books
+from ..accounting.models import AccLedger, AccSettings
 from ..models import (
     Account,
     AccountTransfer,
@@ -23,6 +25,7 @@ from ..models import (
     DataBackup,
     DataShare,
     Expense,
+    SplitGroup,
     Fund,
     Notification,
     Subscription,
@@ -44,7 +47,7 @@ KIND_SUBSCRIPTION = "SUBSCRIPTION"
 # Restore order matters: parents before children
 MODELS = [
     User, UserAvatar, UserBackground, Account, DailyItem, Expense, Fund, AccountTransfer, Budget, Subscription,
-    SubscriptionCharge, DataShare, Notification, UsernameChangeRequest,
+    SubscriptionCharge, DataShare, Notification, UsernameChangeRequest, *BACKUP_MODELS,
 ]
 BY_TABLE = {m.__tablename__: m for m in MODELS}
 
@@ -108,6 +111,7 @@ def snapshot_user_data(db: Session, user_id: int) -> dict:
             db, SubscriptionCharge,
             SubscriptionCharge.subscription_id.in_(select(Subscription.id).where(Subscription.user_id == user_id)),
         ),
+        **snapshot_books(db, _rows, user_id),
     }
 
 
@@ -177,7 +181,14 @@ def restore_backup(db: Session, backup: DataBackup, admin: User) -> dict:
         return db.get(model, pk) is not None
 
     counts: dict[str, int] = {}
+    # Books set up again since the backup was taken: keep those; restored transactions post into them
+    books_rows = tables.get(AccSettings.__tablename__, [])
+    skip_books = bool(books_rows) and db.scalar(
+        select(AccSettings.id).where(AccSettings.user_id == books_rows[0]["user_id"], AccSettings.id != books_rows[0]["id"])
+    ) is not None
     for model in MODELS:
+        if skip_books and model in BACKUP_MODELS:
+            continue
         rows = tables.get(model.__tablename__, [])
         added = 0
         for data in rows:
@@ -201,6 +212,11 @@ def restore_backup(db: Session, backup: DataBackup, admin: User) -> dict:
                     continue
                 if data.get("expense_id") and not exists(Expense, data["expense_id"]):
                     data["expense_id"] = None
+            if model is AccLedger:
+                if data.get("account_id") and not exists(Account, data["account_id"]):
+                    data["account_id"] = None
+                if data.get("split_group_id") and not exists(SplitGroup, data["split_group_id"]):
+                    data["split_group_id"] = None
             if model is DataShare and not (exists(User, data["owner_id"]) and exists(User, data["viewer_id"])):
                 continue
             if model is UsernameChangeRequest and data.get("decided_by") and not exists(User, data["decided_by"]):

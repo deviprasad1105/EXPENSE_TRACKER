@@ -8,6 +8,7 @@ from decimal import Decimal
 from sqlalchemy import false, or_, select, true
 from sqlalchemy.orm import Session
 
+from ..accounting.autopost import charge_day_locked
 from ..database import SessionLocal
 from ..models import (
     FREQ_CUSTOM,
@@ -119,7 +120,12 @@ def record_due_charges(db: Session, sub: Subscription, user: User, today: date) 
         exists = db.scalar(
             select(SubscriptionCharge.id).where(SubscriptionCharge.subscription_id == sub.id, SubscriptionCharge.charge_date == day)
         )
-        if not exists:
+        if not exists and charge_day_locked(db, user.id, day):
+            # The accounting books are locked for that date: nothing may be posted there, so skip the charge
+            db.add(Notification(user_id=user.id, kind=KIND_CHARGED, ref_date=today,
+                                message=f"{sub.name}: the ₹{sub.amount} charge on {day:%d %b %Y} falls in a locked "
+                                        "accounting period, so it wasn't recorded. Add it with a voucher in an open period."))
+        elif not exists:
             charge = SubscriptionCharge(subscription_id=sub.id, charge_date=day, amount=sub.amount)
             if sub.auto_log_expense and _has_expense_feature(user):
                 expense = Expense(
