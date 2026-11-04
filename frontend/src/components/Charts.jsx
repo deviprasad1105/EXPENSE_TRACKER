@@ -1,4 +1,5 @@
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { useId } from 'react'
 import { money } from '../api'
 import { useAuth } from '../auth'
 
@@ -24,14 +25,14 @@ export function useChartTheme() {
   return { ...t, tick: { fontSize: 12, fill: t.axis } }
 }
 
-function MoneyTooltip({ active, payload, label }) {
+function MoneyTooltip({ active, payload, label, colors }) {
   if (!active || !payload?.length) return null
   return (
     <div className="chart-tip">
       <div className="label">{label}</div>
       {payload.map((p) => (
         <div key={p.dataKey}>
-          <span className="swatch" style={{ background: p.color }} />
+          <span className="swatch" style={{ background: colors?.[p.dataKey] || p.color }} />
           {p.name}: <b>{money(p.value)}</b>
         </div>
       ))}
@@ -151,20 +152,44 @@ const SECTION_SERIES = [
 ]
 
 /** Spending per month, stacked by where it went. Only the sections the user has are shown. */
+// Brighter [top, bottom] gradient pairs for the six-month bars, one per section in SECTION_SERIES order:
+// violet, pink, emerald, amber, cyan. Each pair stays the same hue, so a section keeps one identity.
+const VIBRANT = {
+  light: [['#8b5cf6', '#6d28d9'], ['#f472b6', '#db2777'], ['#34d399', '#059669'], ['#fbbf24', '#f59e0b'], ['#22d3ee', '#0891b2']],
+  dark: [['#a78bfa', '#7c3aed'], ['#f9a8d4', '#ec4899'], ['#6ee7b7', '#10b981'], ['#fcd34d', '#f59e0b'], ['#67e8f9', '#06b6d4']],
+}
+
 export function MonthsChart({ data, sections }) {
   const t = useChartTheme()
-  const shown = SECTION_SERIES.map((s, i) => [...s, t.series[i]]).filter(([k]) => sections.includes(k))
+  const { user } = useAuth()
+  const gid = useId().replace(/:/g, '')
+  const palette = VIBRANT[user?.theme === 'dark' ? 'dark' : 'light']
+  const shown = SECTION_SERIES.map((s, i) => [...s, palette[i]]).filter(([k]) => sections.includes(k))
   return (
     <ResponsiveContainer width="100%" height={280}>
       <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+        <defs>
+          {shown.map(([key, , [top, bottom]]) => (
+            <linearGradient key={key} id={`${gid}-${key}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={top} />
+              <stop offset="100%" stopColor={bottom} />
+            </linearGradient>
+          ))}
+        </defs>
         <CartesianGrid vertical={false} stroke={t.grid} />
         <XAxis dataKey="label" tick={t.tick} tickLine={false} axisLine={{ stroke: t.grid }} />
         <YAxis tick={t.tick} tickLine={false} axisLine={false} tickFormatter={short} width={48} />
-        <Tooltip content={<MoneyTooltip />} cursor={{ fill: t.cursor }} />
-        {shown.length > 1 && <Legend iconType="square" wrapperStyle={{ fontSize: 12, color: t.axis }} />}
-        {shown.map(([key, name, color], i) => (
+        <Tooltip content={<MoneyTooltip colors={Object.fromEntries(shown.map(([k, , [, solid]]) => [k, solid]))} />} cursor={{ fill: t.cursor }} />
+        {shown.length > 1 && (
+          <Legend
+            wrapperStyle={{ fontSize: 12, color: t.axis }}
+            payload={shown.map(([key, name, [, solid]]) => ({ id: key, value: name, type: 'square', color: solid }))}
+          />
+        )}
+        {shown.map(([key, name], i) => (
           <Bar
-            key={key} dataKey={key} name={name} stackId="m" fill={color} maxBarSize={40} stroke={t.surface} strokeWidth={1}
+            key={key} dataKey={key} name={name} stackId="m" fill={`url(#${gid}-${key})`} maxBarSize={40}
+            stroke={t.surface} strokeWidth={1}
             isAnimationActive={false}
             radius={i === shown.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]}
           />

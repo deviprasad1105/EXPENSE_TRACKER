@@ -12,6 +12,7 @@ import Reports from './pages/Reports'
 import Sharing from './pages/Sharing'
 import Notifications from './pages/Notifications'
 import Admin from './pages/Admin'
+import Organisation from './pages/Organisation'
 import Profile from './pages/Profile'
 import Settings from './pages/Settings'
 import ForgotPassword from './pages/ForgotPassword'
@@ -25,7 +26,7 @@ import AccountingReports from './accounting/Reports'
 import BankReconciliation from './accounting/Bank'
 import AccountingSettings from './accounting/AccountingSettings'
 
-function Protected({ children, adminOnly }) {
+function Protected({ children, adminOnly, orgAdminOnly }) {
   const { user, loading, serverDown, refresh, logout } = useAuth()
   if (loading) return <div className="center">Loading…</div>
   if (!user && serverDown)
@@ -43,6 +44,7 @@ function Protected({ children, adminOnly }) {
     )
   if (!user) return <Navigate to="/login" replace />
   if (adminOnly && user.role !== 'ADMIN') return <Navigate to="/" replace />
+  if (orgAdminOnly && user.role !== 'ORG_ADMIN') return <Navigate to="/" replace />
   return children
 }
 
@@ -101,6 +103,14 @@ export default function App() {
           element={
             <Protected adminOnly>
               <Admin />
+            </Protected>
+          }
+        />
+        <Route
+          path="organisation"
+          element={
+            <Protected orgAdminOnly>
+              <Organisation />
             </Protected>
           }
         />

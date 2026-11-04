@@ -25,7 +25,7 @@ const SCOPES = { OVERALL: 'All spending', CATEGORY: 'Category', ITEM: 'Item' }
 const LEVEL = { OK: ['ok', 'On track'], WARN: ['warn', 'Near limit'], OVER: ['bad', 'Over budget'] }
 
 export default function Settings() {
-  const { user, updateUser } = useAuth()
+  const { user, updateUser, logout } = useAuth()
   const [msg, setMsg] = useState(null)
   const location = useLocation()
   const expense = hasFeature(user, 'expense')
@@ -38,11 +38,11 @@ export default function Settings() {
   const save = async (prefs) => updateUser((await api.patch('/profile/preferences', prefs)).data)
 
   const signOutEverywhere = async () => {
-    if (!window.confirm('Sign out on every other device and browser?')) return
+    if (!window.confirm('Sign out on every device and browser, including this one?')) return
     try {
-      const res = await api.post('/auth/logout-all')
-      localStorage.setItem('token', res.data.access_token)
-      setMsg({ type: 'ok', text: 'Every other device has been signed out.' })
+      // The server revokes every token; drop the fresh one it returns so this device signs out too
+      await api.post('/auth/logout-all')
+      logout()
     } catch (err) {
       setMsg({ type: 'error', text: errorMessage(err) })
     }
@@ -84,11 +84,11 @@ export default function Settings() {
         <Msg msg={msg} />
         <div className="setting-row">
           <div>
-            <b>Sign out everywhere else</b>
-            <p>Ends every other session, for example on a lost phone or a shared computer. You stay signed in here.</p>
+            <b>Sign out of all devices</b>
+            <p>Ends every session, for example on a lost phone or a shared computer. You will be signed out here too.</p>
           </div>
           <button className="btn secondary" onClick={signOutEverywhere}>
-            <LogoutOutlined style={{ fontSize: 18 }} /> Sign out other devices
+            <LogoutOutlined style={{ fontSize: 18 }} /> Sign out of all devices
           </button>
         </div>
       </div>

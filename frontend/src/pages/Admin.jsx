@@ -90,6 +90,7 @@ export default function Admin() {
   }
 
   const byId = Object.fromEntries(users.map((u) => [u.id, u]))
+  const orgAdmins = users.filter((u) => u.role === 'ORG_ADMIN')
   const pendingUsers = users.filter((u) => u.status === 'PENDING').length
   const pendingReqs = requests.filter((r) => r.status === 'PENDING').length
   const q = search.trim().toLowerCase()
@@ -99,7 +100,7 @@ export default function Admin() {
 
   return (
     <div>
-      <PageHeader title="Administration" subtitle="Approve and lock accounts, choose each user’s plan, set reporting lines, handle username requests and restore deleted data.">
+      <PageHeader title="Administration" subtitle="Approve and lock accounts, choose each user’s role and plan, set reporting lines and organisations, handle username requests and restore deleted data. Locking an organisation admin locks everyone in their organisation.">
         <div className="segmented">
           <button className={tab === 'users' ? 'on' : ''} onClick={() => setTab('users')}>
             <Users size={14} /> Users {pendingUsers > 0 && <span className="pill">{pendingUsers}</span>}
@@ -140,6 +141,7 @@ export default function Admin() {
                     <th>Role</th>
                     <th>Plan</th>
                     <th>Reports to</th>
+                    <th>Organisation</th>
                     <th>Registered</th>
                     <th></th>
                   </tr>
@@ -165,6 +167,11 @@ export default function Admin() {
                             <Lock size={11} /> locked
                           </span>
                         )}
+                        {u.org_locked && !u.is_locked && (
+                          <span className="badge bad" title={`Their organisation admin @${byId[u.org_admin_id]?.username} is locked`}>
+                            <Lock size={11} /> org locked
+                          </span>
+                        )}
                       </td>
                       <td>
                         <select
@@ -173,6 +180,7 @@ export default function Admin() {
                           onChange={(e) => act(() => api.patch(`/admin/users/${u.id}`, { role: e.target.value }), 'Role updated')}
                         >
                           <option value="USER">User</option>
+                          <option value="ORG_ADMIN">Org admin</option>
                           <option value="ADMIN">Admin</option>
                         </select>
                       </td>
@@ -208,6 +216,9 @@ export default function Admin() {
                         )}
                       </td>
                       <td>
+                        {u.role === 'ADMIN' ? (
+                          <span className="muted small">Nobody (admin)</span>
+                        ) : (
                         <select
                           value={u.manager_id || ''}
                           onChange={(e) =>
@@ -226,7 +237,32 @@ export default function Admin() {
                               </option>
                             ))}
                         </select>
+                        )}
                         {u.manager_id && !byId[u.manager_id] && <span className="muted"> #{u.manager_id}</span>}
+                      </td>
+                      <td>
+                        {u.role === 'ORG_ADMIN' ? (
+                          <span className="badge info">Heads organisation</span>
+                        ) : u.role === 'ADMIN' ? (
+                          <span className="muted small">—</span>
+                        ) : (
+                          <select
+                            value={u.org_admin_id || ''}
+                            onChange={(e) =>
+                              act(
+                                () => api.patch(`/admin/users/${u.id}`, e.target.value ? { org_admin_id: Number(e.target.value) } : { clear_org: true }),
+                                'Organisation updated',
+                              )
+                            }
+                          >
+                            <option value="">None</option>
+                            {orgAdmins.map((o) => (
+                              <option key={o.id} value={o.id}>
+                                {o.full_name} (@{o.username})
+                              </option>
+                            ))}
+                          </select>
+                        )}
                       </td>
                       <td className="muted" style={{ whiteSpace: 'nowrap' }}>{u.created_at.slice(0, 10)}</td>
                       <td>
@@ -268,7 +304,7 @@ export default function Admin() {
                       </td>
                     </tr>
                   ))}
-                  {!shown.length && <EmptyRow cols={7}>No users match.</EmptyRow>}
+                  {!shown.length && <EmptyRow cols={8}>No users match.</EmptyRow>}
                 </tbody>
               </table>
             </div>

@@ -38,12 +38,12 @@ export default function Login() {
         </div>
         {error && <Alert type="error">{error}</Alert>}
         <div className="field">
-          <label htmlFor="username">Username</label>
+          <label htmlFor="username">Username <span className="req" aria-hidden="true">*</span></label>
           <input id="username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required autoFocus autoComplete="username" />
         </div>
         <div className="field">
           <div className="row-between">
-            <label htmlFor="password">Password</label>
+            <label htmlFor="password">Password <span className="req" aria-hidden="true">*</span></label>
             <Link to="/forgot-password" className="small">
               Forgot password?
             </Link>

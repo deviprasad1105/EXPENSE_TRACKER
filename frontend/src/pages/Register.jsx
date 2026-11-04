@@ -41,21 +41,21 @@ export default function Register() {
           </div>
           {error && <Alert type="error">{error}</Alert>}
           <div className="field">
-            <label>Full name</label>
+            <label>Full name <span className="req" aria-hidden="true">*</span></label>
             <input value={form.full_name} onChange={set('full_name')} required />
           </div>
           <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
             <div>
-              <label>Username</label>
+              <label>Username <span className="req" aria-hidden="true">*</span></label>
               <input value={form.username} onChange={set('username')} required autoComplete="username" />
             </div>
             <div>
-              <label>Password</label>
+              <label>Password <span className="req" aria-hidden="true">*</span></label>
               <input type="password" value={form.password} onChange={set('password')} minLength={8} required autoComplete="new-password" />
             </div>
           </div>
           <div className="field">
-            <label>Email</label>
+            <label>Email <span className="req" aria-hidden="true">*</span></label>
             <input type="email" value={form.email} onChange={set('email')} required />
           </div>
           <div className="field">

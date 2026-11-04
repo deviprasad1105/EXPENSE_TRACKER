@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .database import get_db
-from .models import ROLE_ADMIN, STATUS_APPROVED, DataShare, User
+from .models import ROLE_ADMIN, ROLE_ORG_ADMIN, STATUS_APPROVED, DataShare, User
 from .security import decode_access_token
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -15,6 +15,10 @@ ACCESS_OWNER = "OWNER"
 ACCESS_ADMIN = "ADMIN"
 ACCESS_MANAGER = "MANAGER"
 ACCESS_SHARED = "SHARED"
+# An org admin viewing one of their members (read-only; the member is not told)
+ACCESS_ORG = "ORG"
+
+ORG_LOCKED_MESSAGE = "Your organisation's access has been locked. Contact your administrator."
 
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
@@ -24,6 +28,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated", headers={"WWW-Authenticate": "Bearer"})
     if user.is_locked:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Your account is locked", headers={"WWW-Authenticate": "Bearer"})
+    if user.org_locked:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, ORG_LOCKED_MESSAGE, headers={"WWW-Authenticate": "Bearer"})
     return user
 
 
@@ -31,6 +37,17 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
     if user.role != ROLE_ADMIN:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin only")
     return user
+
+
+def require_org_admin(user: User = Depends(get_current_user)) -> User:
+    if user.role != ROLE_ORG_ADMIN:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Organisation admin only")
+    return user
+
+
+def is_org_member(viewer: User, target: User) -> bool:
+    """`target` belongs to the organisation `viewer` administers."""
+    return viewer.role == ROLE_ORG_ADMIN and target.org_admin_id == viewer.id
 
 
 FEATURE_EXPENSE = "expense"
@@ -82,6 +99,8 @@ def access_level(db: Session, viewer: User, target: User) -> str | None:
         return ACCESS_OWNER
     if viewer.role == ROLE_ADMIN:
         return ACCESS_ADMIN
+    if is_org_member(viewer, target):
+        return ACCESS_ORG
     if target.id in subordinate_ids(db, viewer.id):
         return ACCESS_MANAGER
     shared = db.scalar(select(DataShare.id).where(DataShare.owner_id == target.id, DataShare.viewer_id == viewer.id))
@@ -125,7 +144,12 @@ def accessible_users(db: Session, viewer: User) -> list[tuple[User, str]]:
 
     result: list[tuple[User, str]] = [(viewer, ACCESS_OWNER)]
     seen = {viewer.id}
-    team = subordinate_ids(db, viewer.id)
+    if viewer.role == ROLE_ORG_ADMIN:
+        stmt = select(User).where(User.org_admin_id == viewer.id, User.status == STATUS_APPROVED).order_by(User.full_name)
+        for member in db.scalars(stmt):
+            result.append((member, ACCESS_ORG))
+            seen.add(member.id)
+    team = subordinate_ids(db, viewer.id) - seen
     if team:
         stmt = select(User).where(User.id.in_(team), User.status == STATUS_APPROVED).order_by(User.full_name)
         for member in db.scalars(stmt):

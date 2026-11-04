@@ -9,6 +9,8 @@ from ..accounting.lifecycle import delete_books
 from ..database import get_db
 from ..deps import require_admin, would_create_cycle
 from ..models import (
+    ROLE_ADMIN,
+    ROLE_ORG_ADMIN,
     STATUS_APPROVED,
     STATUS_PENDING,
     STATUS_REJECTED,
@@ -33,7 +35,7 @@ from ..models import (
     UserBackground,
     UsernameChangeRequest,
 )
-from ..schemas import AdminReason, AdminUserUpdate, BackupOut, UsernameDecision, UsernameRequestOut, UserOut
+from ..schemas import AdminReason, AdminUserUpdate, BackupOut, ManagedUserOut, UsernameDecision, UsernameRequestOut
 from ..security import hash_password
 from ..services.backup import (
     KIND_USER,
@@ -57,7 +59,7 @@ def _get_user(db: Session, user_id: int) -> User:
     return user
 
 
-@router.get("/users", response_model=list[UserOut])
+@router.get("/users", response_model=list[ManagedUserOut])
 def list_users(status_filter: str | None = None, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     stmt = select(User).order_by(User.created_at.desc())
     if status_filter:
@@ -65,7 +67,7 @@ def list_users(status_filter: str | None = None, admin: User = Depends(require_a
     return db.scalars(stmt).all()
 
 
-@router.post("/users/{user_id}/approve", response_model=UserOut)
+@router.post("/users/{user_id}/approve", response_model=ManagedUserOut)
 def approve(user_id: int, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     user = _get_user(db, user_id)
     user.status = STATUS_APPROVED
@@ -75,7 +77,7 @@ def approve(user_id: int, admin: User = Depends(require_admin), db: Session = De
     return user
 
 
-@router.post("/users/{user_id}/reject", response_model=UserOut)
+@router.post("/users/{user_id}/reject", response_model=ManagedUserOut)
 def reject(user_id: int, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     user = _get_user(db, user_id)
     if user.id == admin.id:
@@ -85,13 +87,22 @@ def reject(user_id: int, admin: User = Depends(require_admin), db: Session = Dep
     return user
 
 
-@router.patch("/users/{user_id}", response_model=UserOut)
+@router.patch("/users/{user_id}", response_model=ManagedUserOut)
 def update_user(user_id: int, data: AdminUserUpdate, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     user = _get_user(db, user_id)
-    if data.role is not None:
-        if user.id == admin.id and data.role != user.role:
+    if data.role is not None and data.role != user.role:
+        if user.id == admin.id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot change your own role")
+        if user.role == ROLE_ORG_ADMIN:
+            # No longer runs an organisation: its members become ordinary users
+            for member in user.org_members:
+                member.org_admin_id = None
         user.role = data.role
+        if user.role in (ROLE_ADMIN, ROLE_ORG_ADMIN):
+            # Admins report to nobody, and an org admin heads their organisation rather than belonging to one
+            user.org_admin_id = None
+        if user.role == ROLE_ADMIN:
+            user.manager_id = None
     if data.status is not None:
         user.status = data.status
         if data.status == STATUS_APPROVED and not user.approved_at:
@@ -100,9 +111,20 @@ def update_user(user_id: int, data: AdminUserUpdate, admin: User = Depends(requi
         user.manager_id = None
     elif data.manager_id is not None:
         _get_user(db, data.manager_id)
+        if user.role == ROLE_ADMIN:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "An admin cannot have a manager")
         if would_create_cycle(db, user.id, data.manager_id):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "That would create a loop: the new manager reports to this user")
         user.manager_id = data.manager_id
+    if data.clear_org:
+        user.org_admin_id = None
+    elif data.org_admin_id is not None:
+        org_admin = _get_user(db, data.org_admin_id)
+        if org_admin.role != ROLE_ORG_ADMIN:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "That user is not an organisation admin")
+        if user.role in (ROLE_ADMIN, ROLE_ORG_ADMIN):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Admins and organisation admins cannot belong to an organisation")
+        user.org_admin_id = org_admin.id
     if data.full_name:
         user.full_name = data.full_name
     if data.email:
@@ -111,7 +133,7 @@ def update_user(user_id: int, data: AdminUserUpdate, admin: User = Depends(requi
         user.password_hash = hash_password(data.new_password)
         user.token_version += 1
         user.failed_logins, user.login_blocked_until = 0, None
-    granted, revoked = [], []
+    granted = []
     for feature, label in (
         ("feature_expense", "Expense tracking"), ("feature_split", "Split bills"), ("feature_subscription", "Subscriptions"),
         ("feature_accounting", "Accounting"),
@@ -119,10 +141,11 @@ def update_user(user_id: int, data: AdminUserUpdate, admin: User = Depends(requi
         value = getattr(data, feature)
         if value is not None and value != getattr(user, feature):
             setattr(user, feature, value)
-            (granted if value else revoked).append(label)
-    if granted or revoked:
-        parts = ([f"{', '.join(granted)} added to"] if granted else []) + ([f"{', '.join(revoked)} removed from"] if revoked else [])
-        db.add(Notification(user_id=user.id, kind="INFO", message=f"{' and '.join(parts)} your plan by {admin.username}."))
+            if value:
+                granted.append(label)
+    # Only new access is announced; removing access is never notified to the user
+    if granted:
+        db.add(Notification(user_id=user.id, kind="INFO", message=f"{', '.join(granted)} added to your plan by {admin.username}."))
     db.commit()
     return user
 
@@ -150,6 +173,11 @@ def delete_user(
     user = _get_user(db, user_id)
     if user.id == admin.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot delete yourself")
+    return delete_account(db, user, admin, reason)
+
+
+def delete_account(db: Session, user: User, actor: User, reason: str | None) -> DataBackup:
+    """Back up, then delete `user` and all their data. Shared by the admin and org admin routes."""
     in_splits = db.scalar(
         select(
             exists().where(SplitMember.user_id == user.id)
@@ -166,15 +194,18 @@ def delete_user(
         )
     tables = snapshot_user(db, user)
     reports = [u.id for u in user.reports]
+    org_members = [u.id for u in user.org_members]
     expenses = len(tables["expenses"])
     backup = create_backup(
-        db, KIND_USER, user, admin, tables,
+        db, KIND_USER, user, actor, tables,
         summary=f"Account @{user.username} ({user.full_name}) with {expenses} expenses, "
         f"{len(tables['funds'])} funds and {len(tables['daily_items'])} daily items",
-        reason=reason, extra={"reports": reports},
+        reason=reason, extra={"reports": reports, "org_members": org_members},
     )
     for member in user.reports:
         member.manager_id = None
+    for member in user.org_members:
+        member.org_admin_id = None
     _delete_user_data(db, user.id)
     for model, col in (
         (UserAvatar, UserAvatar.user_id), (UserBackground, UserBackground.user_id), (Notification, Notification.user_id),
@@ -207,23 +238,35 @@ def clear_user_data(user_id: int, data: AdminReason, admin: User = Depends(requi
     return backup
 
 
-@router.post("/users/{user_id}/lock", response_model=UserOut)
+@router.post("/users/{user_id}/lock", response_model=ManagedUserOut)
 def lock_user(user_id: int, data: AdminReason, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    """Locked users cannot sign in and their current sessions stop working immediately."""
+    """Locked users cannot sign in and their current sessions stop working immediately.
+    Locking an org admin also locks out everyone in their organisation."""
     user = _get_user(db, user_id)
     if user.id == admin.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot lock your own account")
-    user.is_locked, user.locked_at, user.locked_by, user.lock_reason = True, now_local(), admin.username, data.reason
-    user.token_version += 1
+    lock_account(user, admin, data.reason)
     db.commit()
     return user
 
 
-@router.post("/users/{user_id}/unlock", response_model=UserOut)
+def lock_account(user: User, actor: User, reason: str | None) -> None:
+    user.is_locked, user.locked_at, user.locked_by, user.lock_reason = True, now_local(), actor.username, reason
+    user.token_version += 1
+
+
+def unlock_account(db: Session, user: User, actor: User) -> None:
+    was_locked = user.is_locked
+    user.is_locked, user.locked_at, user.locked_by, user.lock_reason = False, None, None, None
+    if was_locked:
+        by = f" by {actor.username}" if actor.role == ROLE_ADMIN else ""
+        db.add(Notification(user_id=user.id, kind="INFO", message=f"Your account was unlocked{by}."))
+
+
+@router.post("/users/{user_id}/unlock", response_model=ManagedUserOut)
 def unlock_user(user_id: int, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     user = _get_user(db, user_id)
-    user.is_locked, user.locked_at, user.locked_by, user.lock_reason = False, None, None, None
-    db.add(Notification(user_id=user.id, kind="INFO", message=f"Your account was unlocked by {admin.username}."))
+    unlock_account(db, user, admin)
     db.commit()
     return user
 

@@ -59,6 +59,23 @@ class UserOut(ORM):
     background_updated_at: datetime | None = None
 
 
+class ManagedUserOut(UserOut):
+    """A user as the admin or their org admin sees them. Never returned to the user themselves, so a member
+    doesn't learn which organisation admin can see their data."""
+
+    org_admin_id: int | None = None
+    org_locked: bool = False
+
+
+class OrgMemberCreate(BaseModel):
+    """An org admin adding someone to their organisation. The account is approved straight away."""
+
+    username: str = Field(min_length=3, max_length=50, pattern=r"^[A-Za-z0-9_.-]+$")
+    email: EmailStr
+    full_name: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=8, max_length=100)
+
+
 class AccessibleUser(BaseModel):
     id: int
     username: str
@@ -69,10 +86,13 @@ class AccessibleUser(BaseModel):
 
 
 class AdminUserUpdate(BaseModel):
-    role: str | None = Field(default=None, pattern="^(ADMIN|USER)$")
+    role: str | None = Field(default=None, pattern="^(ADMIN|ORG_ADMIN|USER)$")
     status: str | None = Field(default=None, pattern="^(PENDING|APPROVED|REJECTED)$")
     manager_id: int | None = None
     clear_manager: bool = False
+    # Organisation membership: the ORG_ADMIN this user belongs to
+    org_admin_id: int | None = None
+    clear_org: bool = False
     full_name: str | None = None
     email: EmailStr | None = None
     new_password: str | None = Field(default=None, min_length=8, max_length=100)

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
-from ..deps import accessible_users, can_write, get_current_user
+from ..deps import ORG_LOCKED_MESSAGE, accessible_users, can_write, get_current_user
 from ..models import ROLE_ADMIN, STATUS_APPROVED, STATUS_PENDING, STATUS_REJECTED, Notification, PasswordReset, User
 from ..ratelimit import RateLimiter
 from ..schemas import AccessibleUser, ForgotPasswordIn, RegisterIn, ResetPasswordIn, TokenOut, UserOut
@@ -83,6 +83,8 @@ def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: Ses
     if user.is_locked:
         reason = f" Reason: {user.lock_reason}" if user.lock_reason else ""
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"Your account has been locked by an administrator.{reason}")
+    if user.org_locked:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, ORG_LOCKED_MESSAGE)
     if user.failed_logins or user.login_blocked_until:
         user.failed_logins, user.login_blocked_until = 0, None
         db.commit()
@@ -158,7 +160,7 @@ def forgot_password(data: ForgotPasswordIn, request: Request, db: Session = Depe
     if not public_form_limiter.hit(f"forgot:{_client_ip(request)}"):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests. Wait a minute and try again.")
     user = db.scalar(select(User).where(User.username == data.username.strip()))
-    if not user or user.status != STATUS_APPROVED or user.is_locked:
+    if not user or user.status != STATUS_APPROVED or user.is_locked or user.org_locked:
         return {"message": FORGOT_MESSAGE}
 
     now = now_local()
@@ -225,6 +227,7 @@ def _active_reset(db: Session, token: str) -> PasswordReset:
         or reset.expires_at <= now_local()
         or reset.user.status != STATUS_APPROVED
         or reset.user.is_locked
+        or reset.user.org_locked
     ):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This reset link is invalid or has expired. Request a new one.")
     return reset

@@ -171,7 +171,7 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
     see your subscriptions but not change them.
 - **Security**: 5 wrong passwords block an account for 15 minutes (and the owner is notified), each IP address gets
   at most 20 sign-in attempts a minute, and registration and forgot-password are rate-limited. Changing or resetting
-  a password, *Settings → Sign out other devices*, and an admin lock sign out every other session at once.
+  a password and an admin lock sign out every other session at once; *Settings → Sign out of all devices* ends every session, including the current one.
   Passwords need at least 8 characters. Responses carry security headers; in production the API docs are hidden
   and HSTS is sent.
 - **Accounting** (plan feature, needs Expenses; *Administration → Users → Plan*): double-entry books per user,

@@ -38,9 +38,10 @@ Everyone who can log in, plus their role, approval state, reporting line and pre
 | `email` | VARCHAR2(120), unique | Used for reminder emails when SMTP is configured. |
 | `full_name` | VARCHAR2(120) | Display name. |
 | `password_hash` | VARCHAR2(200) | bcrypt hash. The plain password is never stored. |
-| `role` | VARCHAR2(10) | `USER` or `ADMIN`. |
+| `role` | VARCHAR2(10) | `USER`, `ORG_ADMIN` (admin of one organisation) or `ADMIN` (the app's super user). |
 | `status` | VARCHAR2(10) | `PENDING` (just registered, cannot log in), `APPROVED`, or `REJECTED`. |
-| `manager_id` | INTEGER, FK → `app_users.id`, nullable | Who this user reports to. |
+| `manager_id` | INTEGER, FK → `app_users.id`, nullable | Who this user reports to. Always `NULL` for an `ADMIN`. |
+| `org_admin_id` | INTEGER, FK → `app_users.id`, nullable | The `ORG_ADMIN` whose organisation this user belongs to. Not shown to the user. |
 | `created_at` | DATE | Registration time. |
 | `approved_at` | DATE | When an admin approved the account. |
 | `username_changed_at` | DATE, nullable | Last username change, by the user or by an admin. Starts the 15-day lock. |
@@ -51,7 +52,7 @@ Everyone who can log in, plus their role, approval state, reporting line and pre
 | `feature_split` | SMALLINT | 1 = the user's plan includes split bills (default 0). Set by an admin. |
 | `feature_subscription` | SMALLINT | 1 = the user's plan includes the subscription tracker (default 0). Set by an admin. Admins always have every feature. |
 | `feature_accounting` | SMALLINT | 1 = the user's plan includes accounting (default 0). Needs `feature_expense` too. Set by an admin. |
-| `token_version` | INTEGER | Written into every sign-in token. Raised on a password change or reset, "sign out other devices" and an admin lock, which revokes every older token. |
+| `token_version` | INTEGER | Written into every sign-in token. Raised on a password change or reset, "sign out of all devices" and an admin lock, which revokes every older token. |
 | `failed_logins` | INTEGER | Wrong passwords in a row. Reset by a successful sign-in. |
 | `login_blocked_until` | DATE, nullable | After `LOGIN_MAX_FAILURES` (5) wrong passwords, sign-in is refused until this time (`LOGIN_LOCK_MINUTES`, 15). |
 | `ask_account` | SMALLINT | 1 = expense entry asks which account paid (default). 0 = everything goes to the primary account. |
@@ -64,7 +65,13 @@ Everyone who can log in, plus their role, approval state, reporting line and pre
 - **Reporting line (`manager_id`):** a manager can **view** the data of everyone below them, at any depth.
   If A manages B and B manages C, then B sees C, and A sees both B and C. If A has a manager M, then M sees A,
   B and C. Managers can only view their team's data, never change it. The admin cannot set a manager that
-  would create a loop.
+  would create a loop, and nobody can be an admin's manager.
+- **Organisations (`org_admin_id`):** an `ORG_ADMIN` is the customer who bought the app for their
+  organisation. On the Organisation page they add members (approved at once, with the org admin's plan), view
+  their data read-only, lock, unlock and remove them (removal is backed up like an admin delete). Members are
+  not told. Locking an org admin locks out every member until the org admin is unlocked. The `ADMIN` still
+  sees and controls everyone.
+- **Revoked access is silent:** removing a feature from a user's plan sends no notification (adding one does).
 - **Username lock:** a user can change their own username only if `username_changed_at` is empty or more than
   `USERNAME_LOCK_DAYS` (15) days ago. Inside the lock they must raise a request (see
   `USERNAME_CHANGE_REQUESTS`). When an admin approves a request, `username_changed_at` is set to that moment,
