@@ -1,10 +1,13 @@
 import os
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 DEFAULT_JWT_SECRET = "change-me"
 DEFAULT_ADMIN_PASSWORD = "admin123"
+# Query parameters some providers add to connection URLs that libpq does not understand
+_NON_LIBPQ_PARAMS = {"supa", "pgbouncer"}
 
 
 class Settings(BaseSettings):
@@ -66,11 +69,19 @@ class Settings(BaseSettings):
 
     @property
     def sqlalchemy_url(self) -> str:
-        """Hosted Postgres providers hand out postgres:// or postgresql:// URLs; SQLAlchemy needs the psycopg driver."""
+        """Hosted Postgres providers hand out postgres:// or postgresql:// URLs; SQLAlchemy needs the psycopg driver.
+
+        Supabase/Prisma-style URLs also carry query parameters libpq rejects (supa=..., pgbouncer=true); drop them.
+        """
         url = self.database_url
         for prefix in ("postgres://", "postgresql://"):
             if url.startswith(prefix):
-                return "postgresql+psycopg://" + url[len(prefix):]
+                url = "postgresql+psycopg://" + url[len(prefix):]
+                break
+        parts = urlsplit(url)
+        if parts.query:
+            query = [(k, v) for k, v in parse_qsl(parts.query) if k not in _NON_LIBPQ_PARAMS]
+            url = urlunsplit(parts._replace(query=urlencode(query)))
         return url
 
     @property
