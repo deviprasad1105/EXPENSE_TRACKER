@@ -508,6 +508,40 @@ released automatically.
 
 ---
 
+## Imported records
+
+The *Import Records* page brings past records in from a file. The records themselves are ordinary rows of
+`EXPENSES`, `FUNDS` and `SPLIT_BILLS`; these two tables only keep the history of each upload.
+
+### IMPORT_BATCHES
+One row per upload (or per set of records typed in by hand).
+
+| Column | Type | Meaning |
+|---|---|---|
+| `user_id` | INTEGER, FK | Whose records; each user imports into their own account. |
+| `filename`, `file_type` | VARCHAR | As uploaded (`xlsx`, `csv`, `pdf`, `docx`…; `manual` when typed in). |
+| `file_hash` | VARCHAR(64), nullable | SHA-256 of the file: warns when the same file is uploaded again. |
+| `status` | VARCHAR(25) | `IN_PROGRESS`, `COMPLETED`, `COMPLETED_WITH_ERRORS`, `FAILED` (nothing imported), `UNDONE`, `PARTIALLY_UNDONE`. |
+| `rows_total`, `rows_imported`, `rows_skipped`, `rows_failed`, `rows_undone` | INTEGER | Counts of the rows below. |
+| `expense_total`, `income_total` | NUMERIC(14,2) | What was imported: spending (split rows at their full amount) and money received. |
+| `created_at`, `finished_at`, `undone_at` | TIMESTAMP | |
+
+### IMPORT_RECORDS
+One row per row of the file.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `batch_id`, `user_id` | FK | |
+| `row_no` | INTEGER | Row number in the file (1 = its first row). |
+| `kind` | VARCHAR(10) | `EXPENSE`, `INCOME` or `SPLIT`. |
+| `status` | VARCHAR(10) | `IMPORTED`, `SKIPPED` (a duplicate, a balance line or unticked), `FAILED`, `UNDONE`, `KEPT` (Undo left it: edited since, reconciled, or in a locked period). |
+| `reason` | VARCHAR(500) | Why it was skipped, failed or kept. |
+| `record_date`, `description`, `amount` | | As read from the file (after corrections in the review). |
+| `fingerprint` | VARCHAR(64) | Kind, date, amount and description, plus which occurrence in the file: a row imported before is recognised when the file is uploaded again. Indexed with `user_id`. |
+| `expense_id`, `fund_id`, `split_bill_id` | FK, SET NULL | What the row became (a split row: the expense for the user's share and the bill for the others). |
+
+---
+
 ## Who can see and change what
 
 | Viewer → target | See | Change |

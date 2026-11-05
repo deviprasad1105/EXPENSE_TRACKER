@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, defer
 from ..accounting.lifecycle import delete_books
 from ..database import get_db
 from ..deps import require_admin, would_create_cycle
+from ..importer.models import ImportBatch, ImportRecord
 from ..models import (
     ROLE_ADMIN,
     ROLE_ORG_ADMIN,
@@ -154,6 +155,8 @@ def _delete_user_data(db: Session, user_id: int):
     """Expenses, funds, daily items, subscriptions, budgets and accounts of a user (explicit deletes, so it doesn't rely
     on DB cascades). Accounting books go first: their ledgers point at the accounts deleted below."""
     delete_books(db, user_id)
+    db.execute(delete(ImportRecord).where(ImportRecord.user_id == user_id))
+    db.execute(delete(ImportBatch).where(ImportBatch.user_id == user_id))
     subs = select(Subscription.id).where(Subscription.user_id == user_id)
     db.execute(delete(SubscriptionCharge).where(SubscriptionCharge.subscription_id.in_(subs)))
     db.execute(delete(Subscription).where(Subscription.user_id == user_id))

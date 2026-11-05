@@ -4,7 +4,8 @@ Daily expense tracker with customisable daily items, a balance dashboard with ch
 missed-entry reminders, a manager hierarchy, read-only sharing, profiles, and admin approval of new users.
 An optional **Accounting** module keeps Tally-style double-entry books for a sole proprietor, with the Journal,
 General Ledger, Trial Balance, Trading and Profit & Loss Accounts, Balance Sheet, Cash Flow Statement and Bank
-Reconciliation.
+Reconciliation. **Import past records** brings in history from other apps, bank statements and your own sheets
+(Excel, CSV, PDF, Word).
 
 | Layer    | Tech |
 |----------|------|
@@ -114,6 +115,33 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
 - **Custom background** (*Settings → Appearance*): upload your own picture (up to 5 MB) to show behind the app;
   *Reset to default* removes it.
 - **Reports**: Excel (summary with charts, daily totals, detailed list) or PDF for any period.
+- **Import past records** (*Import Records*): bring in expenses and money received from before you used the app.
+  - **Formats**: Excel `.xlsx` / `.xls` (every sheet), CSV (comma, semicolon, tab or pipe), PDF (its tables; or its
+    text, split into columns at gaps of two or more spaces) and Word `.docx` (its tables, or lines like
+    `05/11/2026 Petrol 2,000`). Up to `IMPORT_MAX_BYTES` (5 MB; Vercel caps uploads at 4.5 MB) and
+    `IMPORT_MAX_RECORDS` (5,000) per file.
+  - **Not supported**: scanned PDFs and photos (no text to read), old Word `.doc` (save it as `.docx` or PDF),
+    password-protected files. A file that can't be read gets a clear message; records can also be typed in by hand.
+  - **Steps**: 1. upload; 2. check the columns, guessed from their headings (`Txn Date`, `Narration`,
+    `Withdrawal Amt.`, `Cost`, `Paid with`, `My share`…) or their contents, and how dates are written (day-first by
+    default); 3. review every record: its status, why it can't be imported, and edit, untick, remove or add rows;
+    4. import (sent in chunks of 200 rows, so big files stay within the server's time limit).
+  - **What a row becomes**: spending → an expense; money in (deposit, credit, income, salary…) → money received;
+    a split row (a *My share* or *Split with* column) → an expense for your share plus a split bill, paid by you, for
+    the part paid for the others (the people named, or "Others"), in a group you choose or "Imported split bills".
+    Subscriptions in a file are imported as expenses. Amounts may carry ₹ / Rs / INR, Indian grouping, Dr / Cr,
+    brackets or a minus sign.
+  - **Categories** not in the app yet must be mapped to one, or created; nothing is put in an unrelated category.
+    **Accounts**: the primary account (default), none, one account for the whole file, or the file's account column
+    (matched by name or last 4 digits; the rest you choose, or leave unassigned).
+  - **Checks**: missing or unrecognised dates and amounts, future dates, locked accounting periods (rejected with
+    the reason), records already in the app on the same date for the same amount (left out unless ticked), rows
+    imported before (re-uploading a file adds nothing), and balance / total lines.
+  - **After the import**: records keep their original date and show on every page; the 3-day edit window starts on
+    the import day; no budget alert is sent; they post to the books like any other record.
+  - **Import history**: each upload with its file, date, status, rows imported / left out / failed (each with its
+    reason) and totals. **Undo** removes only the records that upload created, keeping any edited since, reconciled
+    with a bank statement or in a locked accounting period (a big import is undone 200 records per request).
 - **Profile**: change your name, email, password and **profile photo** (upload or remove).
   **Username**: you can change it yourself once every `USERNAME_LOCK_DAYS` (15) days. Inside that window you raise
   a request, and an admin approves or rejects it. An approved change restarts your 15 days.
@@ -240,12 +268,15 @@ backend/app/
                    subscription_import (SMS parsing, detection in expenses), jobs (one run per period),
                    accounts (balances, primary account), budgets (limits and alerts),
                    insights (month-by-month comparison for the dashboard)
+  importer/        import past records: extract (read xlsx, xls, csv, pdf, docx into tables), parse (guess the
+                   columns, dates, amounts), service (check, duplicates, import in chunks, undo), router (/api/imports)
   accounting/      double-entry books: models, chart (Tally groups, financial years), engine (the only code that
                    posts vouchers), autopost (session hooks that post expenses, funds, transfers, charges, splits),
                    balances + reports (all reports), exports (Excel/PDF), gst (invoices), bank (statement import,
                    matching, reconciliation), router + router_reports (/api/accounting/...)
 backend/tests/           pytest suite (auth, access rules, splits, subscriptions, accounts, budgets, insights,
-                         accounting engine, auto-posting, every accounting report against a hand-worked example)
+                         accounting engine, auto-posting, every accounting report against a hand-worked example,
+                         importing past records from every file format)
 backend/sql/schema.sql   Postgres DDL reference
 backend/scripts/         oracle_to_postgres.py (one-off data copy)
 api/index.py             Vercel entry point for the backend
@@ -255,7 +286,7 @@ frontend/src/
   components/      Layout, Tour, Avatar, Charts, Modal, BillForm, Accounts (account picker), ui helpers
   accounting/      Vouchers (+ VoucherForm with GST invoices), Ledgers, Reports (+ ReportViews), Bank,
                    AccountingSettings, common helpers
-  pages/           Dashboard, DailyEntry, Expenses, DailyItems, Funds, Reports, Sharing,
+  pages/           Dashboard, DailyEntry, Expenses, DailyItems, Funds, Reports, Import (+ ImportHistory), Sharing,
                    Splits, SplitGroup, Subscriptions, Notifications, Profile, Settings, Admin, Login, Register, ForgotPassword,
                    ResetPassword
 ```

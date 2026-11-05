@@ -76,13 +76,21 @@ def list_expenses(
     return [_to_out(e, target) for e in db.scalars(stmt)]
 
 
+DEFAULT_CATEGORIES = ("Food", "Snacks", "Smoking", "Transport", "Groceries", "Bills", "Shopping", "Health", "Entertainment",
+                      "General")
+
+
+def user_categories(db: Session, user_id: int) -> list[str]:
+    """The categories a user has: the defaults plus every one used in their expenses or daily items."""
+    used = db.scalars(select(Expense.category).where(Expense.user_id == user_id).distinct()).all()
+    templ = db.scalars(select(DailyItem.category).where(DailyItem.user_id == user_id).distinct()).all()
+    return sorted(set(used) | set(templ) | set(DEFAULT_CATEGORIES))
+
+
 @router.get("/categories", response_model=list[str])
 def categories(user_id: int | None = None, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
     target = resolve_target(db, viewer, user_id)
-    used = db.scalars(select(Expense.category).where(Expense.user_id == target.user.id).distinct()).all()
-    templ = db.scalars(select(DailyItem.category).where(DailyItem.user_id == target.user.id).distinct()).all()
-    defaults = ["Food", "Snacks", "Smoking", "Transport", "Groceries", "Bills", "Shopping", "Health", "Entertainment", "General"]
-    return sorted(set(used) | set(templ) | set(defaults))
+    return user_categories(db, target.user.id)
 
 
 @router.get("/day-status")

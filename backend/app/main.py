@@ -10,6 +10,7 @@ from sqlalchemy import delete, select
 
 from .accounting import router as accounting
 from .config import settings
+from .importer import router as importer
 from .database import SessionLocal, engine
 from .deps import FEATURE_ACCOUNTING, FEATURE_EXPENSE, FEATURE_SUBSCRIPTION, require_feature
 from .migrate import sync_schema
@@ -139,6 +140,7 @@ for r in (auth, admin, org, profile, notifications, splits, cron):
 # Expense tracking is a feature the admin grants per user
 for r in (expenses, daily_items, funds, dashboard, reports, shares, accounts, budgets):
     app.include_router(r.router, dependencies=[Depends(require_feature(FEATURE_EXPENSE))])
+app.include_router(importer.router, dependencies=[Depends(require_feature(FEATURE_EXPENSE))])
 app.include_router(subscriptions.router, dependencies=[Depends(require_feature(FEATURE_SUBSCRIPTION))])
 app.include_router(accounting.router, dependencies=[Depends(require_feature(FEATURE_ACCOUNTING))])
 accounting.register_error_handler(app)
