@@ -23,6 +23,7 @@ import SettingsOutlined from '@mui/icons-material/SettingsOutlined'
 import SpaceDashboardOutlined from '@mui/icons-material/SpaceDashboardOutlined'
 import SummarizeOutlined from '@mui/icons-material/SummarizeOutlined'
 import TuneOutlined from '@mui/icons-material/TuneOutlined'
+import UploadFileOutlined from '@mui/icons-material/UploadFileOutlined'
 import VisibilityOutlined from '@mui/icons-material/VisibilityOutlined'
 import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded'
 import api, { todayISO } from '../api'
@@ -157,6 +158,7 @@ export default function Layout() {
             ['/items', 'My Daily Items', ChecklistOutlined, 'nav-items'],
             ['/funds', 'Balance', AccountBalanceWalletOutlined, 'nav-funds'],
             ['/reports', 'Reports', AssessmentOutlined, 'nav-reports'],
+            ['/import', 'Import Records', UploadFileOutlined, 'nav-import'],
             ['/sharing', 'Team & Sharing', GroupsOutlined, 'nav-sharing'],
           ]
         : [],

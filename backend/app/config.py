@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     username_lock_days: int = 15
     max_avatar_bytes: int = 2_000_000
     max_background_bytes: int = 5_000_000
+    # Importing past records (Import page). On Vercel a request body can't exceed 4.5 MB whatever this says.
+    import_max_bytes: int = 5_000_000
+    import_max_records: int = 5_000
 
     # Forgot password: at most RESET_MAX_PER_WINDOW reset emails per RESET_WINDOW_DAYS
     reset_max_per_window: int = 2

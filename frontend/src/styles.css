@@ -510,3 +510,15 @@ label { font-size: 13px; font-weight: 500; color: var(--text-2); }
   color: var(--danger);
   margin-left: 2px;
 }
+
+/* ---------- import past records ---------- */
+.import-table td { vertical-align: top; }
+.import-table input:not([type=checkbox]), .import-table select { min-width: 0; padding: 6px 8px; font-size: 13px; }
+.import-table input[type=date] { width: 150px; }
+.import-table td:nth-child(6) input { min-width: 180px; }
+.import-table td:nth-child(7) input { min-width: 130px; }
+.import-table tr.row-problem td { background: color-mix(in srgb, var(--danger) 5%, transparent); }
+.mini-table th { font-size: 12px; text-align: left; white-space: nowrap; }
+.mini-table th.strong { color: var(--primary-text); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; vertical-align: -2px; }

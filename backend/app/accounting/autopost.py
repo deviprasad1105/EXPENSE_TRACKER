@@ -293,12 +293,17 @@ class SyncReport:
 
 
 def active_voucher(db: Session, user_id: int, stype: str, sid: int) -> Voucher | None:
-    return db.scalar(
+    # Looked up by the source only (one or two vouchers), so every database uses ix_voucher_source; with user_id in
+    # the WHERE, SQLite picks the (user_id, date) index and scans all of the user's vouchers each time.
+    for v in db.scalars(
         select(Voucher).where(
-            Voucher.user_id == user_id, Voucher.source_type == stype, Voucher.source_id == sid,
+            Voucher.source_type == stype, Voucher.source_id == sid,
             Voucher.status == VOUCHER_POSTED, Voucher.is_reversal == false(),
         )
-    )
+    ):
+        if v.user_id == user_id:
+            return v
+    return None
 
 
 def sync_source(
@@ -354,14 +359,11 @@ def _apply(db, books, stype, sid, want: Plan | None, active: Voucher | None, str
             + (f" ({active.narration})" if active.narration else ""),
         )
     if want:
-        version = (
-            db.scalar(
-                select(func.max(Voucher.source_version)).where(
-                    Voucher.user_id == books.user_id, Voucher.source_type == stype, Voucher.source_id == sid
-                )
-            )
-            or 0
-        ) + 1
+        # By source only, then the user in Python: see active_voucher (keeps every database on ix_voucher_source)
+        versions = db.execute(
+            select(Voucher.user_id, Voucher.source_version).where(Voucher.source_type == stype, Voucher.source_id == sid)
+        )
+        version = max((v or 0 for uid, v in versions if uid == books.user_id), default=0) + 1
         post_voucher(db, books, voucher_type=want.voucher_type, voucher_date=want.voucher_date, lines=want.lines(),
                      narration=want.narration, source=(stype, sid, version))
     if active and want:

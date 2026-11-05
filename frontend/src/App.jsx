@@ -20,6 +20,8 @@ import ResetPassword from './pages/ResetPassword'
 import Splits from './pages/Splits'
 import SplitGroup from './pages/SplitGroup'
 import Subscriptions from './pages/Subscriptions'
+import ImportRecords from './pages/Import'
+import ImportHistory from './pages/ImportHistory'
 import Vouchers from './accounting/Vouchers'
 import Ledgers from './accounting/Ledgers'
 import AccountingReports from './accounting/Reports'
@@ -87,6 +89,8 @@ export default function App() {
         <Route path="funds" element={<Feature name="expense"><Funds /></Feature>} />
         <Route path="reports" element={<Feature name="expense"><Reports /></Feature>} />
         <Route path="sharing" element={<Feature name="expense"><Sharing /></Feature>} />
+        <Route path="import" element={<Feature name="expense"><ImportRecords /></Feature>} />
+        <Route path="import/history" element={<Feature name="expense"><ImportHistory /></Feature>} />
         <Route path="splits" element={<Feature name="split"><Splits /></Feature>} />
         <Route path="splits/:groupId" element={<Feature name="split"><SplitGroup /></Feature>} />
         <Route path="subscriptions" element={<Feature name="subscription"><Subscriptions /></Feature>} />
