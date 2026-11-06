@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .parse import Mapping
 
-Kind = Literal["EXPENSE", "INCOME", "SPLIT"]
+Kind = Literal["EXPENSE", "INCOME", "SPLIT", "TRANSFER", "OPENING"]
 
 
 class TableOut(BaseModel):
@@ -37,6 +37,11 @@ class ImportOptions(BaseModel):
     account_map: dict[str, int | None] = Field(default_factory=dict)
     # Lower-cased category from the file → category to use, existing or new ("" = rows without a category)
     category_map: dict[str, str] = Field(default_factory=dict)
+    # Account name from the file (any case) → kind of the account to create for it (SAVINGS, CASH, CREDIT_CARD…)
+    create_accounts: dict[str, str] = Field(default_factory=dict)
+    # Category (any case) → the account its rows move money to or from instead of being spending / income:
+    # "id:<account id>" or "new:<KIND>:<name>" (e.g. "new:INVESTMENT:Investments")
+    category_treatment: dict[str, str] = Field(default_factory=dict)
     # The split group that "paid for others" parts go to; null = a group named "Imported split bills"
     split_group_id: int | None = None
 
@@ -51,6 +56,8 @@ class RecordIn(BaseModel):
     my_share: Decimal | None = None
     split_with: list[str] = Field(default_factory=list, max_length=50)
     account: str | None = Field(default=None, max_length=100)
+    # A transfer: the account the money went to (`account` is where it came from)
+    to_account: str | None = Field(default=None, max_length=100)
     note: str | None = Field(default=None, max_length=500)
     quantity: int = Field(default=1, ge=1, le=100_000)
     include: bool = True
@@ -69,7 +76,14 @@ class RecordOut(RecordIn):
     can_import: bool
     default_include: bool
     category_final: str | None = None
+    # TRANSFER when the row's category is treated as a transfer; otherwise its kind
+    effective_kind: str | None = None
+    account_ref: str | None = None
+    to_account_ref: str | None = None
     account_id: int | None = None
+    to_account_id: int | None = None
+    account_label: str | None = None
+    to_account_label: str | None = None
 
 
 class PreviewIn(BaseModel):
@@ -91,6 +105,7 @@ class CheckOut(BaseModel):
     category_values: list[dict]
     account_values: list[dict]
     accounts: list[dict]
+    account_kinds: list[str]
     split_groups: list[dict]
     split_enabled: bool
     lock_date: Date | None = None
@@ -141,6 +156,8 @@ class ImportRecordOut(BaseModel):
     expense_id: int | None
     fund_id: int | None
     split_bill_id: int | None
+    transfer_id: int | None = None
+    account_id: int | None = None
 
 
 class BatchDetail(BatchOut):

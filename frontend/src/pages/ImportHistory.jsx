@@ -20,7 +20,7 @@ const ROW_STATUS = {
   UNDONE: ['info', 'Undone'],
   KEPT: ['warn', 'Kept by Undo'],
 }
-const KIND = { EXPENSE: 'Expense', INCOME: 'Income', SPLIT: 'Split bill' }
+const KIND = { EXPENSE: 'Expense', INCOME: 'Income', SPLIT: 'Split bill', TRANSFER: 'Transfer', OPENING: 'Opening balance' }
 const when = (v) => (v ? new Date(v).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '')
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—')
 

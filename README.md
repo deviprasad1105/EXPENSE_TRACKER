@@ -107,7 +107,8 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
   when you pass 100%; each level is notified once a month. The dashboard's bars, sparkline and badges turn amber at
   the alert level and red when over.
 - **Bank accounts** (*Settings → Bank accounts*): add your salary account, spending account, cards, wallets or cash
-  (only the last 4 digits are stored). Mark one **primary**. Money received (*Balance*) is recorded against an
+  (only the last 4 digits are stored), plus **Investments** and **Money with others** (money lent or paid on
+  someone's behalf) accounts. Mark one **primary**. Money received (*Balance*) is recorded against an
   account, Daily Entry asks **which account paid** (starting on the primary one), and *Transfers between accounts*
   records money moved from one of your accounts to another without counting it as income or spending. Each
   account shows its balance and this month's spending. Turn off "Ask which account for each expense" to send
@@ -129,16 +130,31 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
   - **What a row becomes**: spending → an expense; money in (deposit, credit, income, salary…) → money received;
     a split row (a *My share* or *Split with* column) → an expense for your share plus a split bill, paid by you, for
     the part paid for the others (the people named, or "Others"), in a group you choose or "Imported split bills".
-    Subscriptions in a file are imported as expenses. Amounts may carry ₹ / Rs / INR, Indian grouping, Dr / Cr,
-    brackets or a minus sign.
+    A **transfer** (type "Transfer", an account cell like `Axis Bank->SBI Bank`, or a *To account* column; credit-card
+    bill payments and cash withdrawals too) → a transfer between your accounts. An **opening balance** row ("Balance
+    cf", "Opening balance", "Balance B/F", dated before the account's other rows) → added to that account's opening
+    balance (a later "closing balance" row is flagged and left out). Subscriptions in a file are imported as
+    expenses. An unrecognised type is never guessed: the row waits for you to choose. Amounts may carry ₹ / Rs / INR,
+    Indian grouping, Dr / Cr, brackets or a minus sign. Without a description column, the notes are the description.
   - **Categories** not in the app yet must be mapped to one, or created; nothing is put in an unrelated category.
-    **Accounts**: the primary account (default), none, one account for the whole file, or the file's account column
-    (matched by name or last 4 digits; the rest you choose, or leave unassigned).
+    *Use the suggestions* maps the obvious ones (Fuel → Transport, Internet → Bills…), *Create the rest as new*
+    creates the others in one click.
+  - **Money that isn't spending or income**: a category can be moved to an account instead: investments (mutual
+    funds, shares, F&O, PF) to an **Investments** account, money paid for someone and paid back (reimbursements,
+    money returned) to **Money with others**. Its rows become transfers, so bank balances stay right and spending /
+    income aren't inflated. Suggested for the usual names; both account types post to Investments and Loans &
+    Advances in the books.
+  - **Accounts**: the file's account column by default (or the primary account, none, or one account for the whole
+    file). Names match your accounts exactly (dots, spaces and capitals ignored) or by last 4 digits; the others can
+    be created during the import, with a suggested type (bank, cash, credit card, wallet, investments…). Accounts
+    created by an import stay after an Undo.
   - **Checks**: missing or unrecognised dates and amounts, future dates, locked accounting periods (rejected with
     the reason), records already in the app on the same date for the same amount (left out unless ticked), rows
     imported before (re-uploading a file adds nothing), and balance / total lines.
   - **After the import**: records keep their original date and show on every page; the 3-day edit window starts on
-    the import day; no budget alert is sent; they post to the books like any other record.
+    the import day; no budget alert is sent; they post to the books like any other record. A whole history from
+    another app (e.g. a Money Manager export with transfers and opening balances) ends with every account at the
+    balance the other app shows.
   - **Import history**: each upload with its file, date, status, rows imported / left out / failed (each with its
     reason) and totals. **Undo** removes only the records that upload created, keeping any edited since, reconciled
     with a bank statement or in a locked accounting period (a big import is undone 200 records per request).

@@ -12,12 +12,12 @@ from decimal import Decimal, InvalidOperation
 
 from pydantic import BaseModel, Field
 
-from .models import KIND_EXPENSE, KIND_INCOME, KIND_SPLIT
+from .models import KIND_EXPENSE, KIND_INCOME, KIND_OPENING, KIND_SPLIT, KIND_TRANSFER
 
 CENT = Decimal("0.01")
 MAX_AMOUNT = Decimal("9999999999.99")  # NUMERIC(12,2)
-ROLES = ("date", "description", "category", "amount", "debit", "credit", "type", "account", "note", "quantity",
-         "my_share", "split_with")
+ROLES = ("date", "description", "category", "amount", "debit", "credit", "type", "account", "to_account", "note",
+         "quantity", "my_share", "split_with")
 DATE_ORDERS = ("DMY", "MDY", "YMD")
 
 
@@ -34,6 +34,8 @@ class Mapping(BaseModel):
     credit: int | None = Field(default=None, ge=0)
     type: int | None = Field(default=None, ge=0)
     account: int | None = Field(default=None, ge=0)
+    # Transfers: the account the money went to (or an account cell like "Axis Bank->SBI Bank")
+    to_account: int | None = Field(default=None, ge=0)
     note: int | None = Field(default=None, ge=0)
     quantity: int | None = Field(default=None, ge=0)
     my_share: int | None = Field(default=None, ge=0)
@@ -178,7 +180,9 @@ SYNONYMS = {
              "kind", "direction", "nature"],
     "category": ["category", "categories", "expense category", "head", "expense head", "tag", "tags", "group",
                  "sub category", "classification", "label"],
-    "account": ["account", "account name", "bank", "bank account", "payment mode", "mode", "paid via", "paid with",
+    "to_account": ["to account", "transfer to", "to", "destination account", "destination", "credited to",
+                   "to acc", "beneficiary account"],
+    "account": ["account", "account name", "from account", "from", "bank", "bank account", "payment mode", "mode", "paid via", "paid with",
                 "payment method", "method", "wallet", "card", "source account"],
     "quantity": ["qty", "quantity", "units", "count", "nos"],
     "note": ["note", "notes", "memo", "comment", "comments", "remark", "remarks"],
@@ -186,8 +190,8 @@ SYNONYMS = {
                     "title", "name", "transaction details", "transaction description", "purpose", "expense name",
                     "for", "what"],
 }
-ORDER = ("date", "debit", "credit", "my_share", "split_with", "amount", "type", "category", "account", "quantity",
-         "note", "description")
+ORDER = ("date", "debit", "credit", "my_share", "split_with", "amount", "type", "category", "to_account", "account",
+         "quantity", "note", "description")
 
 
 def _norm(text) -> str:
@@ -277,6 +281,9 @@ def guess_mapping(rows: list[list[str]]) -> Mapping:
                 found["date"] = content["date"]
     else:
         found = _guess_from_contents(rows)
+    if "description" not in found and "note" in found:
+        # Money Manager style exports put what the money was for in NOTES: that is the description
+        found["description"] = found.pop("note")
     data = rows[header + 1:]
     if "type" in found:
         # "Payment type: UPI / Card" isn't money in or out: keep the column only if its values say expense / income
@@ -301,8 +308,13 @@ _EXPENSE_WORDS = {"expense", "expenses", "debit", "dr", "d", "withdrawal", "paid
 _INCOME_WORDS = {"income", "credit", "cr", "c", "deposit", "received", "receipt", "salary", "in", "inflow", "refund",
                  "cashback", "credited", "earning", "earnings"}
 _SPLIT_WORDS = {"split", "shared", "split bill", "group"}
-_BALANCE_LINE = re.compile(r"\b(opening|closing|brought forward|carried forward|b/?f|c/?f)\b.*\bbalance\b|^balance\b|"
-                           r"^(grand )?total\b|\bsub ?total\b", re.I)
+_TRANSFER_WORDS = {"transfer", "contra", "self", "internal", "move", "moved"}
+# An account's balance at the start of the records ("Balance cf", "Opening balance", "Balance B/F"…)
+_OPENING_LINE = re.compile(r"\bopening\s+bal|\bbal(ance)?\s*(b/?f|c/?f|bf|cf|brought forward|carried forward)\b|"
+                           r"\b(b/?f|c/?f|brought forward|carried forward)\b.*\bbal(ance)?\b", re.I)
+# Not a transaction: totals and closing balances
+_TOTAL_LINE = re.compile(r"^(grand )?total\b|\bsub ?total\b|\bclosing\s+bal|^balance$", re.I)
+_ARROW = re.compile(r"\s*(?:->|→|=>|➔|>)\s*")
 
 
 def kind_from_text(value: str) -> str | None:
@@ -311,6 +323,8 @@ def kind_from_text(value: str) -> str | None:
         return None
     if words in _SPLIT_WORDS or "split" in words.split():
         return KIND_SPLIT
+    if _TRANSFER_WORDS & set(words.split()):
+        return KIND_TRANSFER
     if words in _EXPENSE_WORDS or words.split()[0] in _EXPENSE_WORDS:
         return KIND_EXPENSE
     if words in _INCOME_WORDS or words.split()[0] in _INCOME_WORDS:
@@ -342,6 +356,9 @@ def parse_records(rows: list[list[str]], m: Mapping, today: date) -> tuple[list[
 
     records, ignored = [], 0
     start = m.header_row + 1
+    desc_col, note_col = m.description, m.note
+    if desc_col is None and note_col is not None:  # notes are all there is: use them as the description
+        desc_col, note_col = note_col, None
     for index, row in enumerate(rows[start:], start=start):
         raw_date = cell(row, m.date)
         money_cells = [cell(row, c) for c in (m.amount, m.debit, m.credit) if c is not None]
@@ -349,7 +366,7 @@ def parse_records(rows: list[list[str]], m: Mapping, today: date) -> tuple[list[
             ignored += 1
             continue
         errors, warnings = [], []
-        description = cell(row, m.description)
+        description = cell(row, desc_col)
         d = parse_date(raw_date, m.date_order) if raw_date else None
         if not raw_date:
             errors.append("Missing date")
@@ -360,8 +377,9 @@ def parse_records(rows: list[list[str]], m: Mapping, today: date) -> tuple[list[
 
         kind, amount = None, None
         type_kind = kind_from_text(cell(row, m.type)) if m.type is not None else None
-        if m.type is not None and cell(row, m.type) and type_kind is None:
-            errors.append(f"Unknown type “{cell(row, m.type)[:30]}” (expected expense, income or split)")
+        unknown_type = bool(m.type is not None and cell(row, m.type) and type_kind is None)
+        if unknown_type:
+            errors.append(f"Unknown type “{cell(row, m.type)[:30]}” (expected expense, income, transfer or split)")
         if m.debit is not None or m.credit is not None:
             out_amt, _, e1 = parse_money(cell(row, m.debit))
             in_amt, _, e2 = parse_money(cell(row, m.credit))
@@ -396,6 +414,20 @@ def parse_records(rows: list[list[str]], m: Mapping, today: date) -> tuple[list[
                     kind = KIND_EXPENSE
         if type_kind:
             kind = type_kind
+        elif unknown_type:
+            kind = None  # never guessed: the user chooses it in the review
+
+        account, to_account = cell(row, m.account), cell(row, m.to_account)
+        if account and _ARROW.search(account):  # "Axis Bank->SBI Bank"
+            parts = [p.strip() for p in _ARROW.split(account, maxsplit=1)]
+            if len(parts) == 2 and all(parts):
+                account, to_account = parts[0], to_account or parts[1]
+                if not unknown_type and type_kind in (None, KIND_TRANSFER):
+                    kind = KIND_TRANSFER
+        if to_account and kind != KIND_TRANSFER and type_kind is None and not unknown_type:
+            kind = KIND_TRANSFER
+        if kind == KIND_TRANSFER and not (account and to_account):
+            errors.append("A transfer needs the account it came from and the one it went to")
         if amount is None and not any("amount" in e or "decimal" in e or "debit" in e for e in errors):
             errors.append("Missing amount")
         elif amount is not None and amount == 0:
@@ -430,7 +462,12 @@ def parse_records(rows: list[list[str]], m: Mapping, today: date) -> tuple[list[
                 quantity = int(q)
             else:
                 warnings.append(f"Quantity “{cell(row, m.quantity)[:20]}” isn't a whole number: 1 used")
-        if _BALANCE_LINE.search(description) or (not description and _BALANCE_LINE.search(" ".join(row))):
+        texts = [description, cell(row, m.category), cell(row, m.note)]
+        if kind in (KIND_EXPENSE, KIND_INCOME) and any(_OPENING_LINE.search(t) for t in texts if t):
+            if amount is not None and kind == KIND_EXPENSE:
+                amount = -amount  # a balance owed (e.g. on a credit card)
+            kind = KIND_OPENING
+        elif _TOTAL_LINE.search(description) or (not description and _TOTAL_LINE.search(" ".join(row))):
             warnings.append("Looks like a balance or total line, not a transaction")
 
         records.append({
@@ -442,10 +479,34 @@ def parse_records(rows: list[list[str]], m: Mapping, today: date) -> tuple[list[
             "amount": str(amount) if amount is not None else None,
             "my_share": str(my_share) if kind == KIND_SPLIT and my_share is not None else None,
             "split_with": split_with if kind == KIND_SPLIT else [],
-            "account": cell(row, m.account)[:100] or None,
-            "note": cell(row, m.note)[:500] or None,
+            "account": account[:100] or None,
+            "to_account": (to_account[:100] or None) if kind == KIND_TRANSFER else None,
+            "note": cell(row, note_col)[:500] or None,
             "quantity": quantity,
             "parse_errors": errors,
             "parse_warnings": warnings,
         })
+    _check_openings(records)
     return records, ignored
+
+
+def _check_openings(records: list[dict]) -> None:
+    """A balance line is an account's opening balance only when it comes before that account's transactions; one
+    dated later (a closing balance) is flagged and left out instead."""
+    first: dict[str, str] = {}
+    for r in records:
+        if r["kind"] not in (KIND_OPENING, None) and r["date"]:
+            for acc in (r["account"], r["to_account"]):
+                if acc:
+                    key = _norm(acc)
+                    first[key] = min(first.get(key, r["date"]), r["date"])
+    for r in records:
+        if r["kind"] != KIND_OPENING:
+            continue
+        if not r["account"]:
+            r["parse_errors"].append("An opening balance needs its account")
+        elif r["date"] and r["date"] > first.get(_norm(r["account"]), r["date"]):
+            negative = bool(r["amount"] and r["amount"].startswith("-"))
+            r["kind"] = KIND_EXPENSE if negative else KIND_INCOME
+            r["amount"] = r["amount"].lstrip("-") if r["amount"] else r["amount"]
+            r["parse_warnings"].append("Looks like a balance or total line, not a transaction")

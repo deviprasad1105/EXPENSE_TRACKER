@@ -533,12 +533,13 @@ One row per row of the file.
 |---|---|---|
 | `batch_id`, `user_id` | FK | |
 | `row_no` | INTEGER | Row number in the file (1 = its first row). |
-| `kind` | VARCHAR(10) | `EXPENSE`, `INCOME` or `SPLIT`. |
+| `kind` | VARCHAR(10) | `EXPENSE`, `INCOME`, `SPLIT`, `TRANSFER` or `OPENING` (an account's opening balance). |
 | `status` | VARCHAR(10) | `IMPORTED`, `SKIPPED` (a duplicate, a balance line or unticked), `FAILED`, `UNDONE`, `KEPT` (Undo left it: edited since, reconciled, or in a locked period). |
 | `reason` | VARCHAR(500) | Why it was skipped, failed or kept. |
 | `record_date`, `description`, `amount` | | As read from the file (after corrections in the review). |
 | `fingerprint` | VARCHAR(64) | Kind, date, amount and description, plus which occurrence in the file: a row imported before is recognised when the file is uploaded again. Indexed with `user_id`. |
-| `expense_id`, `fund_id`, `split_bill_id` | FK, SET NULL | What the row became (a split row: the expense for the user's share and the bill for the others). |
+| `expense_id`, `fund_id`, `split_bill_id`, `transfer_id` | FK, SET NULL | What the row became (a split row: the expense for the user's share and the bill for the others; a transfer, or a category treated as one: an `ACCOUNT_TRANSFERS` row). |
+| `account_id` | FK, SET NULL | An opening-balance row: the account whose `opening_balance` it added `amount` (signed) to; Undo takes it off again. |
 
 ---
 

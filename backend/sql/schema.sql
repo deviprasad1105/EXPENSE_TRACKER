@@ -599,12 +599,16 @@ CREATE TABLE import_records (
 	expense_id INTEGER, 
 	fund_id INTEGER, 
 	split_bill_id INTEGER, 
+	transfer_id INTEGER, 
+	account_id INTEGER, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(batch_id) REFERENCES import_batches (id) ON DELETE CASCADE, 
 	FOREIGN KEY(user_id) REFERENCES app_users (id) ON DELETE CASCADE, 
 	FOREIGN KEY(expense_id) REFERENCES expenses (id) ON DELETE SET NULL, 
 	FOREIGN KEY(fund_id) REFERENCES funds (id) ON DELETE SET NULL, 
-	FOREIGN KEY(split_bill_id) REFERENCES split_bills (id) ON DELETE SET NULL
+	FOREIGN KEY(split_bill_id) REFERENCES split_bills (id) ON DELETE SET NULL, 
+	FOREIGN KEY(transfer_id) REFERENCES account_transfers (id) ON DELETE SET NULL, 
+	FOREIGN KEY(account_id) REFERENCES accounts (id) ON DELETE SET NULL
 );
 
 CREATE INDEX ix_import_records_batch_id ON import_records (batch_id);

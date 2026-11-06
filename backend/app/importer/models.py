@@ -27,6 +27,8 @@ REC_KEPT = "KEPT"  # Undo left it in place (edited since, reconciled, or in a lo
 KIND_EXPENSE = "EXPENSE"
 KIND_INCOME = "INCOME"
 KIND_SPLIT = "SPLIT"
+KIND_TRANSFER = "TRANSFER"  # money moved between two of the user's accounts
+KIND_OPENING = "OPENING"  # an account's balance at the start of the records (sets its opening balance)
 
 
 class ImportBatch(Base):
@@ -75,5 +77,8 @@ class ImportRecord(Base):
     expense_id: Mapped[int | None] = mapped_column(ForeignKey("expenses.id", ondelete="SET NULL"))
     fund_id: Mapped[int | None] = mapped_column(ForeignKey("funds.id", ondelete="SET NULL"))
     split_bill_id: Mapped[int | None] = mapped_column(ForeignKey("split_bills.id", ondelete="SET NULL"))
+    transfer_id: Mapped[int | None] = mapped_column(ForeignKey("account_transfers.id", ondelete="SET NULL"))
+    # An opening balance row: the account whose opening balance it added `amount` to (signed)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
 
     batch: Mapped[ImportBatch] = relationship(back_populates="records")

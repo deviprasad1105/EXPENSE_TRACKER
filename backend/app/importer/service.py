@@ -10,10 +10,15 @@ the file's account column is used, and the accounting lock. Duplicates are looke
 Imported records are ordinary expenses and money received: they show on every page and post to the books. Their
 original date is kept; the edit window starts on the day of the import; no budget alert is sent for them.
 A split row becomes an expense for the user's share, and a split bill (paid by the user) for the part paid for
-the others, who then owe it.
+the others, who then owe it. A transfer row ("Axis Bank->SBI Bank", or a "To account" column) becomes a transfer
+between the two accounts; an opening-balance row ("Balance cf", "Opening balance") is added to the account's
+opening balance. Accounts named in the file are matched by name or last 4 digits, or created by the import.
+A category can be marked as not spending or income (investments, money paid for others and paid back): its rows
+become transfers to or from an account such as "Investments" or "Money with others".
 """
 
 import hashlib
+import re
 from collections import Counter, defaultdict
 from decimal import Decimal
 
@@ -25,12 +30,15 @@ from ..accounting.engine import get_books
 from ..accounting.models import BankStatementLine, Voucher, VoucherLine
 from ..config import settings
 from ..deps import FEATURE_SPLIT, has_feature
-from ..models import Account, Expense, Fund, SplitBill, SplitGroup, SplitMember, SplitShare, User
+from ..models import (
+    ACCOUNT_KINDS, Account, AccountTransfer, Expense, Fund, SplitBill, SplitGroup, SplitMember, SplitShare, User,
+)
 from ..routers.expenses import user_categories
 from ..services.splits import split_evenly
 from ..timeutil import now_local, today_local
 from .models import (
-    COMPLETED, COMPLETED_WITH_ERRORS, FAILED, IN_PROGRESS, KIND_EXPENSE, KIND_INCOME, KIND_SPLIT, PARTIALLY_UNDONE,
+    COMPLETED, COMPLETED_WITH_ERRORS, FAILED, IN_PROGRESS, KIND_EXPENSE, KIND_INCOME, KIND_OPENING, KIND_SPLIT,
+    KIND_TRANSFER, PARTIALLY_UNDONE,
     REC_FAILED, REC_IMPORTED, REC_KEPT, REC_SKIPPED, REC_UNDONE, UNDONE, ImportBatch, ImportRecord,
 )
 from .parse import CENT, MAX_AMOUNT
@@ -61,7 +69,10 @@ def _key(text: str | None) -> str:
 def fingerprint_base(r: RecordIn) -> str | None:
     if not (r.kind and r.date and r.amount):
         return None
-    return f"{r.kind}|{r.date.isoformat()}|{Decimal(r.amount).quantize(CENT)}|{_key(r.description)}"
+    base = f"{r.kind}|{r.date.isoformat()}|{Decimal(r.amount).quantize(CENT)}|{_key(r.description)}"
+    if r.kind in (KIND_TRANSFER, KIND_OPENING):
+        base += f"|{_akey(r.account)}>{_akey(r.to_account)}"
+    return base
 
 
 def _short(base: str) -> str:
@@ -109,11 +120,13 @@ def _existing(db: Session, user_id: int, records: list[RecordIn], batch_id: int 
     if not dates:
         return defaultdict(list)
     lo, hi = min(dates), max(dates)
-    mine_exp, mine_fund = set(), set()
+    mine_exp, mine_fund, mine_tr = set(), set(), set()
     if batch_id:
-        for e, f in db.execute(select(ImportRecord.expense_id, ImportRecord.fund_id).where(ImportRecord.batch_id == batch_id)):
+        for e, f, t in db.execute(select(ImportRecord.expense_id, ImportRecord.fund_id, ImportRecord.transfer_id)
+                                  .where(ImportRecord.batch_id == batch_id)):
             mine_exp.add(e)
             mine_fund.add(f)
+            mine_tr.add(t)
     out: dict[tuple, list[str]] = defaultdict(list)
     for e in db.execute(select(Expense.id, Expense.expense_date, Expense.amount, Expense.item_name).where(
             Expense.user_id == user_id, Expense.expense_date >= lo, Expense.expense_date <= hi)):
@@ -123,29 +136,158 @@ def _existing(db: Session, user_id: int, records: list[RecordIn], batch_id: int 
             Fund.user_id == user_id, Fund.fund_date >= lo, Fund.fund_date <= hi)):
         if f.id not in mine_fund:
             out[(KIND_INCOME, f.fund_date, Decimal(f.amount))].append(f.source)
+    for t in db.execute(select(AccountTransfer.id, AccountTransfer.transfer_date, AccountTransfer.amount,
+                               AccountTransfer.from_account_id, AccountTransfer.to_account_id, AccountTransfer.note)
+                        .where(AccountTransfer.user_id == user_id, AccountTransfer.transfer_date >= lo,
+                               AccountTransfer.transfer_date <= hi)):
+        if t.id not in mine_tr:
+            out[(KIND_TRANSFER, t.transfer_date, Decimal(t.amount), t.from_account_id, t.to_account_id)].append(t.note or "a transfer")
     return out
 
 
-def _match_account(raw: str, accounts: list[Account]) -> int | None:
-    key = _key(raw)
-    if not key:
-        return None
-    digits = "".join(c for c in raw if c.isdigit())
-    for a in accounts:
-        if key == _key(a.name):
-            return a.id
-    for a in accounts:
-        if a.last4 and digits.endswith(a.last4):
-            return a.id
-    for a in accounts:
-        if _key(a.name) in key or (a.bank and key == _key(a.bank)):
-            return a.id
+def _akey(text: str | None) -> str:
+    """An account name compared loosely: ".Credit Card", "credit card" and "CREDIT-CARD" are the same account."""
+    return re.sub(r"[^0-9a-z]+", "", (text or "").casefold())
+
+
+def clean_account_name(raw: str) -> str:
+    return re.sub(r"^[^\w]+", "", raw or "").strip()[:60] or (raw or "").strip()[:60]
+
+
+def suggest_kind(name: str) -> str:
+    n = (name or "").casefold()
+    for pattern, kind in _KIND_HINTS:
+        if re.search(pattern, n):
+            return kind
+    return "SAVINGS"
+
+
+_KIND_HINTS = (
+    (r"credit|card", "CREDIT_CARD"),
+    (r"\bcash\b|petty", "CASH"),
+    (r"wallet|paytm|phonepe|gpay|google pay|amazon pay|upi", "WALLET"),
+    (r"invest|mutual|groww|zerodha|demat|broker|\bmf\b|stock|share|\bppf\b|\bpf\b|\bfd\b|deposit", "INVESTMENT"),
+    (r"lent|loan to|receivable|friends|others", "RECEIVABLE"),
+)
+# Suggested category for a category that isn't in the app, when one of these defaults exists
+_CATEGORY_HINTS = (
+    (r"fuel|petrol|diesel|\bcng\b|cab\b|taxi|\bauto\b|uber|\bola\b|metro|\bbus\b|train|transport|parking|fastag|toll|travel",
+     "Transport"),
+    (r"grocer|vegetable|kirana|supermarket|mart\b", "Groceries"),
+    (r"food|restaurant|dining|snack|cafe|zomato|swiggy|lunch|dinner|breakfast|tiffin|eat", "Food"),
+    (r"electric|water\b|gas\b|mobile|recharge|internet|broadband|\bdth\b|cable|bill|rent|utilit|phone", "Bills"),
+    (r"doctor|medic|health|pharma|hospital|clinic|dental|gym|fitness", "Health"),
+    (r"movie|entertain|netflix|prime|ott|game|music|concert|party", "Entertainment"),
+    (r"cloth|apparel|shoe|shopping|amazon|flipkart|myntra|beauty|cosmetic|electronic|gadget|gift", "Shopping"),
+    (r"cigar|smok|tobacco", "Smoking"),
+)
+# Categories that are usually not spending or income: suggested as transfers to an account of this kind
+_TREATMENT_HINTS = (
+    (r"invest|mutual|\bsip\b|\bshares?\b|stock|f\s*&\s*o|trading|demat|\bpf\b|\bppf\b|\bfd\b|fixed deposit|\bipo\b|"
+     r"brokerage|bal tnf", "INVESTMENT", "Investments"),
+    (r"reimburse|on behalf|money return|returned|\blent\b|\blend|borrow|money received|paid back|transfer money and "
+     r"received cash|ticket money", "RECEIVABLE", "Money with others"),
+)
+
+
+def suggest_category(raw: str, known: dict[str, str]) -> str | None:
+    n = (raw or "").casefold()
+    for pattern, category in _CATEGORY_HINTS:
+        if re.search(pattern, n) and category.casefold() in known:
+            return known[category.casefold()]
     return None
+
+
+def suggest_treatment(raw: str) -> str | None:
+    n = (raw or "").casefold()
+    for pattern, kind, name in _TREATMENT_HINTS:
+        if re.search(pattern, n):
+            return f"new:{kind}:{name}"
+    return None
+
+
+class _Accounts:
+    """Resolves account names from a file to the user's accounts (or to accounts the import will create).
+
+    A reference is "id:<n>", "new:<KIND>:<name>", "none" (no account) or None (not resolved: the user must choose)."""
+
+    def __init__(self, accounts: list[Account], opts: ImportOptions):
+        self.accounts = accounts
+        self.by_key = {_akey(a.name): a for a in accounts}
+        self.ids = {a.id for a in accounts}
+        self.map = {_akey(k): v for k, v in opts.account_map.items()}
+        self.create = {_akey(k): v for k, v in opts.create_accounts.items()}
+        for v in self.map.values():
+            if v is not None and v not in self.ids:
+                _bad("An account chosen for the file's account names isn't one of yours")
+        for v in self.create.values():
+            if v not in ACCOUNT_KINDS:
+                _bad("Choose a valid type for the new account")
+        self.seen: Counter = Counter()
+
+    def resolve(self, raw: str | None, count: bool = True) -> str | None:
+        raw = (raw or "").strip()
+        if count:
+            self.seen[raw] += 1
+        k = _akey(raw)
+        if k in self.map:
+            v = self.map[k]
+            return f"id:{v}" if v is not None else "none"
+        if k and k in self.by_key:
+            return f"id:{self.by_key[k].id}"
+        digits = "".join(c for c in raw if c.isdigit())
+        if len(digits) >= 4:
+            hits = [a for a in self.accounts if a.last4 and digits.endswith(a.last4)]
+            if len(hits) == 1:
+                return f"id:{hits[0].id}"
+        if k and k in self.create:
+            return f"new:{self.create[k]}:{clean_account_name(raw)}"
+        return None
+
+    def treatment(self, ref: str | None) -> str | None:
+        """A category's "move it to this account" choice, validated."""
+        if not ref:
+            return None
+        if ref.startswith("id:"):
+            if not ref[3:].isdigit() or int(ref[3:]) not in self.ids:
+                _bad("An account chosen for a category isn't one of yours")
+            return ref
+        parts = ref.split(":", 2)
+        if len(parts) != 3 or parts[0] != "new" or parts[1] not in ACCOUNT_KINDS or not parts[2].strip():
+            _bad("Invalid account for a category")
+        existing = self.by_key.get(_akey(parts[2]))
+        return f"id:{existing.id}" if existing else f"new:{parts[1]}:{parts[2].strip()[:60]}"
+
+    def label(self, ref: str | None) -> str | None:
+        if ref is None:
+            return None
+        if ref == "none":
+            return "No account"
+        if ref.startswith("id:"):
+            a = next((a for a in self.accounts if a.id == int(ref[3:])), None)
+            return a.name if a else None
+        return f"{ref.split(':', 2)[2]} (new)"
+
+    def values(self) -> list[dict]:
+        out = []
+        for v, n in sorted(self.seen.items(), key=lambda x: (-x[1], x[0])):
+            ref = self.resolve(v, count=False)
+            k = _akey(v)
+            out.append({
+                "value": v, "rows": n, "account_id": int(ref[3:]) if ref and ref.startswith("id:") else None,
+                "ref": ref, "mapped": k in self.map, "create_kind": self.create.get(k),
+                "suggested_kind": suggest_kind(v), "new_name": clean_account_name(v),
+            })
+        return out
 
 
 def _member_groups(db: Session, user_id: int) -> list[SplitGroup]:
     ids = select(SplitMember.group_id).where(SplitMember.user_id == user_id, SplitMember.left_at.is_(None))
     return list(db.scalars(select(SplitGroup).where(SplitGroup.id.in_(ids)).order_by(SplitGroup.name)))
+
+
+def _ref_id(ref: str | None) -> int | None:
+    return int(ref[3:]) if ref and ref.startswith("id:") else None
 
 
 def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions, batch_id: int | None = None,
@@ -157,22 +299,29 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
     books = get_books(db, user.id)
     lock = books.lock_date if books else None
     accounts = list(db.scalars(select(Account).where(Account.user_id == user.id).order_by(Account.name)))
-    account_ids = {a.id for a in accounts}
+    acc = _Accounts(accounts, opts)
     primary = next((a.id for a in accounts if a.is_primary and a.is_active), None)
-    if opts.account_mode == "fixed" and opts.account_id not in account_ids:
+    if opts.account_mode == "fixed" and opts.account_id not in acc.ids:
         _bad("Choose one of your accounts for this upload")
-    for v in opts.account_map.values():
-        if v is not None and v not in account_ids:
-            _bad("An account chosen for the file's account names isn't one of yours")
     known = {c.casefold(): c for c in user_categories(db, user.id)}
     cat_map = {_key(k): v.strip() for k, v in opts.category_map.items()}
-    acc_map = {_key(k): v for k, v in opts.account_map.items()}
+    treat = {_key(k): acc.treatment(v) for k, v in opts.category_treatment.items() if v}
     split_ok = has_feature(user, FEATURE_SPLIT)
     fps = fingerprints(records)
     imported_before = _imported_fingerprints(db, user.id, fps, batch_id)
     existing = _existing(db, user.id, records, batch_id)
 
-    out, cat_values, acc_values = [], Counter(), Counter()
+    def row_account(r: RecordIn) -> str | None:
+        if opts.account_mode == "column":
+            return acc.resolve(r.account)
+        if opts.account_mode == "fixed":
+            return f"id:{opts.account_id}"
+        if opts.account_mode == "none":
+            return "none"
+        return f"id:{primary}" if primary else "none"
+
+    out = []
+    cat_stats: dict[str, Counter] = defaultdict(Counter)
     first_row: dict[str, int] = {}
     for r, fp in zip(records, fps):
         problems, warnings = [], list(r.parse_warnings)
@@ -191,12 +340,12 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         elif r.date > today:
             problems.append("Date is in the future")
         if r.kind is None and r.amount is not None:
-            problems.append(parse_msg("type", "debit and a credit", default="Choose expense, income or split"))
+            problems.append(parse_msg("type", "debit and a credit", default="Choose expense, income, transfer or split"))
         if r.amount is None:
             problems.append(parse_msg("amount", "decimal", default="Missing amount"))
-        elif r.amount <= 0:
+        elif r.amount == 0 or (r.amount < 0 and r.kind != KIND_OPENING):
             problems.append("Amount must be more than zero")
-        elif r.amount > MAX_AMOUNT:
+        elif abs(r.amount) > MAX_AMOUNT:
             problems.append("Amount is too large")
         elif r.amount != r.amount.quantize(CENT):
             problems.append("Amount has more than 2 decimal places")
@@ -212,8 +361,42 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         description = " ".join(r.description.split())
         if len(description) > 100:
             warnings.append("Description shortened to 100 characters")
+
+        # Where the money is: one account, or two for a transfer (also a category treated as a transfer)
+        raw_cat = (r.category or "").strip()
+        ck = _key(raw_cat)
+        treated = treat.get(ck) if r.kind in (KIND_EXPENSE, KIND_INCOME) else None
+        account_ref = to_ref = None
+        mapping_problems = []
+        if r.kind == KIND_TRANSFER:
+            if not (r.account and r.to_account):
+                problems.append(parse_msg("transfer", default="A transfer needs the account it came from and the one it went to"))
+            else:
+                account_ref, to_ref = acc.resolve(r.account), acc.resolve(r.to_account)
+                for raw, ref in ((r.account, account_ref), (r.to_account, to_ref)):
+                    if ref is None or ref == "none":
+                        mapping_problems.append((NEEDS_ACCOUNT, f"Choose or create the account “{raw}”"))
+                if account_ref and account_ref == to_ref and account_ref != "none":
+                    problems.append("Both sides of the transfer are the same account")
+        elif r.kind == KIND_OPENING:
+            account_ref = acc.resolve(r.account) if r.account else row_account(r)
+            if account_ref is None or account_ref == "none":
+                mapping_problems.append((NEEDS_ACCOUNT, f"Choose or create the account “{r.account or ''}”"))
+        elif r.kind in (KIND_EXPENSE, KIND_INCOME, KIND_SPLIT):
+            account_ref = row_account(r)
+            if account_ref is None:
+                raw = (r.account or "").strip()
+                mapping_problems.append((NEEDS_ACCOUNT, f"Choose or create the account “{raw}”" if raw else "Choose the account for rows without one"))
+            if treated:
+                if account_ref == "none":
+                    mapping_problems.append((NEEDS_ACCOUNT, "Choose the account the money moved from or to"))
+                account_ref, to_ref = (account_ref, treated) if r.kind == KIND_EXPENSE else (treated, account_ref)
+
         if problems:
             state = INVALID
+        elif lock and r.kind == KIND_OPENING:
+            state = LOCKED
+            problems.append(f"Your books are locked (up to {lock:%d %b %Y}), so opening balances can't change")
         elif lock and r.date <= lock:
             state = LOCKED
             problems.append(f"Your books are locked up to {lock:%d %b %Y}: records on or before it can't be added")
@@ -221,35 +404,21 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
             # Shown as such even before its category is chosen; a category is only needed to import it again
             state = IMPORTED_BEFORE
             warnings.append("Already imported from an earlier upload")
-        mapping_problems = []
 
         category = None
-        if r.kind in (KIND_EXPENSE, KIND_SPLIT):
-            raw = (r.category or "").strip()
-            cat_values[raw] += 1
-            k = _key(raw)
-            if k in cat_map and cat_map[k]:
-                category = cat_map[k][:50]
-            elif k and k in known:
-                category = known[k]
+        if r.kind in (KIND_EXPENSE, KIND_INCOME, KIND_SPLIT):
+            stats = cat_stats[raw_cat]
+            stats["rows"] += 1
+            stats["income_rows" if r.kind == KIND_INCOME else "expense_rows"] += 1
+        if r.kind in (KIND_EXPENSE, KIND_SPLIT) and not treated:
+            if ck in cat_map and cat_map[ck]:
+                category = cat_map[ck][:50]
+            elif ck and ck in known:
+                category = known[ck]
             elif state in (READY, IMPORTED_BEFORE):
-                mapping_problems.append((NEEDS_CATEGORY, f"Choose a category for “{raw}”" if raw else "Choose a category for rows without one"))
-
-        account_id = None
-        if opts.account_mode == "primary":
-            account_id = primary
-        elif opts.account_mode == "fixed":
-            account_id = opts.account_id
-        elif opts.account_mode == "column":
-            raw = (r.account or "").strip()
-            acc_values[raw] += 1
-            k = _key(raw)
-            if k in acc_map:
-                account_id = acc_map[k]
-            else:
-                account_id = _match_account(raw, accounts)
-                if account_id is None and state in (READY, IMPORTED_BEFORE):
-                    mapping_problems.append((NEEDS_ACCOUNT, f"Choose the account for “{raw}”" if raw else "Choose the account for rows without one"))
+                mapping_problems.append((NEEDS_CATEGORY, f"Choose a category for “{raw_cat}”" if raw_cat else "Choose a category for rows without one"))
+        elif r.kind == KIND_INCOME and not treated:
+            category = (cat_map.get(ck) or raw_cat or "Income")[:100]
 
         can_map = not mapping_problems
         if mapping_problems and state == READY:
@@ -257,44 +426,57 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
             problems += [m for _, m in mapping_problems]
         elif mapping_problems:  # imported before: to import it again, a category / account is still needed
             warnings += [m for _, m in mapping_problems]
-        if state == READY and r.kind in (KIND_EXPENSE, KIND_INCOME, KIND_SPLIT):
-            amount = r.my_share if r.kind == KIND_SPLIT else r.amount
-            names = existing.get((KIND_INCOME if r.kind == KIND_INCOME else KIND_EXPENSE, r.date, amount))
-            if names:
+        if state == READY:
+            dup = None
+            if r.kind == KIND_TRANSFER or treated:
+                if _ref_id(account_ref) and _ref_id(to_ref):
+                    dup = existing.get((KIND_TRANSFER, r.date, r.amount, _ref_id(account_ref), _ref_id(to_ref)))
+            elif r.kind in (KIND_EXPENSE, KIND_INCOME, KIND_SPLIT):
+                amount = r.my_share if r.kind == KIND_SPLIT else r.amount
+                dup = existing.get((KIND_INCOME if r.kind == KIND_INCOME else KIND_EXPENSE, r.date, amount))
+            if dup:
                 state = DUPLICATE
-                warnings.append(f"Possible duplicate: “{names.pop(0)}” for ₹{amount:,.2f} on {r.date:%d %b %Y} is already in the app")
+                warnings.append(f"Possible duplicate: “{dup.pop(0)}” for ₹{abs(r.amount):,.2f} on {r.date:%d %b %Y} is already in the app")
+        if treated and state in (READY, DUPLICATE, IMPORTED_BEFORE):
+            warnings.append(f"Not spending or income: moved {'to' if r.kind == KIND_EXPENSE else 'from'} {acc.label(treated)}")
 
         can = state in IMPORTABLE and can_map
         default = can and state == READY and not r.parse_warnings
         out.append({
             **r.model_dump(), "status": state, "problems": problems, "warnings": warnings, "can_import": can,
-            "default_include": default, "category_final": category, "account_id": account_id, "fingerprint": fp,
+            "default_include": default, "category_final": category, "fingerprint": fp,
             "include": default if fresh else r.include,
+            "effective_kind": KIND_TRANSFER if treated else r.kind,
+            "account_ref": account_ref, "to_account_ref": to_ref,
+            "account_id": _ref_id(account_ref), "to_account_id": _ref_id(to_ref),
+            "account_label": acc.label(account_ref), "to_account_label": acc.label(to_ref),
         })
 
     counts = Counter(o["status"] for o in out)
     chosen = [o for o in out if o["can_import"] and o["include"]]
+    kinds = Counter(o["effective_kind"] for o in chosen)
     return {
         "records": out,
         "summary": {
             "total": len(out), "ready": counts[READY], "invalid": counts[INVALID], "locked": counts[LOCKED],
             "needs_category": counts[NEEDS_CATEGORY], "needs_account": counts[NEEDS_ACCOUNT],
             "duplicates": counts[DUPLICATE], "imported_before": counts[IMPORTED_BEFORE],
-            "chosen": len(chosen),
-            "expense_total": str(sum((Decimal(o["amount"]) for o in chosen if o["kind"] != KIND_INCOME), Decimal(0))),
-            "income_total": str(sum((Decimal(o["amount"]) for o in chosen if o["kind"] == KIND_INCOME), Decimal(0))),
+            "chosen": len(chosen), "transfers": kinds[KIND_TRANSFER], "openings": kinds[KIND_OPENING],
+            "expense_total": str(sum((Decimal(o["amount"]) for o in chosen if o["effective_kind"] in (KIND_EXPENSE, KIND_SPLIT)), Decimal(0))),
+            "income_total": str(sum((Decimal(o["amount"]) for o in chosen if o["effective_kind"] == KIND_INCOME), Decimal(0))),
+            "transfer_total": str(sum((Decimal(o["amount"]) for o in chosen if o["effective_kind"] == KIND_TRANSFER), Decimal(0))),
         },
         "categories": sorted(known.values(), key=str.casefold),
         "category_values": [
-            {"value": v, "rows": n, "mapped_to": cat_map.get(_key(v)) or known.get(_key(v)), "known": _key(v) in known}
-            for v, n in sorted(cat_values.items(), key=lambda x: (-x[1], x[0]))
+            {"value": v, "rows": s["rows"], "expense_rows": s["expense_rows"], "income_rows": s["income_rows"],
+             "mapped_to": cat_map.get(_key(v)) or known.get(_key(v)), "known": _key(v) in known,
+             "treatment": treat.get(_key(v)), "suggested": suggest_category(v, known), "suggested_treatment": suggest_treatment(v)}
+            for v, s in sorted(cat_stats.items(), key=lambda x: (-x[1]["rows"], x[0]))
         ],
-        "account_values": [
-            {"value": v, "rows": n, "account_id": acc_map[_key(v)] if _key(v) in acc_map else _match_account(v, accounts),
-             "mapped": _key(v) in acc_map}
-            for v, n in sorted(acc_values.items(), key=lambda x: (-x[1], x[0]))
-        ],
-        "accounts": [{"id": a.id, "name": a.name, "last4": a.last4, "is_primary": a.is_primary} for a in accounts if a.is_active],
+        "account_values": acc.values(),
+        "accounts": [{"id": a.id, "name": a.name, "last4": a.last4, "kind": a.kind, "is_primary": a.is_primary}
+                     for a in accounts if a.is_active],
+        "account_kinds": list(ACCOUNT_KINDS),
         "split_groups": [{"id": g.id, "name": g.name} for g in _member_groups(db, user.id)],
         "split_enabled": split_ok,
         "lock_date": lock,
@@ -335,11 +517,48 @@ def _participant(db: Session, group: SplitGroup, name: str, user: User) -> Split
     return member
 
 
+def _account(db: Session, user: User, ref: str | None, ctx: dict) -> Account | None:
+    """The account of a reference, creating a "new:KIND:name" one the first time it is needed."""
+    if ref is None or ref == "none":
+        return None
+    cache = ctx.setdefault("accounts", {})
+    if ref in cache:
+        return cache[ref]
+    if ref.startswith("id:"):
+        account = db.get(Account, int(ref[3:]))
+        if account is None or account.user_id != user.id:
+            _bad("An account in this import no longer exists")
+    else:
+        _, kind, name = ref.split(":", 2)
+        account = next((a for a in db.scalars(select(Account).where(Account.user_id == user.id)) if _akey(a.name) == _akey(name)), None)
+        if account is None:
+            account = Account(user_id=user.id, name=name[:60], kind=kind, opening_balance=Decimal(0), is_primary=False)
+            db.add(account)
+            db.flush()
+            ctx.setdefault("created_accounts", []).append(account.name)
+    cache[ref] = account
+    return account
+
+
 def _create(db: Session, user: User, r: dict, ctx: dict) -> dict:
     d = r["date"]
     description = " ".join((r["description"] or "").split())[:100]
     amount = Decimal(r["amount"])
     note = r["note"]
+    if r["kind"] == KIND_OPENING:
+        account = _account(db, user, r["account_ref"], ctx)
+        account.opening_balance = Decimal(account.opening_balance or 0) + amount
+        db.flush()
+        return {"account_id": account.id}
+    if r["effective_kind"] == KIND_TRANSFER:
+        src, dst = _account(db, user, r["account_ref"], ctx), _account(db, user, r["to_account_ref"], ctx)
+        text = " – ".join(x for x in (description, note) if x) or None
+        transfer = AccountTransfer(user_id=user.id, from_account_id=src.id, to_account_id=dst.id, amount=amount,
+                                   transfer_date=d, note=text and text[:200])
+        db.add(transfer)
+        db.flush()
+        return {"transfer_id": transfer.id}
+    r = {**r, "account_id": _account(db, user, r["account_ref"], ctx).id if r["account_ref"] not in (None, "none") else None}
     if r["kind"] == KIND_INCOME:
         source = (r["category"] or "").strip()[:100] or "Income"
         fund_note = " – ".join(x for x in (description, note) if x)[:500] or None
@@ -381,7 +600,7 @@ def _record(batch: ImportBatch, r: dict, status_: str, reason: str | None, **lin
     return ImportRecord(
         batch_id=batch.id, user_id=batch.user_id, row_no=r["row_no"], kind=r["kind"], status=status_,
         reason=(reason or None) and reason[:500], record_date=r["date"], description=(r["description"] or "")[:100] or None,
-        amount=r["amount"] if r["amount"] is None or Decimal(r["amount"]) <= MAX_AMOUNT else None,
+        amount=r["amount"] if r["amount"] is None or abs(Decimal(r["amount"])) <= MAX_AMOUNT else None,
         fingerprint=r["fingerprint"] if status_ == REC_IMPORTED else None, **links,
     )
 
@@ -402,9 +621,9 @@ def import_chunk(db: Session, user: User, batch: ImportBatch, records: list[Reco
                 links = _create(db, user, r, ctx)
                 db.add(_record(batch, r, REC_IMPORTED, "; ".join(r["warnings"]) or None, **links))
                 counts[REC_IMPORTED] += 1
-                if r["kind"] == KIND_INCOME:
+                if r["effective_kind"] == KIND_INCOME:
                     inc_total += Decimal(r["amount"])
-                else:
+                elif r["effective_kind"] in (KIND_EXPENSE, KIND_SPLIT):
                     exp_total += Decimal(r["amount"])
             elif r["can_import"]:
                 db.add(_record(batch, r, REC_SKIPPED, "; ".join(r["warnings"]) or "Left out by you"))
@@ -426,7 +645,8 @@ def import_chunk(db: Session, user: User, batch: ImportBatch, records: list[Reco
             db.add(_record(batch, r, REC_FAILED, message))
         _add_counts(batch, counts, Decimal(0), Decimal(0))
         db.commit()
-    return {"imported": counts[REC_IMPORTED], "skipped": counts[REC_SKIPPED], "failed": counts[REC_FAILED]}
+    return {"imported": counts[REC_IMPORTED], "skipped": counts[REC_SKIPPED], "failed": counts[REC_FAILED],
+            "accounts_created": ctx.get("created_accounts", [])}
 
 
 def _add_counts(batch: ImportBatch, counts: Counter, exp_total: Decimal, inc_total: Decimal):
@@ -476,15 +696,21 @@ def _undo_plan(db: Session, batch: ImportBatch, records: list[ImportRecord] | No
         expense = db.get(Expense, rec.expense_id) if rec.expense_id else None
         fund = db.get(Fund, rec.fund_id) if rec.fund_id else None
         bill = db.get(SplitBill, rec.split_bill_id) if rec.split_bill_id else None
+        transfer = db.get(AccountTransfer, rec.transfer_id) if rec.transfer_id else None
+        opening = db.get(Account, rec.account_id) if rec.kind == KIND_OPENING and rec.account_id else None
         reason = None
         if expense and expense.updated_at or bill and bill.updated_at:
             reason = "Edited after the import"
+        elif opening and lock:
+            reason = f"Your books are locked (up to {lock:%d %b %Y}), so opening balances can't change"
         elif lock and rec.record_date and rec.record_date <= lock:
             reason = f"In a locked accounting period (locked up to {lock:%d %b %Y})"
         elif (expense and ("EXPENSE", expense.id) in reconciled or fund and ("FUND", fund.id) in reconciled
-              or bill and ("SPLIT_BILL", bill.id) in reconciled):
+              or bill and ("SPLIT_BILL", bill.id) in reconciled or transfer and ("TRANSFER", transfer.id) in reconciled):
             reason = "Reconciled with a bank statement"
-        objs = [o for o in (expense, fund, bill) if o is not None]
+        objs = [o for o in (expense, fund, bill, transfer) if o is not None]
+        if opening is not None:
+            objs.append(("opening", opening, Decimal(rec.amount or 0)))
         plan.append((rec, objs, reason))
     return plan
 
@@ -515,7 +741,11 @@ def undo(db: Session, batch: ImportBatch, limit: int | None = None) -> dict:
             kept += 1
             continue
         for o in objs:
-            db.delete(o)
+            if isinstance(o, tuple):  # an opening balance: take the imported amount off the account again
+                _, account, amount = o
+                account.opening_balance = Decimal(account.opening_balance or 0) - amount
+            else:
+                db.delete(o)
         rec.status = REC_UNDONE
         rec.reason = "Removed by Undo" if objs else "Already deleted before Undo"
         removed += 1

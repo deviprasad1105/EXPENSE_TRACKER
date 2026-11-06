@@ -139,10 +139,12 @@ def test_signed_amounts_and_debit_credit_columns_decide_the_type():
     assert [(r["kind"], r["amount"]) for r in recs] == [("EXPENSE", "120"), ("INCOME", "300")]
 
     dc = [["Date", "Narration", "Debit", "Credit"], [dmy(DAY1), "ATM", "2,000.00", ""], [dmy(DAY1), "NEFT IN", "", "5,000.00"],
-          [dmy(DAY1), "Opening balance", "", "1,000.00"]]
+          [dmy(DAY1), "Opening balance", "", "1,000.00"], [dmy(DAY1), "Closing balance", "", "4,000.00"]]
     recs, _ = parse_records(dc, guess_mapping(dc), TODAY)
-    assert [(r["kind"], r["amount"]) for r in recs] == [("EXPENSE", "2000.00"), ("INCOME", "5000.00"), ("INCOME", "1000.00")]
-    assert recs[2]["parse_warnings"]  # a balance line is flagged
+    assert [(r["kind"], r["amount"]) for r in recs] == [
+        ("EXPENSE", "2000.00"), ("INCOME", "5000.00"), ("OPENING", "1000.00"), ("INCOME", "4000.00")]
+    assert recs[2]["parse_errors"] == ["An opening balance needs its account"]  # no account column in this file
+    assert recs[3]["parse_warnings"]  # a closing balance is flagged and left out
 
 
 def test_row_problems_are_explained():
@@ -287,7 +289,8 @@ def test_unknown_categories_must_be_mapped_and_known_ones_match_any_case(client,
     assert by["Swiggy dinner"]["status"] == "READY" and by["Swiggy dinner"]["category_final"] == "Food"
     assert by["Petrol"]["status"] == "NEEDS_CATEGORY" and "Fuel" in by["Petrol"]["problems"][0]
     assert by["November salary"]["status"] == "READY"  # income has a source, not a spending category
-    assert {"value": "Fuel", "rows": 1, "mapped_to": None, "known": False} in prev["category_values"]
+    fuel = next(c for c in prev["category_values"] if c["value"] == "Fuel")
+    assert (fuel["rows"], fuel["mapped_to"], fuel["known"], fuel["suggested"]) == (1, None, False, "Transport")
 
     # Map to an existing category, or create a new one
     for target in ("Transport", "Vehicle fuel"):
