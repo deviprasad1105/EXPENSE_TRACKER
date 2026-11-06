@@ -119,7 +119,7 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
 - **Import past records** (*Import Records*): bring in expenses and money received from before you used the app.
   - **Formats**: Excel `.xlsx` / `.xls` (every sheet), CSV (comma, semicolon, tab or pipe), PDF (its tables; or its
     text, split into columns at gaps of two or more spaces) and Word `.docx` (its tables, or lines like
-    `05/11/2026 Petrol 2,000`). Up to `IMPORT_MAX_BYTES` (5 MB; Vercel caps uploads at 4.5 MB) and
+    `05/11/2026 Petrol 2,000`). Up to `IMPORT_MAX_BYTES` (5 MB; a file over 1 MB is gzipped by the page before uploading, which keeps it under Vercel's 4.5 MB request cap) and
     `IMPORT_MAX_RECORDS` (5,000) per file.
   - **Not supported**: scanned PDFs and photos (no text to read), old Word `.doc` (save it as `.docx` or PDF),
     password-protected files. A file that can't be read gets a clear message; records can also be typed in by hand.
@@ -130,6 +130,8 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
   - **What a row becomes**: spending → an expense; money in (deposit, credit, income, salary…) → money received;
     a split row (a *My share* or *Split with* column) → an expense for your share plus a split bill, paid by you, for
     the part paid for the others (the people named, or "Others"), in a group you choose or "Imported split bills".
+    When a *Paid by* column names someone else, the row becomes an expense for your share (from no account) plus a
+    split bill paid by them, so you owe them your share.
     A **transfer** (type "Transfer", an account cell like `Axis Bank->SBI Bank`, or a *To account* column; credit-card
     bill payments and cash withdrawals too) → a transfer between your accounts. An **opening balance** row ("Balance
     cf", "Opening balance", "Balance B/F", dated before the account's other rows) → added to that account's opening
@@ -147,7 +149,8 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
   - **Accounts**: the file's account column by default (or the primary account, none, or one account for the whole
     file). Names match your accounts exactly (dots, spaces and capitals ignored) or by last 4 digits; the others can
     be created during the import, with a suggested type (bank, cash, credit card, wallet, investments…). Accounts
-    created by an import stay after an Undo.
+    created by an import are removed by a full Undo when nothing else uses them (deactivated instead when they have
+    entries in the books).
   - **Checks**: missing or unrecognised dates and amounts, future dates, locked accounting periods (rejected with
     the reason), records already in the app on the same date for the same amount (left out unless ticked), rows
     imported before (re-uploading a file adds nothing), and balance / total lines.

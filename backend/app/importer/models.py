@@ -51,6 +51,8 @@ class ImportBatch(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
     undone_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Ids of the accounts this import created (comma-separated): a full Undo removes the ones nothing else uses
+    created_accounts: Mapped[str | None] = mapped_column(String(500))
 
     records: Mapped[list["ImportRecord"]] = relationship(
         back_populates="batch", cascade="all, delete-orphan", order_by="ImportRecord.row_no"

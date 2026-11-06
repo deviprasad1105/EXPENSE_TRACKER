@@ -10,9 +10,11 @@ the file's account column is used, and the accounting lock. Duplicates are looke
 Imported records are ordinary expenses and money received: they show on every page and post to the books. Their
 original date is kept; the edit window starts on the day of the import; no budget alert is sent for them.
 A split row becomes an expense for the user's share, and a split bill (paid by the user) for the part paid for
-the others, who then owe it. A transfer row ("Axis Bank->SBI Bank", or a "To account" column) becomes a transfer
-between the two accounts; an opening-balance row ("Balance cf", "Opening balance") is added to the account's
-opening balance. Accounts named in the file are matched by name or last 4 digits, or created by the import.
+the others, who then owe it. A split someone else paid ("Paid by" column) becomes an expense for the user's share
+(from no account: no money left the user's accounts) and a split bill paid by that person, which the user owes.
+A transfer row ("Axis Bank->SBI Bank", or a "To account" column) becomes a transfer between the two accounts; an
+opening-balance row ("Balance cf", "Opening balance") is added to the account's opening balance.
+Accounts named in the file are matched by name or last 4 digits, or created by the import.
 A category can be marked as not spending or income (investments, money paid for others and paid back): its rows
 become transfers to or from an account such as "Investments" or "Money with others".
 """
@@ -23,11 +25,11 @@ from collections import Counter, defaultdict
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..accounting.engine import get_books
-from ..accounting.models import BankStatementLine, Voucher, VoucherLine
+from ..accounting.models import AccLedger, BankStatementLine, Voucher, VoucherLine
 from ..config import settings
 from ..deps import FEATURE_SPLIT, has_feature
 from ..models import (
@@ -41,7 +43,7 @@ from .models import (
     KIND_TRANSFER, PARTIALLY_UNDONE,
     REC_FAILED, REC_IMPORTED, REC_KEPT, REC_SKIPPED, REC_UNDONE, UNDONE, ImportBatch, ImportRecord,
 )
-from .parse import CENT, MAX_AMOUNT
+from .parse import CENT, MAX_AMOUNT, is_me
 from .schemas import ImportOptions, RecordIn
 
 READY = "READY"
@@ -310,6 +312,13 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
     fps = fingerprints(records)
     imported_before = _imported_fingerprints(db, user.id, fps, batch_id)
     existing = _existing(db, user.id, records, batch_id)
+    my_names = {_key(user.full_name), _key(user.username)} - {""}
+
+    def payer_of(r: RecordIn) -> str | None:
+        """Who paid a split row: None = the user."""
+        if r.kind != KIND_SPLIT or not r.paid_by or is_me(r.paid_by) or _key(r.paid_by) in my_names:
+            return None
+        return " ".join(r.paid_by.split())[:100]
 
     def row_account(r: RecordIn) -> str | None:
         if opts.account_mode == "column":
@@ -353,11 +362,13 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
             if not split_ok:
                 problems.append("Split bills aren't on your plan: import this row as an expense of your share")
             if r.my_share is None:
-                problems.append("A split bill needs your share")
+                problems.append(f"{payer_of(r)} paid: enter your share of it" if payer_of(r) else "A split bill needs your share")
             elif r.my_share < 0 or r.my_share != r.my_share.quantize(CENT):
                 problems.append("Your share must be zero or more, with at most 2 decimals")
             elif r.amount is not None and r.my_share > r.amount:
                 problems.append("Your share is more than the amount paid")
+            elif payer_of(r) and r.my_share == 0:
+                problems.append(f"{payer_of(r)} paid and your share is zero: there is nothing to import")
         description = " ".join(r.description.split())
         if len(description) > 100:
             warnings.append("Description shortened to 100 characters")
@@ -382,6 +393,8 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
             account_ref = acc.resolve(r.account) if r.account else row_account(r)
             if account_ref is None or account_ref == "none":
                 mapping_problems.append((NEEDS_ACCOUNT, f"Choose or create the account “{r.account or ''}”"))
+        elif payer_of(r):
+            account_ref = "none"  # someone else paid: no money left the user's accounts
         elif r.kind in (KIND_EXPENSE, KIND_INCOME, KIND_SPLIT):
             account_ref = row_account(r)
             if account_ref is None:
@@ -437,13 +450,15 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
             if dup:
                 state = DUPLICATE
                 warnings.append(f"Possible duplicate: “{dup.pop(0)}” for ₹{abs(r.amount):,.2f} on {r.date:%d %b %Y} is already in the app")
+        if payer_of(r) and state in (READY, DUPLICATE, IMPORTED_BEFORE):
+            warnings.append(f"Paid by {payer_of(r)}: you owe them your share")
         if treated and state in (READY, DUPLICATE, IMPORTED_BEFORE):
             warnings.append(f"Not spending or income: moved {'to' if r.kind == KIND_EXPENSE else 'from'} {acc.label(treated)}")
 
         can = state in IMPORTABLE and can_map
         default = can and state == READY and not r.parse_warnings
         out.append({
-            **r.model_dump(), "status": state, "problems": problems, "warnings": warnings, "can_import": can,
+            **r.model_dump(), "paid_by": payer_of(r), "status": state, "problems": problems, "warnings": warnings, "can_import": can,
             "default_include": default, "category_final": category, "fingerprint": fp,
             "include": default if fresh else r.include,
             "effective_kind": KIND_TRANSFER if treated else r.kind,
@@ -528,6 +543,7 @@ def _account(db: Session, user: User, ref: str | None, ctx: dict) -> Account | N
         account = db.get(Account, int(ref[3:]))
         if account is None or account.user_id != user.id:
             _bad("An account in this import no longer exists")
+        account.is_active = True  # e.g. set aside by the Undo of an earlier import
     else:
         _, kind, name = ref.split(":", 2)
         account = next((a for a in db.scalars(select(Account).where(Account.user_id == user.id)) if _akey(a.name) == _akey(name)), None)
@@ -536,6 +552,9 @@ def _account(db: Session, user: User, ref: str | None, ctx: dict) -> Account | N
             db.add(account)
             db.flush()
             ctx.setdefault("created_accounts", []).append(account.name)
+            ctx.setdefault("created_account_ids", []).append(account.id)
+        else:
+            account.is_active = True
     cache[ref] = account
     return account
 
@@ -568,7 +587,21 @@ def _create(db: Session, user: User, r: dict, ctx: dict) -> dict:
         return {"fund_id": fund.id}
     item = description or r["category_final"] or "Imported expense"
     links = {}
-    if r["kind"] == KIND_SPLIT:
+    if r["kind"] == KIND_SPLIT and r.get("paid_by"):
+        share = Decimal(r["my_share"])
+        if "group" not in ctx:
+            ctx["group"] = _split_group(db, user, ctx["group_id"])
+        group, me = ctx["group"]
+        payer = _participant(db, group, r["paid_by"], user)
+        bill = SplitBill(group_id=group.id, title=item, total_amount=share, bill_date=d, paid_by=payer.id, created_by=user.id,
+                         note=f"Imported: {r['paid_by']} paid ₹{amount:,.2f}, your share ₹{share:,.2f}"[:500])
+        bill.shares.append(SplitShare(member_id=me.id, share_type="EQUAL", share_value=None, amount=share))
+        db.add(bill)
+        db.flush()
+        links["split_bill_id"] = bill.id
+        amount = share
+        note = " – ".join(x for x in (note, f"Your share of ₹{Decimal(r['amount']):,.2f} paid by {r['paid_by']}") if x)[:500]
+    elif r["kind"] == KIND_SPLIT:
         share = Decimal(r["my_share"])
         others = amount - share
         if others > 0:
@@ -632,6 +665,11 @@ def import_chunk(db: Session, user: User, batch: ImportBatch, records: list[Reco
                 db.add(_record(batch, r, REC_FAILED, "; ".join(r["problems"])))
                 counts[REC_FAILED] += 1
         _add_counts(batch, counts, exp_total, inc_total)
+        if ctx.get("created_account_ids"):
+            ids = [x for x in (batch.created_accounts or "").split(",") if x] + [str(i) for i in ctx["created_account_ids"]]
+            while len(",".join(ids)) > 500:  # whole ids only (the rest simply stay after an Undo)
+                ids.pop()
+            batch.created_accounts = ",".join(ids)
         db.commit()  # posts the new records to the books (accounting hooks) — or fails as a whole
     except HTTPException:
         db.rollback()
@@ -755,7 +793,40 @@ def undo(db: Session, batch: ImportBatch, limit: int | None = None) -> dict:
     batch.status = UNDONE if not still else PARTIALLY_UNDONE
     batch.undone_at = now_local()
     db.commit()  # reverses the vouchers of what was removed
-    return {"removed": removed, "kept": kept, "remaining": remaining, "status": batch.status}
+    accounts = _drop_created_accounts(db, batch) if batch.status == UNDONE else {"removed": [], "deactivated": []}
+    return {"removed": removed, "kept": kept, "remaining": remaining, "status": batch.status,
+            "accounts_removed": accounts["removed"], "accounts_deactivated": accounts["deactivated"]}
+
+
+def _drop_created_accounts(db: Session, batch: ImportBatch) -> dict:
+    """The accounts this import created, once fully undone: removed when nothing uses them (no expense, money received
+    or transfer, a zero opening balance, not primary). One whose ledger has entries in the books (the import's,
+    reversed by the Undo) is deactivated instead, as an account with entries can't be deleted. Others stay."""
+    out = {"removed": [], "deactivated": []}
+    ids = [int(x) for x in (batch.created_accounts or "").split(",") if x.strip().isdigit()]
+    kept = []
+    for account_id in ids:
+        account = db.get(Account, account_id)
+        if account is None or account.user_id != batch.user_id:
+            continue
+        used = (account.is_primary or Decimal(account.opening_balance or 0) != 0
+                or db.scalar(select(Expense.id).where(Expense.account_id == account.id).limit(1))
+                or db.scalar(select(Fund.id).where(Fund.account_id == account.id).limit(1))
+                or db.scalar(select(AccountTransfer.id).where(or_(AccountTransfer.from_account_id == account.id,
+                                                                   AccountTransfer.to_account_id == account.id)).limit(1)))
+        if used:
+            kept.append(str(account.id))
+            continue
+        ledger = db.scalar(select(AccLedger).where(AccLedger.account_id == account.id))
+        if ledger is not None and db.scalar(select(VoucherLine.id).where(VoucherLine.ledger_id == ledger.id).limit(1)):
+            account.is_active = False
+            out["deactivated"].append(account.name)
+        else:
+            db.delete(account)
+            out["removed"].append(account.name)
+    batch.created_accounts = ",".join(kept) or None
+    db.commit()
+    return out
 
 
 def already_imported(db: Session, user_id: int, file_hash: str) -> dict | None:

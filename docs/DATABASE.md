@@ -525,6 +525,7 @@ One row per upload (or per set of records typed in by hand).
 | `rows_total`, `rows_imported`, `rows_skipped`, `rows_failed`, `rows_undone` | INTEGER | Counts of the rows below. |
 | `expense_total`, `income_total` | NUMERIC(14,2) | What was imported: spending (split rows at their full amount) and money received. |
 | `created_at`, `finished_at`, `undone_at` | TIMESTAMP | |
+| `created_accounts` | VARCHAR(500) | Ids (comma-separated) of the accounts the import created; a full Undo removes those nothing else uses (or deactivates one with entries in the books). |
 
 ### IMPORT_RECORDS
 One row per row of the file.

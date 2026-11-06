@@ -206,6 +206,8 @@ def test_whole_history_imports_with_exact_balances(client, make_user, db):
 
 def test_undo_takes_everything_back_including_opening_balances(client, make_user, db):
     me = make_user("asha")
+    db.add(Account(user_id=me.id, name="Axis Bank", kind="SAVINGS", opening_balance=D("500"), is_primary=True))
+    db.commit()
     ex = upload(client, me, MM)
     opts = {"account_mode": "column"}
     cats, new_accounts = all_new(preview(client, me, ex, opts))
@@ -213,12 +215,48 @@ def test_undo_takes_everything_back_including_opening_balances(client, make_user
     _, done, _ = run(client, me, ex, opts)
     res = client.post(f"{API}/{done['id']}/undo", headers=headers(me)).json()
     assert res["status"] == "UNDONE" and res["removed"] == 20
+    # The accounts the import created are removed (nothing uses them now); the user's own account stays as it was
+    assert sorted(res["accounts_removed"]) == ["Cash", "Credit Card", "SBI Bank"] and res["accounts_deactivated"] == []
     db.expire_all()
     assert db.scalar(select(func.count(Expense.id))) == 0 and db.scalar(select(func.count(Fund.id))) == 0
     assert db.scalar(select(func.count(AccountTransfer.id))) == 0
-    # The accounts the import created stay (other records may use them), back at a zero balance
-    assert all(D(a["balance"]) == 0 for a in client.get("/api/accounts", headers=headers(me)).json())
-    assert db.scalar(select(func.count(Account.id))) == 4
+    assert [(a["name"], D(a["balance"])) for a in client.get("/api/accounts", headers=headers(me)).json()] == [("Axis Bank", D("500"))]
+
+
+def test_undo_keeps_a_created_account_that_is_used_since(client, make_user, db):
+    me = make_user("asha")
+    ex = upload(client, me, MM)
+    opts = {"account_mode": "column"}
+    cats, new_accounts = all_new(preview(client, me, ex, opts))
+    opts.update(category_map=cats, create_accounts=new_accounts)
+    _, done, _ = run(client, me, ex, opts)
+    cash = db.scalar(select(Account).where(Account.name == "Cash"))
+    assert client.post("/api/expenses", json={"expense_date": today_local().isoformat(), "item_name": "Tea", "category": "Food",
+                                              "quantity": 1, "amount": "10", "account_id": cash.id}, headers=headers(me)).status_code in (200, 201)
+    res = client.post(f"{API}/{done['id']}/undo", headers=headers(me)).json()
+    assert "Cash" not in res["accounts_removed"] and len(res["accounts_removed"]) == 3
+    db.expire_all()
+    assert db.get(Account, cash.id) is not None
+
+
+def test_undo_deactivates_created_accounts_that_have_entries_in_the_books(client, make_user, db):
+    me = make_user("asha", accounting=True)
+    assert client.get("/api/accounting/settings", headers=headers(me)).status_code == 200
+    ex = upload(client, me, MM)
+    opts = {"account_mode": "column"}
+    cats, new_accounts = all_new(preview(client, me, ex, opts))
+    opts.update(category_map=cats, create_accounts=new_accounts)
+    _, done, _ = run(client, me, ex, opts)
+    res = client.post(f"{API}/{done['id']}/undo", headers=headers(me)).json()
+    assert res["status"] == "UNDONE" and len(res["accounts_deactivated"]) + len(res["accounts_removed"]) == 4
+    assert res["accounts_deactivated"]  # their ledgers keep the reversed entries
+    db.expire_all()
+    assert not any(a.is_active for a in db.scalars(select(Account).where(Account.name.in_(res["accounts_deactivated"]))))
+    # Importing again brings the same accounts back into use
+    _, again, created = run(client, me, upload(client, me, MM, name="again.csv"), opts)
+    assert again["status"] == "COMPLETED"
+    db.expire_all()
+    assert all(a.is_active for a in db.scalars(select(Account).where(Account.user_id == me.id)))
 
 
 def test_transfers_and_openings_post_to_the_books(client, make_user):

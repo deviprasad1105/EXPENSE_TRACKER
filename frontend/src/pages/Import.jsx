@@ -9,6 +9,20 @@ import { Alert, EmptyRow, Msg, PageHeader } from '../components/ui'
 export const ACCEPT = '.xlsx,.xls,.csv,.txt,.pdf,.docx,.doc'
 const PAGE = 50
 const CHUNK = 200 // rows per request: each request stays well inside the server's time limit
+const MAX_UPLOAD = 4_400_000 // the server takes at most 4.5 MB per request
+const MAX_FILE = 5_000_000
+
+// A bigger file is gzipped before uploading (CSV and text shrink a lot; the server unpacks it)
+async function uploadable(f) {
+  if (f.size > MAX_FILE) throw new Error('The file is too large: 5 MB at most.')
+  if (f.size <= 1_000_000 || typeof CompressionStream === 'undefined') {
+    if (f.size > MAX_UPLOAD) throw new Error("This browser can't compress the file, and it is over 4.4 MB. Use a newer browser, or split the file.")
+    return [f, f.name]
+  }
+  const packed = await new Response(f.stream().pipeThrough(new CompressionStream('gzip'))).blob()
+  if (packed.size > MAX_UPLOAD) throw new Error('This file is too big to upload, even compressed. Split it into smaller files, or save it as CSV.')
+  return [packed, `${f.name}.gz`]
+}
 const ROLES = [
   ['date', 'Date', true],
   ['description', 'Description / item'],
@@ -20,6 +34,7 @@ const ROLES = [
   ['account', 'Account / paid with (or “From→To”)'],
   ['to_account', 'To account (transfers)'],
   ['my_share', 'My share (split bills)'],
+  ['paid_by', 'Paid by (split bills; blank = you)'],
   ['split_with', 'Split with (names)'],
   ['quantity', 'Quantity'],
   ['note', 'Note'],
@@ -82,8 +97,9 @@ export default function ImportRecords() {
     setFile(null)
     setBusy(true)
     const form = new FormData()
-    form.append('file', f)
     try {
+      const [body, name] = await uploadable(f)
+      form.append('file', body, name)
       const res = await api.post('/imports/extract', form)
       setFile(res.data)
     } catch (err) {
@@ -123,7 +139,7 @@ export default function ImportRecords() {
             <div className="card-head wrap">
               <div>
                 <h3>1. Upload a file</h3>
-                <p>Excel (.xlsx, .xls), CSV, PDF or Word (.docx), up to 5 MB and about 5,000 records. Any column names and date or amount formats: you check what was read before anything is saved.</p>
+                <p>Excel (.xlsx, .xls), CSV, PDF or Word (.docx), up to 5 MB (bigger files are compressed before uploading) and about 5,000 records. Any column names and date or amount formats: you check what was read before anything is saved.</p>
               </div>
               <div className="filters">
                 <button className="btn secondary" onClick={startManual}>
@@ -586,7 +602,8 @@ function Row({ r, hasSplit, onEdit, onRemove }) {
           {r.kind === 'SPLIT' && (
             <>
               <input type="number" min="0" step="0.01" value={r.my_share ?? ''} style={{ width: 110 }} onChange={(e) => onEdit({ my_share: num(e.target.value) })} />
-              <div className="hint" style={{ margin: '4px 0 0' }}>with {(r.split_with || []).join(', ') || 'Others'}</div>
+              <input value={r.paid_by || ''} maxLength={100} placeholder="Paid by: you" title="Who paid the bill (blank = you)" style={{ width: 110, marginTop: 4 }} onChange={(e) => onEdit({ paid_by: e.target.value || null })} />
+              <div className="hint" style={{ margin: '4px 0 0' }}>{r.paid_by ? `you owe ${r.paid_by} your share` : `with ${(r.split_with || []).join(', ') || 'Others'}`}</div>
             </>
           )}
         </td>
@@ -821,7 +838,7 @@ function clean(r) {
   return {
     row_no: r.row_no, kind: r.kind || null, date: r.date || null, description: r.description || '', category: r.category || null,
     amount: r.amount === '' ? null : r.amount, my_share: r.kind === 'SPLIT' ? (r.my_share === '' ? null : r.my_share) : null,
-    split_with: r.split_with || [], account: r.account || null, to_account: r.kind === 'TRANSFER' ? r.to_account || null : null,
+    split_with: r.split_with || [], paid_by: r.kind === 'SPLIT' ? r.paid_by || null : null, account: r.account || null, to_account: r.kind === 'TRANSFER' ? r.to_account || null : null,
     note: r.note || null, quantity: r.quantity || 1,
     include: r.include !== false, parse_errors: r.parse_errors || [], parse_warnings: r.parse_warnings || [], fingerprint: r.fingerprint || null,
   }

@@ -57,15 +57,23 @@ export default function ImportHistory() {
     // A big import is undone a few hundred records per request
     let removed = 0
     let kept = 0
+    let last = null
     try {
       for (;;) {
         const res = (await api.post(`/imports/${b.id}/undo`)).data
+        last = res
         removed += res.removed
         kept += res.kept
         if (!res.remaining) break
         setMsg({ type: 'info', text: `Undoing ${b.filename}… ${removed} removed, ${res.remaining} to go` })
       }
-      setMsg({ type: 'ok', text: `${removed} record(s) removed${kept ? `, ${kept} kept (see the details)` : ''}.` })
+      const gone = last?.accounts_removed || []
+      const off = last?.accounts_deactivated || []
+      const accounts = [
+        gone.length ? ` Account(s) it created removed: ${gone.join(', ')}.` : '',
+        off.length ? ` Deactivated (they have entries in your books): ${off.join(', ')}.` : '',
+      ].join('')
+      setMsg({ type: 'ok', text: `${removed} record(s) removed${kept ? `, ${kept} kept (see the details)` : ''}.${accounts}` })
     } catch (err) {
       setMsg({ type: 'error', text: `${errorMessage(err)}${removed ? ` (${removed} record(s) were removed before this; Undo again to continue)` : ''}` })
     }

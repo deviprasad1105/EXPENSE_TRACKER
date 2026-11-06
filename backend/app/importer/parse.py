@@ -17,7 +17,7 @@ from .models import KIND_EXPENSE, KIND_INCOME, KIND_OPENING, KIND_SPLIT, KIND_TR
 CENT = Decimal("0.01")
 MAX_AMOUNT = Decimal("9999999999.99")  # NUMERIC(12,2)
 ROLES = ("date", "description", "category", "amount", "debit", "credit", "type", "account", "to_account", "note",
-         "quantity", "my_share", "split_with")
+         "quantity", "my_share", "split_with", "paid_by")
 DATE_ORDERS = ("DMY", "MDY", "YMD")
 
 
@@ -40,6 +40,8 @@ class Mapping(BaseModel):
     quantity: int | None = Field(default=None, ge=0)
     my_share: int | None = Field(default=None, ge=0)
     split_with: int | None = Field(default=None, ge=0)
+    # Who paid a shared bill (blank / "me" = the user)
+    paid_by: int | None = Field(default=None, ge=0)
     date_order: str = Field(default="DMY", pattern="^(DMY|MDY|YMD)$")
     # What a plain amount is when nothing else says: EXPENSE, INCOME, or SIGN (negative = expense)
     default_type: str = Field(default=KIND_EXPENSE, pattern="^(EXPENSE|INCOME|SIGN)$")
@@ -175,6 +177,7 @@ SYNONYMS = {
     "amount": ["amount", "amt", "total", "cost", "price", "value", "inr", "rs", "rupees", "sum", "expense",
                "transaction amount"],
     "my_share": ["my share", "your share", "own share", "my part", "share"],
+    "paid_by": ["paid by", "payer", "who paid", "paid by whom", "paid by person"],
     "split_with": ["split with", "shared with", "paid for", "split between", "friends", "participants", "people"],
     "type": ["type", "transaction type", "txn type", "dr cr", "cr dr", "debit credit", "in out", "income expense",
              "kind", "direction", "nature"],
@@ -190,7 +193,7 @@ SYNONYMS = {
                     "title", "name", "transaction details", "transaction description", "purpose", "expense name",
                     "for", "what"],
 }
-ORDER = ("date", "debit", "credit", "my_share", "split_with", "amount", "type", "category", "to_account", "account",
+ORDER = ("date", "debit", "credit", "my_share", "paid_by", "split_with", "amount", "type", "category", "to_account", "account",
          "quantity", "note", "description")
 
 
@@ -442,17 +445,22 @@ def parse_records(rows: list[list[str]], m: Mapping, today: date) -> tuple[list[
                 errors.append(f"My share: {err}")
             elif share is not None:
                 my_share = abs(share)
-        if kind == KIND_EXPENSE and amount and (my_share is not None and my_share < amount or split_with and my_share is None):
+        payer = cell(row, m.paid_by)[:100] if m.paid_by is not None else ""
+        payer = None if is_me(payer) else payer
+        if kind == KIND_EXPENSE and amount and (payer or my_share is not None and my_share < amount
+                                                or split_with and my_share is None):
             kind = KIND_SPLIT
         if kind == KIND_SPLIT and amount:
             if my_share is None:
                 if split_with:  # an equal share with the people named
                     my_share = (amount / (len(split_with) + 1)).quantize(CENT)
+                elif payer:
+                    errors.append(f"{payer} paid: enter your share of it (map the “My share” column)")
                 else:
                     errors.append("A split bill needs your share (map the “My share” column) or who it was split with")
             elif my_share > amount:
                 errors.append("Your share is more than the amount paid")
-        if kind == KIND_SPLIT and my_share is not None and amount and my_share == amount:
+        if kind == KIND_SPLIT and not payer and my_share is not None and amount and my_share == amount:
             kind = KIND_EXPENSE
 
         quantity = 1
@@ -479,6 +487,7 @@ def parse_records(rows: list[list[str]], m: Mapping, today: date) -> tuple[list[
             "amount": str(amount) if amount is not None else None,
             "my_share": str(my_share) if kind == KIND_SPLIT and my_share is not None else None,
             "split_with": split_with if kind == KIND_SPLIT else [],
+            "paid_by": payer if kind == KIND_SPLIT else None,
             "account": account[:100] or None,
             "to_account": (to_account[:100] or None) if kind == KIND_TRANSFER else None,
             "note": cell(row, note_col)[:500] or None,
@@ -488,6 +497,14 @@ def parse_records(rows: list[list[str]], m: Mapping, today: date) -> tuple[list[
         })
     _check_openings(records)
     return records, ignored
+
+
+_ME = {"", "me", "i", "self", "myself", "mine", "you", "own", "my self"}
+
+
+def is_me(name: str | None) -> bool:
+    """A "Paid by" value meaning the user (blank, "me", "self"…)."""
+    return _norm(name) in _ME
 
 
 def _check_openings(records: list[dict]) -> None:

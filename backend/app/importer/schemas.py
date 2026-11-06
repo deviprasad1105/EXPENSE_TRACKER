@@ -55,6 +55,8 @@ class RecordIn(BaseModel):
     amount: Decimal | None = None
     my_share: Decimal | None = None
     split_with: list[str] = Field(default_factory=list, max_length=50)
+    # A split bill someone else paid (their name); empty = the user paid
+    paid_by: str | None = Field(default=None, max_length=100)
     account: str | None = Field(default=None, max_length=100)
     # A transfer: the account the money went to (`account` is where it came from)
     to_account: str | None = Field(default=None, max_length=100)
