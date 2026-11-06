@@ -1,13 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { FileUp, History, Keyboard, Plus, RefreshCw, Trash2, Upload } from 'lucide-react'
+import { ArrowRight, FileUp, History, Keyboard, Plus, RefreshCw, Sparkles, Trash2, Upload } from 'lucide-react'
 import api, { errorMessage, money, todayISO } from '../api'
 import { useAuth } from '../auth'
+import { ACCOUNT_KINDS } from '../components/Accounts'
 import { Alert, EmptyRow, Msg, PageHeader } from '../components/ui'
 
 export const ACCEPT = '.xlsx,.xls,.csv,.txt,.pdf,.docx,.doc'
 const PAGE = 50
 const CHUNK = 200 // rows per request: each request stays well inside the server's time limit
+const MAX_UPLOAD = 4_400_000 // the server takes at most 4.5 MB per request
+const MAX_FILE = 5_000_000
+
+// A bigger file is gzipped before uploading (CSV and text shrink a lot; the server unpacks it)
+async function uploadable(f) {
+  if (f.size > MAX_FILE) throw new Error('The file is too large: 5 MB at most.')
+  if (f.size <= 1_000_000 || typeof CompressionStream === 'undefined') {
+    if (f.size > MAX_UPLOAD) throw new Error("This browser can't compress the file, and it is over 4.4 MB. Use a newer browser, or split the file.")
+    return [f, f.name]
+  }
+  const packed = await new Response(f.stream().pipeThrough(new CompressionStream('gzip'))).blob()
+  if (packed.size > MAX_UPLOAD) throw new Error('This file is too big to upload, even compressed. Split it into smaller files, or save it as CSV.')
+  return [packed, `${f.name}.gz`]
+}
 const ROLES = [
   ['date', 'Date', true],
   ['description', 'Description / item'],
@@ -16,8 +31,10 @@ const ROLES = [
   ['debit', 'Money out (debit)'],
   ['credit', 'Money in (credit)'],
   ['type', 'Type (expense / income / split)'],
-  ['account', 'Account / paid with'],
+  ['account', 'Account / paid with (or “From→To”)'],
+  ['to_account', 'To account (transfers)'],
   ['my_share', 'My share (split bills)'],
+  ['paid_by', 'Paid by (split bills; blank = you)'],
   ['split_with', 'Split with (names)'],
   ['quantity', 'Quantity'],
   ['note', 'Note'],
@@ -36,7 +53,14 @@ const FILTERS = [
   ['ready', 'Ready', (r) => r.status === 'READY'],
   ['attention', 'Needs attention', (r) => !r.can_import],
   ['duplicates', 'Duplicates', (r) => r.status === 'DUPLICATE' || r.status === 'IMPORTED_BEFORE'],
+  ['transfers', 'Transfers', (r) => r.effective_kind === 'TRANSFER' || r.kind === 'OPENING'],
   ['out', 'Left out', (r) => r.can_import && !r.include],
+]
+export const KIND_LABEL = { EXPENSE: 'Expense', INCOME: 'Income', SPLIT: 'Split bill', TRANSFER: 'Transfer', OPENING: 'Opening balance' }
+// What a category can be moved to instead of counting as spending / income
+const TREAT_NEW = [
+  ['new:INVESTMENT:Investments', 'Investments (new account)'],
+  ['new:RECEIVABLE:Money with others', 'Money with others (new account)'],
 ]
 const col = (i) => (i >= 26 ? String.fromCharCode(64 + Math.floor(i / 26)) : '') + String.fromCharCode(65 + (i % 26))
 
@@ -73,8 +97,9 @@ export default function ImportRecords() {
     setFile(null)
     setBusy(true)
     const form = new FormData()
-    form.append('file', f)
     try {
+      const [body, name] = await uploadable(f)
+      form.append('file', body, name)
       const res = await api.post('/imports/extract', form)
       setFile(res.data)
     } catch (err) {
@@ -114,7 +139,7 @@ export default function ImportRecords() {
             <div className="card-head wrap">
               <div>
                 <h3>1. Upload a file</h3>
-                <p>Excel (.xlsx, .xls), CSV, PDF or Word (.docx), up to 5 MB and about 5,000 records. Any column names and date or amount formats: you check what was read before anything is saved.</p>
+                <p>Excel (.xlsx, .xls), CSV, PDF or Word (.docx), up to 5 MB (bigger files are compressed before uploading) and about 5,000 records. Any column names and date or amount formats: you check what was read before anything is saved.</p>
               </div>
               <div className="filters">
                 <button className="btn secondary" onClick={startManual}>
@@ -268,7 +293,11 @@ function Columns({ file, onRead, onError }) {
 function Review({ source, onCancel, onDone, onError }) {
   const [records, setRecords] = useState([])
   const [info, setInfo] = useState(null) // the last check: summary, categories, accounts…
-  const [options, setOptions] = useState({ account_mode: 'primary', account_id: null, account_map: {}, category_map: {}, split_group_id: null })
+  // A file with an account column uses it (transfers and opening balances name their accounts anyway)
+  const [options, setOptions] = useState({
+    account_mode: source.mapping?.account != null ? 'column' : 'primary', account_id: null, account_map: {}, create_accounts: {},
+    category_map: {}, category_treatment: {}, split_group_id: null,
+  })
   const [checking, setChecking] = useState(false)
   const [filter, setFilter] = useState('all')
   const [page, setPage] = useState(0)
@@ -335,7 +364,7 @@ function Review({ source, onCancel, onDone, onError }) {
   }
   const addRow = (current = records) => {
     const rowNo = Math.max(0, ...current.map((r) => r.row_no)) + 1
-    const next = [...current, { row_no: rowNo, kind: 'EXPENSE', date: todayISO(), description: '', category: null, amount: null, my_share: null, split_with: [], account: null, note: null, quantity: 1, include: true, parse_errors: [], parse_warnings: [], status: 'INVALID', problems: ['Missing amount'], warnings: [], can_import: false }]
+    const next = [...current, { row_no: rowNo, kind: 'EXPENSE', effective_kind: 'EXPENSE', date: todayISO(), description: '', category: null, amount: null, my_share: null, split_with: [], account: null, to_account: null, note: null, quantity: 1, include: true, parse_errors: [], parse_warnings: [], status: 'INVALID', problems: ['Missing amount'], warnings: [], can_import: false }]
     setRecords(next)
     setFilter('all')
     setPage(Math.floor((next.length - 1) / PAGE))
@@ -354,8 +383,12 @@ function Review({ source, onCancel, onDone, onError }) {
   const pages = Math.max(1, Math.ceil(shown.length / PAGE))
   const chosen = records.filter((r) => r.can_import && r.include)
   const problems = records.filter((r) => !r.can_import).length
-  const totalOut = chosen.filter((r) => r.kind !== 'INCOME').reduce((s, r) => s + Number(r.amount || 0), 0)
-  const totalIn = chosen.filter((r) => r.kind === 'INCOME').reduce((s, r) => s + Number(r.amount || 0), 0)
+  const sumOf = (kinds) => chosen.filter((r) => kinds.includes(r.effective_kind)).reduce((s, r) => s + Number(r.amount || 0), 0)
+  const totalOut = sumOf(['EXPENSE', 'SPLIT'])
+  const totalIn = sumOf(['INCOME'])
+  const totalMoved = sumOf(['TRANSFER'])
+  const transfers = chosen.filter((r) => r.effective_kind === 'TRANSFER').length
+  const openings = chosen.filter((r) => r.kind === 'OPENING').length
   const hasSplit = records.some((r) => r.kind === 'SPLIT')
   const hasAccountColumn = records.some((r) => r.account)
   const s = info?.summary
@@ -366,12 +399,14 @@ function Review({ source, onCancel, onDone, onError }) {
     setProgress({ done: 0, total: records.length })
     try {
       const batch = (await api.post('/imports', { filename: source.filename, file_type: source.file_type, file_hash: source.file_hash })).data
+      const created = []
       for (let i = 0; i < records.length; i += CHUNK) {
-        await api.post(`/imports/${batch.id}/rows`, { records: records.slice(i, i + CHUNK).map(clean), options })
+        const res = await api.post(`/imports/${batch.id}/rows`, { records: records.slice(i, i + CHUNK).map(clean), options })
+        created.push(...(res.data.accounts_created || []))
         setProgress({ done: Math.min(records.length, i + CHUNK), total: records.length })
       }
       const done = (await api.post(`/imports/${batch.id}/finish`)).data
-      onDone(done)
+      onDone({ ...done, accounts_created: created })
     } catch (err) {
       onError(`${errorMessage(err)}. What was imported before the error is in Import history, where it can be undone.`)
       setProgress(null)
@@ -436,8 +471,9 @@ function Review({ source, onCancel, onDone, onError }) {
         )}
         {info.lock_date && <p className="hint">Your accounting books are locked up to {new Date(info.lock_date).toLocaleDateString('en-IN')}: records dated on or before it can’t be imported.</p>}
 
+        <AccountMap info={info} options={options} setOption={setOption} />
         <CategoryMap info={info} options={options} setOption={setOption} />
-        {options.account_mode === 'column' && <AccountMap info={info} options={options} setOption={setOption} />}
+        <TreatmentMap info={info} options={options} setOption={setOption} />
       </div>
 
       <div className="card flush">
@@ -467,13 +503,13 @@ function Review({ source, onCancel, onDone, onError }) {
                 <th>Category / source</th>
                 <th className="num">Amount</th>
                 {hasSplit && <th className="num">My share</th>}
-                {options.account_mode === 'column' && <th>Account</th>}
+                <th>Account</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {shown.slice(page * PAGE, page * PAGE + PAGE).map(([r, i]) => (
-                <Row key={`${r.row_no}-${i}`} r={r} hasSplit={hasSplit} accountColumn={options.account_mode === 'column'}
+                <Row key={`${r.row_no}-${i}`} r={r} hasSplit={hasSplit}
                      onEdit={(patch) => edit(i, patch)} onRemove={() => removeRow(i)} />
               ))}
               {!shown.length && <EmptyRow cols={11}>No records here.</EmptyRow>}
@@ -495,6 +531,8 @@ function Review({ source, onCancel, onDone, onError }) {
             <div className="strong">{chosen.length} record(s) to import</div>
             <div className="muted small">
               Spending {money(totalOut)} · Money received {money(totalIn)}
+              {transfers ? ` · ${transfers} transfer(s) of ${money(totalMoved)}` : ''}
+              {openings ? ` · ${openings} opening balance(s)` : ''}
               {s && (s.duplicates || s.imported_before) ? ` · ${s.duplicates + s.imported_before} duplicate(s) left out unless ticked` : ''}
               {problems ? ` · ${problems} row(s) with problems won’t be imported` : ''}
             </div>
@@ -511,14 +549,14 @@ function Review({ source, onCancel, onDone, onError }) {
           )}
         </div>
         <p className="hint">
-          Records keep their original date and appear in Expenses, Balance, the Dashboard and Reports. They can be edited for 3 days from today, don’t trigger budget alerts, and post to your books if you use Accounting. You can undo the whole import from Import history.
+          Records keep their original date and appear in Expenses, Balance, the Dashboard and Reports; transfers move money between your accounts and opening balances are added to them. They can be edited for 3 days from today, don’t trigger budget alerts, and post to your books if you use Accounting. You can undo the whole import from Import history.
         </p>
       </div>
     </>
   )
 }
 
-function Row({ r, hasSplit, accountColumn, onEdit, onRemove }) {
+function Row({ r, hasSplit, onEdit, onRemove }) {
   const [cls, label] = STATUS[r.status] || ['info', r.status]
   const notes = [...(r.problems || []), ...(r.warnings || [])]
   const num = (v) => (v === '' ? null : v)
@@ -544,7 +582,10 @@ function Row({ r, hasSplit, accountColumn, onEdit, onRemove }) {
           <option value="EXPENSE">Expense</option>
           <option value="INCOME">Income</option>
           <option value="SPLIT">Split bill</option>
+          <option value="TRANSFER">Transfer</option>
+          <option value="OPENING">Opening balance</option>
         </select>
+        {r.effective_kind === 'TRANSFER' && r.kind !== 'TRANSFER' && <div className="hint" style={{ margin: '4px 0 0' }}>→ moved, not spent</div>}
       </td>
       <td>
         <input value={r.description || ''} maxLength={300} onChange={(e) => onEdit({ description: e.target.value })} />
@@ -554,23 +595,31 @@ function Row({ r, hasSplit, accountColumn, onEdit, onRemove }) {
         {r.category_final && r.category_final !== r.category && <div className="hint" style={{ margin: '4px 0 0' }}>→ {r.category_final}</div>}
       </td>
       <td className="num">
-        <input type="number" min="0" step="0.01" value={r.amount ?? ''} style={{ width: 120 }} onChange={(e) => onEdit({ amount: num(e.target.value) })} />
+        <input type="number" min={r.kind === 'OPENING' ? undefined : '0'} step="0.01" value={r.amount ?? ''} style={{ width: 120 }} onChange={(e) => onEdit({ amount: num(e.target.value) })} />
       </td>
       {hasSplit && (
         <td className="num">
           {r.kind === 'SPLIT' && (
             <>
               <input type="number" min="0" step="0.01" value={r.my_share ?? ''} style={{ width: 110 }} onChange={(e) => onEdit({ my_share: num(e.target.value) })} />
-              <div className="hint" style={{ margin: '4px 0 0' }}>with {(r.split_with || []).join(', ') || 'Others'}</div>
+              <input value={r.paid_by || ''} maxLength={100} placeholder="Paid by: you" title="Who paid the bill (blank = you)" style={{ width: 110, marginTop: 4 }} onChange={(e) => onEdit({ paid_by: e.target.value || null })} />
+              <div className="hint" style={{ margin: '4px 0 0' }}>{r.paid_by ? `you owe ${r.paid_by} your share` : `with ${(r.split_with || []).join(', ') || 'Others'}`}</div>
             </>
           )}
         </td>
       )}
-      {accountColumn && (
-        <td>
-          <input value={r.account || ''} maxLength={100} onChange={(e) => onEdit({ account: e.target.value || null })} />
-        </td>
-      )}
+      <td style={{ minWidth: 170 }}>
+        <input value={r.account || ''} maxLength={100} placeholder={r.kind === 'TRANSFER' ? 'From' : ''} onChange={(e) => onEdit({ account: e.target.value || null })} />
+        {r.kind === 'TRANSFER' && (
+          <input value={r.to_account || ''} maxLength={100} placeholder="To" style={{ marginTop: 4 }} onChange={(e) => onEdit({ to_account: e.target.value || null })} />
+        )}
+        {r.account_label && (
+          <div className="hint" style={{ margin: '4px 0 0' }}>
+            {r.account_label}
+            {r.to_account_label && <> <ArrowRight size={11} /> {r.to_account_label}</>}
+          </div>
+        )}
+      </td>
       <td>
         <button className="btn ghost small" title="Remove this row from the import" onClick={onRemove}>
           <Trash2 size={14} />
@@ -581,8 +630,10 @@ function Row({ r, hasSplit, accountColumn, onEdit, onRemove }) {
 }
 
 function CategoryMap({ info, options, setOption }) {
-  const unknown = info.category_values.filter((c) => !c.known)
+  const treated = (c) => !!options.category_treatment[c.value.toLowerCase()]
+  const unknown = info.category_values.filter((c) => c.expense_rows && !c.known && !treated(c))
   if (!unknown.length) return null
+  const open = unknown.filter((c) => !options.category_map[c.value.toLowerCase()])
   const choose = (value, choice) => {
     let target = choice
     if (choice === '__new__') {
@@ -594,21 +645,36 @@ function CategoryMap({ info, options, setOption }) {
     else delete map[value.toLowerCase()]
     setOption({ category_map: map })
   }
+  const bulk = (useSuggestions) => {
+    const map = { ...options.category_map }
+    for (const c of open) {
+      if (useSuggestions && c.suggested) map[c.value.toLowerCase()] = c.suggested
+      else if (!useSuggestions && c.value.trim()) map[c.value.toLowerCase()] = c.value.trim()
+    }
+    setOption({ category_map: map })
+  }
   return (
     <div style={{ marginTop: 16 }}>
-      <h4 style={{ margin: '0 0 4px' }}>Categories not in the app yet</h4>
-      <p className="hint" style={{ marginTop: 0 }}>Choose an existing category for each, or create it. Rows stay unimported until their category is chosen.</p>
+      <div className="toolbar wrap" style={{ padding: 0, border: 0 }}>
+        <h4 style={{ margin: 0 }}>Categories not in the app yet ({open.length} to choose of {unknown.length})</h4>
+        <span className="spacer" />
+        {open.some((c) => c.suggested) && (
+          <button className="btn secondary small" onClick={() => bulk(true)}><Sparkles size={14} /> Use the suggestions</button>
+        )}
+        {open.length > 0 && <button className="btn secondary small" onClick={() => bulk(false)}>Create the rest as new categories</button>}
+      </div>
+      <p className="hint" style={{ marginTop: 4 }}>Choose an existing category for each, or create it. Rows stay unimported until their category is chosen.</p>
       <div className="form-grid">
         {unknown.map((c) => {
           const mapped = options.category_map[c.value.toLowerCase()]
           const isNew = mapped && !info.categories.includes(mapped)
           return (
             <div key={c.value}>
-              <label>{c.value ? `“${c.value}”` : 'Rows without a category'} · {c.rows} row(s)</label>
+              <label>{c.value ? `“${c.value}”` : 'Rows without a category'} · {c.expense_rows} row(s){c.suggested && !mapped ? ` · suggested: ${c.suggested}` : ''}</label>
               <select value={mapped ? (isNew ? `new:${mapped}` : mapped) : ''} onChange={(e) => choose(c.value, e.target.value.startsWith('new:') ? e.target.value.slice(4) : e.target.value)}>
                 <option value="">Choose…</option>
-                {c.value && <option value={`new:${c.value}`}>Create “{c.value}” as a new category</option>}
-                {isNew && mapped !== c.value && <option value={`new:${mapped}`}>New category “{mapped}”</option>}
+                {c.value && <option value={`new:${c.value.trim()}`}>Create “{c.value.trim()}” as a new category</option>}
+                {isNew && mapped !== c.value.trim() && <option value={`new:${mapped}`}>New category “{mapped}”</option>}
                 <option value="__new__">Create a new category with another name…</option>
                 <optgroup label="Your categories">
                   {info.categories.map((k) => (
@@ -626,34 +692,121 @@ function CategoryMap({ info, options, setOption }) {
 
 function AccountMap({ info, options, setOption }) {
   if (!info.account_values.length) return null
-  const choose = (value, choice) => {
+  const unmatched = info.account_values.filter((a) => !a.ref)
+  const key = (a) => a.value.toLowerCase()
+  const valueOf = (a) => {
+    if (key(a) in options.create_accounts) return `create:${options.create_accounts[key(a)]}`
+    if (key(a) in options.account_map) return options.account_map[key(a)] === null ? 'none' : `id:${options.account_map[key(a)]}`
+    return ''
+  }
+  const choose = (a, choice) => {
     const map = { ...options.account_map }
-    if (choice === '') delete map[value.toLowerCase()]
-    else map[value.toLowerCase()] = choice === 'none' ? null : Number(choice)
-    setOption({ account_map: map })
+    const create = { ...options.create_accounts }
+    delete map[key(a)]
+    delete create[key(a)]
+    if (choice === 'none') map[key(a)] = null
+    else if (choice.startsWith('id:')) map[key(a)] = Number(choice.slice(3))
+    else if (choice.startsWith('create:')) create[key(a)] = choice.slice(7)
+    setOption({ account_map: map, create_accounts: create })
+  }
+  const createAll = () => {
+    const create = { ...options.create_accounts }
+    for (const a of unmatched) if (!(key(a) in options.account_map)) create[key(a)] = a.suggested_kind
+    setOption({ create_accounts: create })
   }
   return (
     <div style={{ marginTop: 16 }}>
-      <h4 style={{ margin: '0 0 4px' }}>Accounts named in the file</h4>
-      <p className="hint" style={{ marginTop: 0 }}>Matched by name or last 4 digits where possible. Choose the account for the others, or leave them unassigned.</p>
+      <div className="toolbar wrap" style={{ padding: 0, border: 0 }}>
+        <h4 style={{ margin: 0 }}>Accounts named in the file</h4>
+        <span className="spacer" />
+        {unmatched.length > 0 && <button className="btn secondary small" onClick={createAll}><Plus size={14} /> Create the {unmatched.length} missing account(s)</button>}
+      </div>
+      <p className="hint" style={{ marginTop: 4 }}>
+        Matched to your accounts by name (dots, spaces and capitals ignored) or last 4 digits. Choose or create the others; transfers and opening balances need both their accounts.
+      </p>
       <div className="form-grid">
         {info.account_values.map((a) => {
-          const key = a.value.toLowerCase()
-          const value = key in options.account_map ? (options.account_map[key] === null ? 'none' : String(options.account_map[key])) : ''
+          const current = info.accounts.find((x) => x.id === a.account_id)
           return (
             <div key={a.value}>
               <label>{a.value ? `“${a.value}”` : 'Rows without an account'} · {a.rows} row(s)</label>
-              <select value={value} onChange={(e) => choose(a.value, e.target.value)}>
-                <option value="">{a.account_id ? `Matched: ${info.accounts.find((x) => x.id === a.account_id)?.name || 'an account'}` : 'Choose…'}</option>
+              <select value={valueOf(a)} onChange={(e) => choose(a, e.target.value)}>
+                <option value="">{current && !a.mapped ? `Matched: ${current.name}` : a.ref?.startsWith('new:') ? `New account: ${a.new_name}` : 'Choose…'}</option>
+                <optgroup label={`Create “${a.new_name || a.value}” as`}>
+                  {Object.entries(ACCOUNT_KINDS).map(([k, label]) => (
+                    <option key={k} value={`create:${k}`}>{label}{k === a.suggested_kind ? ' (suggested)' : ''}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Your accounts">
+                  {info.accounts.map((x) => (
+                    <option key={x.id} value={`id:${x.id}`}>{x.name}{x.last4 ? ` ••${x.last4}` : ''}</option>
+                  ))}
+                </optgroup>
                 <option value="none">No account (unassigned)</option>
-                {info.accounts.map((x) => (
-                  <option key={x.id} value={x.id}>{x.name}{x.last4 ? ` ••${x.last4}` : ''}</option>
-                ))}
               </select>
             </div>
           )
         })}
       </div>
+    </div>
+  )
+}
+
+function TreatmentMap({ info, options, setOption }) {
+  const [showAll, setShowAll] = useState(false)
+  const all = info.category_values.filter((c) => c.value.trim())
+  if (!all.length) return null
+  const key = (c) => c.value.toLowerCase()
+  // "new:INVESTMENT:Investments" once that account exists is shown as the account itself
+  const resolve = (v) => {
+    const a = v && info.accounts.find((x) => v === `new:${x.kind}:${x.name}`)
+    return a ? `id:${a.id}` : v
+  }
+  const chosen = (c) => resolve(options.category_treatment[key(c)] || '')
+  const list = showAll ? all : all.filter((c) => c.suggested_treatment || chosen(c))
+  const set = (c, value) => {
+    const t = { ...options.category_treatment }
+    if (value) t[key(c)] = value
+    else delete t[key(c)]
+    setOption({ category_treatment: t })
+  }
+  const useSuggestions = () => {
+    const t = { ...options.category_treatment }
+    for (const c of all) if (c.suggested_treatment && !(key(c) in t)) t[key(c)] = resolve(c.suggested_treatment)
+    setOption({ category_treatment: t })
+  }
+  const pending = all.filter((c) => c.suggested_treatment && !(key(c) in options.category_treatment)).length
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className="toolbar wrap" style={{ padding: 0, border: 0 }}>
+        <h4 style={{ margin: 0 }}>Money that isn’t spending or income</h4>
+        <span className="spacer" />
+        {pending > 0 && <button className="btn secondary small" onClick={useSuggestions}><Sparkles size={14} /> Use the {pending} suggestion(s)</button>}
+        <button className="btn ghost small" onClick={() => setShowAll(!showAll)}>{showAll ? 'Only suggested' : 'All categories'}</button>
+      </div>
+      <p className="hint" style={{ marginTop: 4 }}>
+        Investments, money paid for someone and paid back, returns to family… Moving them to an account keeps your bank balances right without counting them as spending or income.
+      </p>
+      {list.length ? (
+        <div className="form-grid">
+          {list.map((c) => (
+            <div key={c.value}>
+              <label>“{c.value}” · {c.rows} row(s){c.suggested_treatment && !chosen(c) ? ' · suggested: move it' : ''}</label>
+              <select value={chosen(c)} onChange={(e) => set(c, e.target.value)}>
+                <option value="">Spending / income (as in the file)</option>
+                {TREAT_NEW.filter(([v]) => !info.accounts.some((a) => `new:${a.kind}:${a.name}` === v)).map(([v, l]) => (
+                  <option key={v} value={v}>Move to {l}</option>
+                ))}
+                {info.accounts.map((a) => (
+                  <option key={a.id} value={`id:${a.id}`}>Move to {a.name}</option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="hint">No category looks like it. Use “All categories” to move one anyway.</p>
+      )}
     </div>
   )
 }
@@ -666,6 +819,7 @@ function Done({ result, onAgain }) {
         {result.rows_imported} record(s) imported from {result.filename}
         {result.rows_skipped ? `, ${result.rows_skipped} left out` : ''}
         {result.rows_failed ? `, ${result.rows_failed} failed` : ''}.
+        {result.accounts_created?.length ? ` New account(s): ${result.accounts_created.join(', ')}.` : ''}
       </Alert>
       <p>
         Spending {money(result.expense_total)} · Money received {money(result.income_total)}
@@ -684,7 +838,8 @@ function clean(r) {
   return {
     row_no: r.row_no, kind: r.kind || null, date: r.date || null, description: r.description || '', category: r.category || null,
     amount: r.amount === '' ? null : r.amount, my_share: r.kind === 'SPLIT' ? (r.my_share === '' ? null : r.my_share) : null,
-    split_with: r.split_with || [], account: r.account || null, note: r.note || null, quantity: r.quantity || 1,
+    split_with: r.split_with || [], paid_by: r.kind === 'SPLIT' ? r.paid_by || null : null, account: r.account || null, to_account: r.kind === 'TRANSFER' ? r.to_account || null : null,
+    note: r.note || null, quantity: r.quantity || 1,
     include: r.include !== false, parse_errors: r.parse_errors || [], parse_warnings: r.parse_warnings || [], fingerprint: r.fingerprint || null,
   }
 }

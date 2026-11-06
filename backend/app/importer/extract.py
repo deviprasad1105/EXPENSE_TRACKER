@@ -16,6 +16,7 @@ import csv
 import hashlib
 import io
 import re
+import zlib
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
@@ -247,6 +248,18 @@ def _docx(content: bytes) -> list[Table]:
     if text:
         tables.append(Table("Text of the document", "text", text))
     return tables
+
+
+def gunzip(content: bytes, max_bytes: int) -> bytes:
+    """A file the page compressed before uploading; refused when it is bigger than `max_bytes` unpacked."""
+    try:
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        out = d.decompress(content, max_bytes + 1)
+    except zlib.error:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The upload was damaged on the way. Try again.")
+    if len(out) > max_bytes or d.unconsumed_tail:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, f"The file is over {max_bytes / 1_000_000:g} MB")
+    return out
 
 
 def extract(content: bytes, filename: str) -> list[Table]:

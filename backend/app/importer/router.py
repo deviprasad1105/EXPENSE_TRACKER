@@ -20,7 +20,7 @@ from ..deps import get_current_user
 from ..models import User
 from ..timeutil import today_local
 from . import service
-from .extract import extract, file_hash, file_type
+from .extract import extract, file_hash, file_type, gunzip
 from .models import ImportBatch
 from .parse import Mapping, guess_mapping, parse_records
 from .schemas import (
@@ -41,6 +41,9 @@ def _batch(db: Session, user: User, batch_id: int) -> ImportBatch:
 async def extract_file(file: UploadFile = File(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     content = await file.read(settings.import_max_bytes + 1)
     name = (file.filename or "upload").strip()[:200]
+    if name.lower().endswith(".gz"):  # compressed by the page (the server takes at most 4.5 MB per request)
+        name = name[:-3] or "upload"
+        content = gunzip(content, settings.import_max_bytes)
     tables = extract(content, name)
     limit = settings.import_max_records + 200  # room for headings and blank lines
     out = [TableOut(name=t.name, source=t.source, rows=t.rows[:limit], truncated=len(t.rows) > limit) for t in tables]

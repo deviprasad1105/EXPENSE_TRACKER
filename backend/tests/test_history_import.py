@@ -139,10 +139,12 @@ def test_signed_amounts_and_debit_credit_columns_decide_the_type():
     assert [(r["kind"], r["amount"]) for r in recs] == [("EXPENSE", "120"), ("INCOME", "300")]
 
     dc = [["Date", "Narration", "Debit", "Credit"], [dmy(DAY1), "ATM", "2,000.00", ""], [dmy(DAY1), "NEFT IN", "", "5,000.00"],
-          [dmy(DAY1), "Opening balance", "", "1,000.00"]]
+          [dmy(DAY1), "Opening balance", "", "1,000.00"], [dmy(DAY1), "Closing balance", "", "4,000.00"]]
     recs, _ = parse_records(dc, guess_mapping(dc), TODAY)
-    assert [(r["kind"], r["amount"]) for r in recs] == [("EXPENSE", "2000.00"), ("INCOME", "5000.00"), ("INCOME", "1000.00")]
-    assert recs[2]["parse_warnings"]  # a balance line is flagged
+    assert [(r["kind"], r["amount"]) for r in recs] == [
+        ("EXPENSE", "2000.00"), ("INCOME", "5000.00"), ("OPENING", "1000.00"), ("INCOME", "4000.00")]
+    assert recs[2]["parse_errors"] == ["An opening balance needs its account"]  # no account column in this file
+    assert recs[3]["parse_warnings"]  # a closing balance is flagged and left out
 
 
 def test_row_problems_are_explained():
@@ -287,7 +289,8 @@ def test_unknown_categories_must_be_mapped_and_known_ones_match_any_case(client,
     assert by["Swiggy dinner"]["status"] == "READY" and by["Swiggy dinner"]["category_final"] == "Food"
     assert by["Petrol"]["status"] == "NEEDS_CATEGORY" and "Fuel" in by["Petrol"]["problems"][0]
     assert by["November salary"]["status"] == "READY"  # income has a source, not a spending category
-    assert {"value": "Fuel", "rows": 1, "mapped_to": None, "known": False} in prev["category_values"]
+    fuel = next(c for c in prev["category_values"] if c["value"] == "Fuel")
+    assert (fuel["rows"], fuel["mapped_to"], fuel["known"], fuel["suggested"]) == (1, None, False, "Transport")
 
     # Map to an existing category, or create a new one
     for target in ("Transport", "Vehicle fuel"):
@@ -487,7 +490,8 @@ def test_history_and_undo_keep_edited_records(client, make_user, db):
     assert detail["undo_removes"] == 3 and detail["undo_keeps"] == [{"reason": "Edited after the import", "rows": 1}]
 
     res = client.post(f"{API}/{done['id']}/undo", headers=headers(me)).json()
-    assert res == {"removed": 3, "kept": 1, "remaining": 0, "status": "PARTIALLY_UNDONE"}
+    assert res == {"removed": 3, "kept": 1, "remaining": 0, "status": "PARTIALLY_UNDONE",
+                   "accounts_removed": [], "accounts_deactivated": []}
     db.expire_all()
     assert [e.item_name for e in db.scalars(select(Expense))] == ["Metro card"]
     assert db.scalar(select(func.count(Fund.id))) == 0
@@ -520,7 +524,8 @@ def test_undo_keeps_records_in_a_locked_period(client, make_user, db):
     _, done = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}})
     client.put("/api/accounting/settings", json={"lock_date": str(DAY1)}, headers=headers(me))
     res = client.post(f"{API}/{done['id']}/undo", headers=headers(me)).json()
-    assert res == {"removed": 2, "kept": 2, "remaining": 0, "status": "PARTIALLY_UNDONE"}
+    assert res == {"removed": 2, "kept": 2, "remaining": 0, "status": "PARTIALLY_UNDONE",
+                   "accounts_removed": [], "accounts_deactivated": []}
 
 
 def test_imports_are_private(client, make_user):
@@ -570,3 +575,53 @@ def test_admin_can_delete_a_user_with_import_history(client, make_user, db):
     assert client.delete(f"/api/admin/users/{me.id}", headers=headers(admin)).status_code == 200
     db.expire_all()
     assert db.scalar(select(func.count(ImportBatch.id))) == 0 and db.scalar(select(func.count(ImportRecord.id))) == 0
+
+
+def test_a_split_someone_else_paid_is_my_share_owed_to_them(client, make_user, db):
+    me = make_user("asha", split=True)
+    text = ("Date,Description,Category,Total paid,My share,Paid by,Split with\n"
+            f"{dmy(DAY1)},Dinner,Food,1200,400,Ravi,\n"
+            f"{dmy(DAY1)},Movie,Entertainment,600,300,Me,Priya\n"
+            f"{dmy(DAY1)},Cab,Transport,500,250,asha,Priya\n"
+            f"{dmy(DAY1)},Lunch,Food,900,,Ravi,\n")
+    d = upload(client, me, "paid by.csv", text.encode()).json()
+    assert d["guess"]["paid_by"] == 5
+    prev, done = run_import(client, me, d, options={"category_map": {"food": "Food", "entertainment": "Entertainment", "transport": "Transport"}})
+    rows = {r["description"]: r for r in prev["records"]}
+    assert (rows["Dinner"]["kind"], rows["Dinner"]["paid_by"], rows["Dinner"]["account_ref"]) == ("SPLIT", "Ravi", "none")
+    assert "you owe them" in " ".join(rows["Dinner"]["warnings"])
+    assert rows["Movie"]["paid_by"] is None and rows["Cab"]["paid_by"] is None  # "Me" and the user's own name
+    assert rows["Lunch"]["status"] == "INVALID" and "Ravi paid" in rows["Lunch"]["problems"][0]
+    assert done["rows_imported"] == 3
+
+    dinner = db.scalar(select(Expense).where(Expense.item_name == "Dinner"))
+    assert dinner.amount == D("400") and dinner.account_id is None and "paid by Ravi" in dinner.note
+    groups = client.get("/api/splits/groups", headers=headers(me)).json()
+    group = client.get(f"/api/splits/groups/{groups[0]['id']}", headers=headers(me)).json()
+    bills = {b["title"]: b for b in group["bills"]}
+    assert bills["Dinner"]["paid_by"]["full_name"] == "Ravi" and D(str(bills["Dinner"]["total_amount"])) == D("400")
+    assert [(s["member"]["user_id"], D(str(s["amount"]))) for s in bills["Dinner"]["shares"]] == [(me.id, D("400"))]
+    # I owe Ravi 400; Priya owes me 300 + 250
+    assert D(str(groups[0]["my_net"])) == D("150")
+
+
+def test_a_compressed_upload_reads_like_the_file(client, make_user):
+    import gzip
+
+    me = make_user("asha")
+    plain = upload(client, me, "records.csv", CSV.encode()).json()
+    packed = upload(client, me, "records.csv.gz", gzip.compress(CSV.encode())).json()
+    assert packed["filename"] == "records.csv" and packed["file_type"] == "csv"
+    assert packed["tables"] == plain["tables"] and packed["file_hash"] == plain["file_hash"]
+    bad = upload(client, me, "records.csv.gz", b"not gzip")
+    assert bad.status_code == 400
+
+
+def test_a_compressed_upload_is_held_to_the_size_limit(client, make_user, monkeypatch):
+    import gzip
+
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "import_max_bytes", 1000)
+    res = upload(client, make_user("asha"), "big.csv.gz", gzip.compress(CSV.encode() * 50))
+    assert res.status_code == 413

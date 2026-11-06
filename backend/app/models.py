@@ -120,7 +120,9 @@ class UserBackground(Base):
 
 
 # ---------- bank accounts ----------
-ACCOUNT_KINDS = ("SAVINGS", "CURRENT", "SALARY", "CREDIT_CARD", "WALLET", "CASH")
+# INVESTMENT (mutual funds, shares, a broker balance) and RECEIVABLE (money lent or paid on someone's behalf, to
+# get back) hold your money but aren't spendable cash: moving money into them is a transfer, not spending.
+ACCOUNT_KINDS = ("SAVINGS", "CURRENT", "SALARY", "CREDIT_CARD", "WALLET", "CASH", "INVESTMENT", "RECEIVABLE")
 
 
 class Account(Base):

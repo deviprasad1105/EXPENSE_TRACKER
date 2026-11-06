@@ -46,6 +46,7 @@ from .engine import (
     account_ledger,
     check_open,
     get_books,
+    is_cash_or_bank,
     is_locked,
     payment_ledger,
     post_voucher,
@@ -199,9 +200,11 @@ def _transfer(db: Session, sid: int):
         if src is None or dst is None:
             return None
         narration = f"Transfer {src.name} → {dst.name}" + (f" – {t.note}" if t.note else "")
-        return Plan(CONTRA, t.transfer_date, narration, _net(
-            (account_ledger(db, books, dst), t.amount), (account_ledger(db, books, src), -t.amount),
-        ))
+        to_ledger, from_ledger = account_ledger(db, books, dst), account_ledger(db, books, src)
+        # Bank to bank is a contra; into an investment / money-with-others account a payment, out of one a receipt
+        to_cash, from_cash = is_cash_or_bank(to_ledger), is_cash_or_bank(from_ledger)
+        vtype = CONTRA if to_cash and from_cash else PAYMENT if from_cash else RECEIPT if to_cash else JOURNAL
+        return Plan(vtype, t.transfer_date, narration, _net((to_ledger, t.amount), (from_ledger, -t.amount)))
 
     return {t.user_id: plan}
 

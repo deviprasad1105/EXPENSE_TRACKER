@@ -9,6 +9,8 @@ export const ACCOUNT_KINDS = {
   CREDIT_CARD: 'Credit card',
   WALLET: 'Wallet / UPI',
   CASH: 'Cash',
+  INVESTMENT: 'Investments (funds, shares)',
+  RECEIVABLE: 'Money with others (lent, to get back)',
 }
 
 export const accountLabel = (a) => `${a.name}${a.last4 ? ` ••${a.last4}` : ''}`
