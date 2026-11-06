@@ -31,7 +31,11 @@ from ..models import (
     SplitSettlement,
     Subscription,
     SubscriptionCharge,
+    TransactionAlias,
+    UpiEvent,
+    UpiId,
     User,
+    UserCategory,
     UserAvatar,
     UserBackground,
     UsernameChangeRequest,
@@ -137,7 +141,7 @@ def update_user(user_id: int, data: AdminUserUpdate, admin: User = Depends(requi
     granted = []
     for feature, label in (
         ("feature_expense", "Expense tracking"), ("feature_split", "Split bills"), ("feature_subscription", "Subscriptions"),
-        ("feature_accounting", "Accounting"),
+        ("feature_accounting", "Accounting"), ("feature_upi", "UPI tracker"),
     ):
         value = getattr(data, feature)
         if value is not None and value != getattr(user, feature):
@@ -160,8 +164,12 @@ def _delete_user_data(db: Session, user_id: int):
     subs = select(Subscription.id).where(Subscription.user_id == user_id)
     db.execute(delete(SubscriptionCharge).where(SubscriptionCharge.subscription_id.in_(subs)))
     db.execute(delete(Subscription).where(Subscription.user_id == user_id))
+    db.execute(delete(UpiEvent).where(UpiEvent.user_id == user_id))
+    db.execute(delete(UpiId).where(UpiId.user_id == user_id))
     db.execute(delete(Expense).where(Expense.user_id == user_id))
     db.execute(delete(Fund).where(Fund.user_id == user_id))
+    db.execute(delete(TransactionAlias).where(TransactionAlias.user_id == user_id))
+    db.execute(delete(UserCategory).where(UserCategory.user_id == user_id))
     db.execute(delete(DailyItem).where(DailyItem.user_id == user_id))
     db.execute(delete(Budget).where(Budget.user_id == user_id))
     db.execute(delete(AccountTransfer).where(AccountTransfer.user_id == user_id))

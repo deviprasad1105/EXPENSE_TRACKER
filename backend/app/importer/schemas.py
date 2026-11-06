@@ -86,6 +86,10 @@ class RecordOut(RecordIn):
     to_account_id: int | None = None
     account_label: str | None = None
     to_account_label: str | None = None
+    # The payee found in the description and the alias that will name the record
+    payee_key: str | None = None
+    alias_id: int | None = None
+    alias_name: str | None = None
 
 
 class PreviewIn(BaseModel):
@@ -106,6 +110,8 @@ class CheckOut(BaseModel):
     categories: list[str]
     category_values: list[dict]
     account_values: list[dict]
+    # Payees in the file (by payee key), with their alias if they have one
+    payees: list[dict] = []
     accounts: list[dict]
     account_kinds: list[str]
     split_groups: list[dict]

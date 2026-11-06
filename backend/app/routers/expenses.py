@@ -1,14 +1,15 @@
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
 from ..deps import ACCESS_ADMIN, Target, get_current_user, resolve_target
-from ..models import ROLE_ADMIN, DailyItem, Expense, User
+from ..models import ROLE_ADMIN, DailyItem, Expense, TransactionAlias, User, UserCategory
 from ..services.accounts import resolve_account
+from ..services.aliases import label_new, payee_key
 from ..services.backup import KIND_EXPENSE, create_backup, row_to_dict
 from ..services.budgets import check_budgets
 from ..schemas import DailyEntryIn, ExpenseIn, ExpenseOut, ExpenseUpdate
@@ -43,6 +44,11 @@ def _load_for_write(db: Session, viewer: User, expense_id: int) -> tuple[Expense
     return expense, target
 
 
+def like_term(search: str) -> str:
+    """Search text for LIKE, lower case, with % and _ matched literally rather than as wildcards (escape '\\')."""
+    return search.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _check_daily_item(db: Session, owner_id: int, daily_item_id: int | None):
     if daily_item_id is not None:
         item = db.get(DailyItem, daily_item_id)
@@ -57,6 +63,7 @@ def list_expenses(
     end: date | None = None,
     category: str | None = None,
     search: str | None = None,
+    account_id: int | None = None,
     viewer: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -68,10 +75,13 @@ def list_expenses(
         stmt = stmt.where(Expense.expense_date <= end)
     if category:
         stmt = stmt.where(Expense.category == category)
+    if account_id:
+        stmt = stmt.where(Expense.account_id == account_id)
     if search:
-        # % and _ in the search text are matched literally, not as wildcards
-        term = search.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        stmt = stmt.where(func.lower(Expense.item_name).like(f"%{term}%", escape="\\"))
+        term = like_term(search)
+        # The alias and the original description both find it
+        stmt = stmt.where(or_(func.lower(Expense.item_name).like(f"%{term}%", escape="\\"),
+                              func.lower(Expense.raw_name).like(f"%{term}%", escape="\\")))
     stmt = stmt.order_by(Expense.expense_date.desc(), Expense.id.desc())
     return [_to_out(e, target) for e in db.scalars(stmt)]
 
@@ -80,11 +90,16 @@ DEFAULT_CATEGORIES = ("Food", "Snacks", "Smoking", "Transport", "Groceries", "Bi
                       "General")
 
 
-def user_categories(db: Session, user_id: int) -> list[str]:
-    """The categories a user has: the defaults plus every one used in their expenses or daily items."""
+def user_categories(db: Session, user_id: int, include_hidden: bool = False) -> list[str]:
+    """The categories a user can pick: the defaults, the ones they added, and every one used in their expenses, daily
+    items or aliases, without the ones they hid (Settings → Categories)."""
     used = db.scalars(select(Expense.category).where(Expense.user_id == user_id).distinct()).all()
     templ = db.scalars(select(DailyItem.category).where(DailyItem.user_id == user_id).distinct()).all()
-    return sorted(set(used) | set(templ) | set(DEFAULT_CATEGORIES))
+    alias = db.scalars(select(TransactionAlias.category).where(TransactionAlias.user_id == user_id, TransactionAlias.category.is_not(None))).all()
+    own = db.execute(select(UserCategory.name, UserCategory.is_hidden).where(UserCategory.user_id == user_id)).all()
+    names = {c for c in (*used, *templ, *alias, *DEFAULT_CATEGORIES) if c} | {n for n, _ in own}
+    hidden = set() if include_hidden else {n.casefold() for n, h in own if h}
+    return sorted((n for n in names if n.casefold() not in hidden), key=str.casefold)
 
 
 @router.get("/categories", response_model=list[str])
@@ -119,6 +134,8 @@ def add_expense(
     _check_daily_item(db, target.user.id, data.daily_item_id)
     expense = Expense(**data.model_dump(), user_id=target.user.id, created_by=viewer.id)
     expense.account_id = resolve_account(db, target.user.id, data.account_id)
+    # A category the user picked stays; "General" (the default) takes the alias's category
+    label_new(db, expense, set_category=data.category == "General")
     db.add(expense)
     db.flush()
     check_budgets(db, target.user, expense.expense_date, today_local())
@@ -159,6 +176,12 @@ def update_expense(
     if "account_id" in changes:
         # Clearing the account is allowed here (unlike on create, where empty means the primary account)
         changes["account_id"] = resolve_account(db, expense.user_id, changes["account_id"]) if changes["account_id"] else None
+    if changes.get("item_name") and changes["item_name"] != expense.item_name:
+        if expense.alias_id is None:
+            expense.payee_key = payee_key(expense.raw_name or changes["item_name"])
+        else:
+            # Renamed by hand: it no longer follows the alias (raw_name keeps the original description)
+            expense.alias_id = None
     for key, value in changes.items():
         if value is not None or key in ("note", "account_id"):
             setattr(expense, key, value)

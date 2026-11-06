@@ -117,7 +117,10 @@ export default function Funds() {
               {list.map((f) => (
                 <tr key={f.id}>
                   <td>{f.fund_date}</td>
-                  <td className="strong">{f.source}</td>
+                  <td className="strong" title={f.raw_name && f.raw_name !== f.source ? `Original: ${f.raw_name}` : undefined}>
+                    {f.source} {f.origin === 'UPI' && <span className="badge info">UPI</span>}
+                    {f.alias_id && <span className="badge">alias</span>}
+                  </td>
                   <td className="muted">{f.account_id && byId[f.account_id] ? accountLabel(byId[f.account_id]) : '—'}</td>
                   <td className="num strong" style={{ color: 'var(--success)' }}>+{money(f.amount)}</td>
                   <td className="muted">{f.note}</td>
