@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from ..models import Account, AccountTransfer, Expense, Fund, SplitBill, SplitMember, SplitSettlement, User
 from ..models import Subscription, SubscriptionCharge
 from ..timeutil import now_local, today_local
-from .chart import ACCOUNT_KIND_GROUP, CASH_BANK_GROUPS, SEED_LEDGERS, fy_of, fy_start
+from .chart import ACCOUNT_KIND_GROUP, CASH_BANK_GROUPS, NON_CASH_ACCOUNT_GROUPS, SEED_LEDGERS, fy_of, fy_start
 from .models import VOUCHER_POSTED, VOUCHER_REVERSED, AccLedger, AccSettings, Voucher, VoucherLine
 
 PAYMENT, RECEIPT, CONTRA, JOURNAL, SALES, PURCHASE = "PAYMENT", "RECEIPT", "CONTRA", "JOURNAL", "SALES", "PURCHASE"
@@ -166,7 +166,8 @@ def payment_ledger(db: Session, books: AccSettings, user_id: int, account_id: in
 
 
 def is_cash_or_bank(ledger: AccLedger) -> bool:
-    return ledger.group_code in CASH_BANK_GROUPS or ledger.account_id is not None
+    # A bank account, card, wallet or cash; not an investment or money-with-others account
+    return ledger.group_code in CASH_BANK_GROUPS or (ledger.account_id is not None and ledger.group_code not in NON_CASH_ACCOUNT_GROUPS)
 
 
 # ---------- posting ----------

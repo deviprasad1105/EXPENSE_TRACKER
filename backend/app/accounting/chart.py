@@ -74,7 +74,12 @@ ACCOUNT_KIND_GROUP = {
     # A wallet balance is spendable on demand, so it is a cash equivalent like cash in hand
     "WALLET": "CASH_IN_HAND",
     "CASH": "CASH_IN_HAND",
+    # Not cash: an investment account is an asset you invest in, money with others is owed back to you
+    "INVESTMENT": "INVESTMENTS",
+    "RECEIVABLE": "LOANS_ADVANCES",
 }
+# Groups of account ledgers that are not cash or bank (vouchers to and from them are payments / receipts)
+NON_CASH_ACCOUNT_GROUPS = {"INVESTMENTS", "LOANS_ADVANCES"}
 
 
 def root_of(group_code: str) -> Group:

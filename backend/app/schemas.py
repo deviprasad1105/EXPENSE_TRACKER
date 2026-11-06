@@ -430,7 +430,7 @@ class SubscriptionBulkIn(BaseModel):
 class AccountIn(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     bank: str | None = Field(default=None, max_length=60)
-    kind: str = Field(default="SAVINGS", pattern="^(SAVINGS|CURRENT|SALARY|CREDIT_CARD|WALLET|CASH)$")
+    kind: str = Field(default="SAVINGS", pattern="^(SAVINGS|CURRENT|SALARY|CREDIT_CARD|WALLET|CASH|INVESTMENT|RECEIVABLE)$")
     last4: str | None = Field(default=None, pattern=r"^\d{4}$")
     opening_balance: Decimal = Field(default=Decimal(0), max_digits=12, decimal_places=2)
     is_primary: bool = False

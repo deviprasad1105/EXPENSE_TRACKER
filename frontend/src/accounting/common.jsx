@@ -139,4 +139,5 @@ export function ExportButtons({ url, params, name, onError }) {
 }
 
 export const CASH_BANK = new Set(['BANK_ACCOUNTS', 'CASH_IN_HAND', 'BANK_OD'])
-export const isCashBank = (g) => CASH_BANK.has(g.group_code) || g.account_id != null
+// Investment and money-with-others accounts have ledgers too, but they aren't cash
+export const isCashBank = (g) => CASH_BANK.has(g.group_code) || (g.account_id != null && !['INVESTMENTS', 'LOANS_ADVANCES'].includes(g.group_code))
