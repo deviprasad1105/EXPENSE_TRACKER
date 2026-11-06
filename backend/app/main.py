@@ -12,12 +12,12 @@ from .accounting import router as accounting
 from .config import settings
 from .importer import router as importer
 from .database import SessionLocal, engine
-from .deps import FEATURE_ACCOUNTING, FEATURE_EXPENSE, FEATURE_SUBSCRIPTION, require_feature
+from .deps import FEATURE_ACCOUNTING, FEATURE_EXPENSE, FEATURE_SUBSCRIPTION, FEATURE_UPI, require_feature
 from .migrate import sync_schema
 from .models import ROLE_ADMIN, STATUS_APPROVED, JobRun, User
 from .routers import (
-    accounts, admin, auth, budgets, cron, daily_items, dashboard, expenses, funds, notifications, org, profile, reports, shares,
-    splits, subscriptions,
+    accounts, admin, aliases, auth, budgets, categories, cron, daily_items, dashboard, expenses, funds, notifications, org, profile, reports,
+    shares, splits, subscriptions, upi,
 )
 from .security import hash_password
 from .services.reminders import daily_reminder_job
@@ -138,11 +138,14 @@ app.add_middleware(
 for r in (auth, admin, org, profile, notifications, splits, cron):
     app.include_router(r.router)
 # Expense tracking is a feature the admin grants per user
-for r in (expenses, daily_items, funds, dashboard, reports, shares, accounts, budgets):
+for r in (expenses, daily_items, funds, dashboard, reports, shares, accounts, budgets, aliases, categories):
     app.include_router(r.router, dependencies=[Depends(require_feature(FEATURE_EXPENSE))])
 app.include_router(importer.router, dependencies=[Depends(require_feature(FEATURE_EXPENSE))])
 app.include_router(subscriptions.router, dependencies=[Depends(require_feature(FEATURE_SUBSCRIPTION))])
 app.include_router(accounting.router, dependencies=[Depends(require_feature(FEATURE_ACCOUNTING))])
+app.include_router(upi.router, dependencies=[Depends(require_feature(FEATURE_UPI))])
+# The forwarding link signs nobody in: its secret token names the user, and it checks their plan itself
+app.include_router(upi.hook_router)
 accounting.register_error_handler(app)
 
 

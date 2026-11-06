@@ -62,6 +62,13 @@ class User(Base):
     feature_subscription: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Double-entry books and reports; needs feature_expense as well
     feature_accounting: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # UPI tracker: bank / UPI app messages forwarded to the user's private link become expenses and money received.
+    # Needs feature_expense as well. upi_enabled is the user's own on / off switch.
+    feature_upi: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    upi_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # SHA-256 of the private forwarding token (the token itself is shown once and never stored)
+    upi_token_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    upi_token_hint: Mapped[str | None] = mapped_column(String(8))
     # Part of every sign-in token: raising it (password change, "sign out everywhere", lock) revokes all tokens
     token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # Wrong passwords in a row; at LOGIN_MAX_FAILURES sign-in is blocked until login_blocked_until
@@ -226,6 +233,13 @@ class Expense(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("app_users.id", ondelete="SET NULL"))
+    # Transaction aliases: who the money went to, as found in the description ("ramesh@ybl", "tea stall"), the
+    # description before an alias renamed it, and the alias that did
+    payee_key: Mapped[str | None] = mapped_column(String(120), index=True)
+    raw_name: Mapped[str | None] = mapped_column(String(200))
+    alias_id: Mapped[int | None] = mapped_column(ForeignKey("transaction_aliases.id", ondelete="SET NULL"), index=True)
+    # Where it came from when not typed in: "UPI" (UPI tracker)
+    origin: Mapped[str | None] = mapped_column(String(10))
 
     user: Mapped[User] = relationship(foreign_keys=[user_id])
 
@@ -244,6 +258,90 @@ class Fund(Base):
     # The account it was received in (NULL: not tracked)
     account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+    # As on Expense: an alias renames `source`, keeping the original in raw_name
+    payee_key: Mapped[str | None] = mapped_column(String(120), index=True)
+    raw_name: Mapped[str | None] = mapped_column(String(200))
+    alias_id: Mapped[int | None] = mapped_column(ForeignKey("transaction_aliases.id", ondelete="SET NULL"), index=True)
+    origin: Mapped[str | None] = mapped_column(String(10))
+
+
+class TransactionAlias(Base):
+    """A readable name for a payee: every expense or money received matching `match_key` is shown as `alias`.
+
+    `match_key` is a payee key (a UPI ID like "ramesh@ybl", or the description cleaned of reference numbers),
+    matched exactly, or as words inside the description.
+    """
+
+    __tablename__ = "transaction_aliases"
+    __table_args__ = (UniqueConstraint("user_id", "match_key", name="uq_alias_user_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    match_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    alias: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Category given to new expenses it names (NULL: keep theirs)
+    category: Mapped[str | None] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class UserCategory(Base):
+    """A category the user added (is_hidden False), or one they hid from every category list (a default like Smoking,
+    or one of their own). Records keep their category either way."""
+
+    __tablename__ = "user_categories"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_user_category"),)
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+
+
+class UpiId(Base):
+    """One of the user's own UPI IDs (VPA) for the UPI tracker, and the account it is linked to."""
+
+    __tablename__ = "upi_ids"
+    __table_args__ = (UniqueConstraint("user_id", "vpa", name="uq_upi_id_user_vpa"),)
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    vpa: Mapped[str] = mapped_column(String(100), nullable=False)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+
+
+UPI_CREATED = "CREATED"
+UPI_DUPLICATE = "DUPLICATE"
+UPI_IGNORED = "IGNORED"
+UPI_FAILED = "FAILED"
+
+
+class UpiEvent(Base):
+    """A message received by the UPI tracker and what became of it (an expense, money received, or why not)."""
+
+    __tablename__ = "upi_events"
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    upi_id: Mapped[int | None] = mapped_column(ForeignKey("upi_ids.id", ondelete="SET NULL"))
+    received_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local, index=True)
+    # CREATED, DUPLICATE, IGNORED or FAILED
+    status: Mapped[str] = mapped_column(String(10), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(300))
+    # DEBIT (paid) or CREDIT (received)
+    direction: Mapped[str | None] = mapped_column(String(6))
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    counterparty: Mapped[str | None] = mapped_column(String(120))
+    payee_key: Mapped[str | None] = mapped_column(String(120))
+    # UPI reference number (RRN): the same payment forwarded twice is recorded once
+    ref: Mapped[str | None] = mapped_column(String(40), index=True)
+    txn_date: Mapped[date | None] = mapped_column(Date)
+    raw_text: Mapped[str | None] = mapped_column(String(1000))
+    expense_id: Mapped[int | None] = mapped_column(ForeignKey("expenses.id", ondelete="SET NULL"))
+    fund_id: Mapped[int | None] = mapped_column(ForeignKey("funds.id", ondelete="SET NULL"))
 
 
 class DataShare(Base):

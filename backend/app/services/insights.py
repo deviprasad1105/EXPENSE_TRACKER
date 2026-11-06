@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select, true
+from sqlalchemy import func, select, true
 from sqlalchemy.orm import Session
 
 from ..models import (
@@ -42,7 +42,13 @@ def _f(v: Decimal) -> float:
     return float(round(v, 2))
 
 
-def build(db: Session, user_id: int, today: date) -> dict:
+def build(db: Session, user_id: int, today: date, month: date | None = None) -> dict:
+    """`month` (its first day) picks an earlier month to look at: it is analysed as of its last day, so it is compared
+    whole with the whole month before. Upcoming renewals and what is owed in split bills are always as of today."""
+    real_today = today
+    if month and month.replace(day=1) < today.replace(day=1):
+        month = month.replace(day=1)
+        today = month.replace(day=calendar.monthrange(month.year, month.month)[1])
     this_month = today.replace(day=1)
     first = _shift(this_month, -MONTHS)  # six full months before the current one
     keys = [_shift(this_month, -i) for i in range(MONTHS, -1, -1)]
@@ -159,17 +165,17 @@ def build(db: Session, user_id: int, today: date) -> dict:
     subs = db.scalars(select(Subscription).where(Subscription.user_id == user_id)).all()
     active = [s for s in subs if s.is_active]
     upcoming = sorted(
-        (s for s in active if s.next_charge_date and s.next_charge_date <= today + timedelta(days=30)),
+        (s for s in active if s.next_charge_date and s.next_charge_date <= real_today + timedelta(days=30)),
         key=lambda s: s.next_charge_date,
     )
     subscriptions = {
         "active": len(active),
         "paused": len(subs) - len(active),
         "monthly_total": _f(sum((monthly_cost(s) for s in active), Decimal(0))),
-        "due_7_days": len([s for s in upcoming if s.next_charge_date <= today + timedelta(days=7)]),
+        "due_7_days": len([s for s in upcoming if s.next_charge_date <= real_today + timedelta(days=7)]),
         "upcoming": [
             {"id": s.id, "name": s.name, "amount": _f(s.amount), "date": s.next_charge_date.isoformat(),
-             "days_until": (s.next_charge_date - today).days, "frequency": s.frequency, "payment_method": s.payment_method,
+             "days_until": (s.next_charge_date - real_today).days, "frequency": s.frequency, "payment_method": s.payment_method,
              "category": s.category}
             for s in upcoming[:6]
         ],
@@ -199,8 +205,20 @@ def build(db: Session, user_id: int, today: date) -> dict:
         })
     budgets.sort(key=lambda b: (b["scope"] != "OVERALL", -b["percent"]))
 
+    first_record = min(
+        (d for d in (
+            db.scalar(select(func.min(Expense.expense_date)).where(Expense.user_id == user_id)),
+            db.scalar(select(func.min(Fund.fund_date)).where(Fund.user_id == user_id)),
+        ) if d),
+        default=None,
+    )
     return {
         "today": today.isoformat(),
+        "month": this_month.isoformat(),
+        "month_label": f"{this_month:%B %Y}",
+        "is_current": this_month == real_today.replace(day=1),
+        # The earliest month with records: how far back the month picker goes
+        "first_month": (first_record or real_today).replace(day=1).isoformat(),
         "day_of_month": today.day,
         "days_in_month": days_in_month,
         "months": months,
@@ -209,7 +227,8 @@ def build(db: Session, user_id: int, today: date) -> dict:
         "subscriptions": subscriptions,
         "splits": splits,
         "budgets": budgets,
-        "insights": _insights(sections, categories, subscriptions, splits, budgets),
+        "insights": _insights(sections, categories, subscriptions, splits, budgets,
+                              None if this_month == real_today.replace(day=1) else f"{this_month:%B}"),
     }
 
 
@@ -217,11 +236,24 @@ def _money(v: float) -> str:
     return f"₹{v:,.0f}"
 
 
-def _insights(sections, categories, subscriptions, splits, budgets) -> list[dict]:
-    """Short sentences about what changed. `tone` is good, bad or neutral."""
+def _insights(sections, categories, subscriptions, splits, budgets, past: str | None = None) -> list[dict]:
+    """Short sentences about what changed. `tone` is good, bad or neutral. `past` names an earlier month being looked at."""
     out = []
     t = sections["total"]
-    if t["vs_last_month"] is not None:
+    if past:
+        # A finished month: compared whole with the whole month before and with the six-month average
+        if t["vs_last_month"] is not None:
+            up = t["vs_last_month"] > 0
+            out.append({"tone": "bad" if up else "good",
+                        "text": f"In {past} you spent {_money(t['this_month'])}: {abs(t['vs_last_month']):.0f}% "
+                                f"{'more' if up else 'less'} than the month before ({_money(t['last_month'])})."})
+        elif t["this_month"]:
+            out.append({"tone": "neutral", "text": f"In {past} you spent {_money(t['this_month'])}."})
+        if t["avg_6m"] and t["this_month"]:
+            diff = t["this_month"] - t["avg_6m"]
+            out.append({"tone": "bad" if diff > 0 else "good",
+                        "text": f"That is {_money(abs(diff))} {'above' if diff > 0 else 'below'} the 6-month average of {_money(t['avg_6m'])}."})
+    elif t["vs_last_month"] is not None:
         up = t["vs_last_month"] > 0
         out.append({
             "tone": "bad" if up else "good",
@@ -230,7 +262,7 @@ def _insights(sections, categories, subscriptions, splits, budgets) -> list[dict
         })
     elif t["this_month"]:
         out.append({"tone": "neutral", "text": f"You've spent {_money(t['this_month'])} so far this month."})
-    if t["avg_6m"] and t["this_month"]:
+    if not past and t["avg_6m"] and t["this_month"]:
         diff = t["projected"] - t["avg_6m"]
         out.append({
             "tone": "bad" if diff > 0 else "good",
@@ -241,15 +273,15 @@ def _insights(sections, categories, subscriptions, splits, budgets) -> list[dict
     if changed:
         worst = max(changed, key=lambda c: c["change"])
         if worst["change"] > 0:
-            out.append({"tone": "bad", "text": f"{worst['category']} is up {worst['change_pct']:.0f}% on last month "
+            out.append({"tone": "bad", "text": f"{worst['category']} {'was' if past else 'is'} up {worst['change_pct']:.0f}% on {'the month before' if past else 'last month'} "
                                                f"({_money(worst['last_month'])} → {_money(worst['this_month'])})."})
         best = min(changed, key=lambda c: c["change"])
         if best["change"] < 0:
-            out.append({"tone": "good", "text": f"{best['category']} is down {abs(best['change_pct']):.0f}%: "
-                                                f"{_money(abs(best['change']))} saved compared with last month."})
+            out.append({"tone": "good", "text": f"{best['category']} {'was' if past else 'is'} down {abs(best['change_pct']):.0f}%: "
+                                                f"{_money(abs(best['change']))} saved compared with {'the month before' if past else 'last month'}."})
     for b in budgets:
         if b["level"] == "OVER":
-            out.append({"tone": "bad", "text": f"{b['label']} is over budget: {_money(b['spent'])} of {_money(b['monthly_limit'])}."})
+            out.append({"tone": "bad", "text": f"{b['label']} {'went' if past else 'is'} over budget: {_money(b['spent'])} of {_money(b['monthly_limit'])}."})
         elif b["level"] == "WARN":
             out.append({"tone": "bad", "text": f"{b['label']} has used {b['percent']:.0f}% of its {_money(b['monthly_limit'])} budget."})
     if subscriptions["active"]:

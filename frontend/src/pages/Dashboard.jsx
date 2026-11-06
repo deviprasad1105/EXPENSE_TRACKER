@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import AccountBalanceOutlined from '@mui/icons-material/AccountBalanceOutlined'
 import AddRounded from '@mui/icons-material/AddRounded'
 import ArrowForwardRounded from '@mui/icons-material/ArrowForwardRounded'
+import CalendarMonthOutlined from '@mui/icons-material/CalendarMonthOutlined'
+import ChevronLeftRounded from '@mui/icons-material/ChevronLeftRounded'
+import ChevronRightRounded from '@mui/icons-material/ChevronRightRounded'
 import AutoAwesomeRounded from '@mui/icons-material/AutoAwesomeRounded'
 import CallMadeRounded from '@mui/icons-material/CallMadeRounded'
 import CallReceivedRounded from '@mui/icons-material/CallReceivedRounded'
@@ -20,11 +23,11 @@ import TrendingDownRounded from '@mui/icons-material/TrendingDownRounded'
 import TrendingUpRounded from '@mui/icons-material/TrendingUpRounded'
 import TuneRounded from '@mui/icons-material/TuneRounded'
 import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded'
-import api, { errorMessage, money } from '../api'
+import api, { errorMessage, money, todayISO } from '../api'
 import { canUseSplits, hasFeature, useAuth } from '../auth'
 import { accountLabel } from '../components/Accounts'
-import { DonutChart, MonthsChart, Sparkline, STATUS, useCategorySlices } from '../components/Charts'
-import { Alert } from '../components/ui'
+import { DonutChart, MonthsChart, Sparkline, SpendingChart, STATUS, useCategorySlices } from '../components/Charts'
+import { Alert, usePageBanner } from '../components/ui'
 
 const LEVEL = {
   OK: { label: 'On track', Icon: CheckCircleRounded, cls: 'ok' },
@@ -43,6 +46,25 @@ const LOGO_COLORS = ['#4f46e5', '#0e9384', '#c4320a', '#7a5af8', '#dd2590', '#15
 const logoColor = (name) => LOGO_COLORS[[...name].reduce((s, c) => s + c.charCodeAt(0), 0) % LOGO_COLORS.length]
 const fmtDate = (d) => new Date(d + 'T00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
 const dueLabel = (days) => (days === 0 ? 'today' : days === 1 ? 'tomorrow' : `on`)
+/** "2026-10" for a date or ISO string, and the months from `first` to `last` (newest first) for the picker. */
+const ym = (d) => (typeof d === 'string' ? d.slice(0, 7) : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+const monthName = (key, opts = { month: 'long', year: 'numeric' }) => new Date(`${key}-01T00:00`).toLocaleDateString('en-IN', opts)
+function monthRange(first, last) {
+  const out = []
+  const d = new Date(`${last}-01T00:00`)
+  const stop = new Date(`${first}-01T00:00`)
+  while (d >= stop && out.length < 240) {
+    out.push(ym(d))
+    d.setMonth(d.getMonth() - 1)
+  }
+  return out
+}
+const shiftMonth = (key, n) => {
+  const d = new Date(`${key}-01T00:00`)
+  d.setMonth(d.getMonth() + n)
+  return ym(d)
+}
+
 const FREQ = { WEEKLY: 'Weekly', MONTHLY: 'Monthly', QUARTERLY: 'Quarterly', HALF_YEARLY: 'Half-yearly', YEARLY: 'Yearly', CUSTOM: 'Custom' }
 
 /** Change in percent as a coloured chip. For spending, going up is bad; for money received, it's good. */
@@ -96,11 +118,19 @@ export default function Dashboard() {
   const [accounts, setAccounts] = useState([])
   const [section, setSection] = useState('total')
   const [error, setError] = useState('')
+  const [search, setSearch] = useSearchParams()
+  const banner = usePageBanner()
+  const thisMonth = ym(new Date())
+  // The month being looked at, kept in the address (?month=2026-10) so it survives a refresh and can be shared
+  const month = /^\d{4}-\d{2}$/.test(search.get('month') || '') && search.get('month') < thisMonth ? search.get('month') : thisMonth
+  const setMonth = (m) => setSearch(m === thisMonth ? {} : { month: m }, { replace: true })
 
   const load = useCallback(() => {
+    const [y, m] = month.split('-').map(Number)
+    const end = month === thisMonth ? todayISO() : `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
     Promise.all([
-      api.get('/dashboard/insights', { params }),
-      api.get('/dashboard', { params }),
+      api.get('/dashboard/insights', { params: { ...params, ...(month === thisMonth ? {} : { month }) } }),
+      api.get('/dashboard', { params: { ...params, start: `${month}-01`, end } }),
       api.get('/accounts', { params }),
     ])
       .then(([i, d, a]) => {
@@ -110,7 +140,7 @@ export default function Dashboard() {
         setError('')
       })
       .catch((e) => setError(errorMessage(e)))
-  }, [params])
+  }, [params, month, thisMonth])
   useEffect(load, [load])
 
   const slices = useCategorySlices(data?.categories || [], 'this_month')
@@ -131,6 +161,12 @@ export default function Dashboard() {
   const cmp = data.sections[section]
   const sparkColor = overall && overall.level !== 'OK' ? STATUS[overall.level] : undefined
   const sixMonthAvg = total.avg_6m
+  const current = data.is_current
+  const label = current ? 'This month' : monthName(month)
+  const short = current ? 'This month' : monthName(month, { month: 'short', year: 'numeric' })
+  const prevLabel = current ? 'last month' : monthName(shiftMonth(month, -1), { month: 'long' })
+  const months = monthRange(data.first_month < thisMonth ? data.first_month.slice(0, 7) : thisMonth, thisMonth)
+  const period = balance.period
 
   const pause = async (sub) => {
     if (!window.confirm(`Pause ${sub.name}? No more reminders or charges will be logged until you resume it.\n\nThis doesn't cancel the payment with your bank or UPI app.`)) return
@@ -146,30 +182,60 @@ export default function Dashboard() {
     <div className="dash">
       <div className="page-head">
         <div>
-          <h1>Overview</h1>
-          <p>{mine ? `Welcome back, ${firstName}!` : `Viewing ${balance.user.full_name} (@${balance.user.username})`}</p>
+          <h1>Overview · {current ? monthName(month) : label}</h1>
+          <p>
+            {mine ? `Welcome back, ${firstName}!` : `Viewing ${balance.user.full_name} (@${balance.user.username})`}{' '}
+            {current ? `Day ${data.day_of_month} of ${data.days_in_month}.` : `Looking back at ${label}.`}
+          </p>
         </div>
-        {writable && (
-          <div className="filters">
-            <button className="btn secondary" onClick={() => navigate('/settings#budgets')}>
-              <TuneRounded style={{ fontSize: 18 }} /> Manage budget
+        <div className="filters">
+          <div className="month-picker" role="group" aria-label="Month to show">
+            <button className="icon-btn" title="Previous month" aria-label="Previous month" disabled={month <= months[months.length - 1]} onClick={() => setMonth(shiftMonth(month, -1))}>
+              <ChevronLeftRounded style={{ fontSize: 20 }} />
             </button>
-            <Link to="/daily" className="btn">
-              <AddRounded style={{ fontSize: 18 }} /> Add expense
-            </Link>
+            <label className="month-select">
+              <CalendarMonthOutlined style={{ fontSize: 18 }} />
+              <select value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month">
+                {months.map((m) => (
+                  <option key={m} value={m}>
+                    {m === thisMonth ? `This month (${monthName(m, { month: 'short', year: 'numeric' })})` : monthName(m)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button className="icon-btn" title="Next month" aria-label="Next month" disabled={current} onClick={() => setMonth(shiftMonth(month, 1))}>
+              <ChevronRightRounded style={{ fontSize: 20 }} />
+            </button>
+            {!current && (
+              <button className="btn ghost small" onClick={() => setMonth(thisMonth)}>
+                Back to this month
+              </button>
+            )}
           </div>
-        )}
+          {writable && (
+            <>
+              <button className="btn secondary" onClick={() => navigate('/settings#budgets')}>
+                <TuneRounded style={{ fontSize: 18 }} /> Manage budget
+              </button>
+              <Link to="/daily" className="btn">
+                <AddRounded style={{ fontSize: 18 }} /> Add expense
+              </Link>
+            </>
+          )}
+        </div>
       </div>
+
+      {banner}
 
       {/* ---------- headline cards ---------- */}
       <div className="dash-top">
         <div className="dcard">
-          <CardHead icon={PaymentsOutlined} title="Monthly spending" />
+          <CardHead icon={PaymentsOutlined} title={current ? 'Monthly spending' : `Spent in ${label}`} />
           <div className="dcard-body">
             <div className="big-value">{money(total.this_month)}</div>
             <div className="change-line">
               <Change pct={total.vs_last_month} />
-              <span className="muted">vs this point last month</span>
+              <span className="muted">{current ? 'vs this point last month' : `vs all of ${prevLabel}`}</span>
             </div>
           </div>
           <Sparkline data={data.months} color={sparkColor} />
@@ -192,7 +258,9 @@ export default function Dashboard() {
               <>
                 <div className="big-value">{overall.percent.toFixed(0)}%</div>
                 <p className="muted">
-                  used · {money(Math.max(0, overall.monthly_limit - overall.spent))} left for {data.days_in_month - data.day_of_month} more day(s)
+                  {current
+                    ? `used · ${money(Math.max(0, overall.monthly_limit - overall.spent))} left for ${data.days_in_month - data.day_of_month} more day(s)`
+                    : `used in ${label}`}
                 </p>
                 <div className="grow-space" />
                 <Progress percent={overall.percent} level={overall.level} />
@@ -263,6 +331,67 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* ---------- the chosen month at a glance ---------- */}
+      <div className="card" id="month">
+        <div className="card-head wrap">
+          <div>
+            <h3>
+              <CalendarMonthOutlined style={{ fontSize: 20, verticalAlign: '-4px', marginRight: 6 }} />
+              {label} at a glance
+            </h3>
+            <p>Every expense you recorded {current ? 'this month so far' : `in ${label}`}, day by day, and where it went.</p>
+          </div>
+          <Link to={`/expenses?start=${period.start}&end=${period.end}`} className="btn ghost small">
+            See the transactions <ArrowForwardRounded style={{ fontSize: 16 }} />
+          </Link>
+        </div>
+        <div className="glance-tiles">
+          <div>
+            <span>Spent</span>
+            <b>{money(period.total)}</b>
+            <small>{period.count} transaction{period.count === 1 ? '' : 's'}</small>
+          </div>
+          <div>
+            <span>Received</span>
+            <b className="net-pos">{money(data.sections.funds.this_month)}</b>
+          </div>
+          <div>
+            <span>Net</span>
+            <b className={data.sections.funds.this_month - period.total < 0 ? 'net-neg' : 'net-pos'}>{money(data.sections.funds.this_month - period.total)}</b>
+          </div>
+          <div>
+            <span>Average a day</span>
+            <b>{money(period.average_per_day)}</b>
+            <small>over {period.days} day{period.days === 1 ? '' : 's'}</small>
+          </div>
+        </div>
+        {period.count ? (
+          <div className="glance-grid">
+            <div>
+              <h4>Spending each day</h4>
+              <SpendingChart data={period.daily.map((d) => ({ label: Number(d.date.slice(8)), expenses: d.amount }))} />
+            </div>
+            <div>
+              <h4>Top payees &amp; items</h4>
+              <ul className="legend-list">
+                {period.by_item.slice(0, 8).map((it) => (
+                  <li key={it.item}>
+                    <span className="grow" style={{ wordBreak: 'break-word' }}>
+                      {it.item}
+                      <span className="muted small"> · {it.count}×</span>
+                    </span>
+                    <b>{money(it.amount)}</b>
+                  </li>
+                ))}
+              </ul>
+              {period.by_item.length > 8 && <p className="hint">and {period.by_item.length - 8} more. Name payees in Settings → Transaction aliases to group them.</p>}
+            </div>
+          </div>
+        ) : (
+          <p className="muted">No expenses recorded {current ? 'this month yet' : `in ${label}`}.</p>
+        )}
+      </div>
+
       {/* ---------- renewals + categories ---------- */}
       <div className="dash-row wide-left">
         {subsOn ? (
@@ -310,7 +439,7 @@ export default function Dashboard() {
           <div className="card-head">
             <div>
               <h3>Spending by category</h3>
-              <p>This month, including subscriptions and your share of split bills</p>
+              <p>{label}, including subscriptions and your share of split bills</p>
             </div>
           </div>
           {slices.length ? (
@@ -336,7 +465,7 @@ export default function Dashboard() {
               </ul>
             </>
           ) : (
-            <p className="muted">No spending this month yet.</p>
+            <p className="muted">No spending in {current ? 'this month' : label} yet.</p>
           )}
         </div>
       </div>
@@ -347,7 +476,7 @@ export default function Dashboard() {
           <div className="card-head">
             <div>
               <h3>Budgets</h3>
-              <p>This month’s use of each limit</p>
+              <p>{current ? 'This month’s' : `${label}’s`} use of each limit</p>
             </div>
             {writable && (
               <Link to="/settings#budgets" className="btn ghost small">
@@ -409,8 +538,9 @@ export default function Dashboard() {
               Month-on-month analysis
             </h3>
             <p>
-              Day {data.day_of_month} of {data.days_in_month}: compared with the same point last month, the whole of last month, and
-              your average over the six months before.
+              {current
+                ? `Day ${data.day_of_month} of ${data.days_in_month}: compared with the same point last month, the whole of last month, and your average over the six months before.`
+                : `All of ${label}, compared with all of ${prevLabel} and your average over the six months before.`}
             </p>
           </div>
           <div className="segmented" role="tablist" aria-label="What to compare">
@@ -424,23 +554,25 @@ export default function Dashboard() {
 
         <div className="cmp-tiles">
           <div>
-            <span>This month so far</span>
+            <span>{current ? 'This month so far' : label}</span>
             <b>{money(cmp.this_month)}</b>
-            {section === 'total' && <small>Heading for about {money(cmp.projected)}</small>}
+            {current && section === 'total' && <small>Heading for about {money(cmp.projected)}</small>}
           </div>
           <div>
-            <span>Same day last month</span>
+            <span>{current ? 'Same day last month' : `All of ${prevLabel}`}</span>
             <b>{money(cmp.last_month_to_date)}</b>
             <Change pct={cmp.vs_last_month} inverse={section === 'funds'} />
           </div>
-          <div>
-            <span>All of last month</span>
-            <b>{money(cmp.last_month)}</b>
-          </div>
+          {current && (
+            <div>
+              <span>All of last month</span>
+              <b>{money(cmp.last_month)}</b>
+            </div>
+          )}
           <div>
             <span>6-month average</span>
             <b>{money(cmp.avg_6m)}</b>
-            <Change pct={cmp.vs_avg} inverse={section === 'funds'} suffix={section === 'total' ? '(projected)' : '(to date)'} />
+            <Change pct={cmp.vs_avg} inverse={section === 'funds'} suffix={!current ? '' : section === 'total' ? '(projected)' : '(to date)'} />
           </div>
         </div>
 
@@ -463,8 +595,8 @@ export default function Dashboard() {
             <thead>
               <tr>
                 <th>Category</th>
-                <th className="num">This month</th>
-                <th className="num">Last month</th>
+                <th className="num">{short}</th>
+                <th className="num">{current ? 'Last month' : 'Month before'}</th>
                 <th className="num">6-month avg</th>
                 <th className="num">Change</th>
                 <th>Last 7 months</th>
@@ -488,7 +620,7 @@ export default function Dashboard() {
               {!data.categories.length && (
                 <tr>
                   <td colSpan={6} className="empty">
-                    No spending this month or last month.
+                    No spending in {current ? 'this month or last month' : `${label} or the month before`}.
                   </td>
                 </tr>
               )}
@@ -528,7 +660,7 @@ export default function Dashboard() {
               </div>
               <div>
                 <DonutLargeRounded style={{ fontSize: 20 }} />
-                <span>Your share this month</span>
+                <span>Your share {current ? 'this month' : `in ${label}`}</span>
                 <b>{money(data.sections.splits.this_month)}</b>
               </div>
             </div>
