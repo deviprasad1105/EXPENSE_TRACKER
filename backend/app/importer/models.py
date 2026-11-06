@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Identity, Index, Integer, Numeric, String
+from sqlalchemy import Date, DateTime, ForeignKey, Identity, Index, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
@@ -84,3 +84,22 @@ class ImportRecord(Base):
     account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
 
     batch: Mapped[ImportBatch] = relationship(back_populates="records")
+
+
+# What a user chose in an import, used to fill in the same choices next time
+CHOICE_CATEGORY = "CATEGORY"  # a category from a file → the app category it was put in
+CHOICE_TREATMENT = "TREATMENT"  # a category → the account its rows were moved to ("id:<n>" / "new:<KIND>:<name>")
+CHOICE_ACCOUNT = "ACCOUNT"  # an account name from a file → "id:<n>" or "none"
+
+
+class ImportChoice(Base):
+    __tablename__ = "import_choices"
+    __table_args__ = (UniqueConstraint("user_id", "kind", "source_key", name="uq_import_choice"),)
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    # The value from the file, normalised (any case, spacing)
+    source_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    value: Mapped[str] = mapped_column(String(100), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)

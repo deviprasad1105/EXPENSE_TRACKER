@@ -598,6 +598,18 @@ One row per row of the file.
 | `expense_id`, `fund_id`, `split_bill_id`, `transfer_id` | FK, SET NULL | What the row became (a split row: the expense for the user's share and the bill for the others; a transfer, or a category treated as one: an `ACCOUNT_TRANSFERS` row). |
 | `account_id` | FK, SET NULL | An opening-balance row: the account whose `opening_balance` it added `amount` (signed) to; Undo takes it off again. |
 
+### IMPORT_CHOICES
+What a user chose in an import, filled in again the next time the same category or account name comes up (e.g. the
+next year's file). One row per user, kind and value; unique on (`user_id`, `kind`, `source_key`).
+
+| Column | Type | Meaning |
+|---|---|---|
+| `user_id` | FK, CASCADE | |
+| `kind` | VARCHAR(10) | `CATEGORY` (a file's category → the app category), `TREATMENT` (a category → the account its rows were moved to) or `ACCOUNT` (a file's account name → an account). |
+| `source_key` | VARCHAR(100) | The value from the file, normalised (case and spacing ignored). |
+| `value` | VARCHAR(100) | The app category, or `id:<account id>`, `new:<KIND>:<name>` or `none`. |
+| `updated_at` | TIMESTAMP | Last time the choice was made. |
+
 ---
 
 ## Who can see and change what

@@ -49,6 +49,8 @@ class Table:
     name: str
     source: str  # "sheet", "table" or "text"
     rows: list[list[str]] = field(default_factory=list)
+    # Rows in the file's table when there were more than MAX_LINES (only those are read)
+    total: int | None = None
 
 
 def bad(message: str):
@@ -113,7 +115,9 @@ def _text(content: bytes) -> list[Table]:
         dialect = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|")
     except csv.Error:
         dialect = csv.excel
-    return [Table("CSV", "sheet", _clean(csv.reader(io.StringIO(text), dialect)))]
+    rows = _clean(csv.reader(io.StringIO(text), dialect))
+    total = sum(1 for _ in csv.reader(io.StringIO(text), dialect)) if len(rows) >= MAX_LINES else None
+    return [Table("CSV", "sheet", rows, total)]
 
 
 def _xlsx(content: bytes) -> list[Table]:
@@ -127,7 +131,7 @@ def _xlsx(content: bytes) -> list[Table]:
     for ws in wb.worksheets:
         rows = _clean(r for _, r in zip(range(MAX_LINES), ws.iter_rows(values_only=True)))
         if rows:
-            tables.append(Table(ws.title, "sheet", rows))
+            tables.append(Table(ws.title, "sheet", rows, ws.max_row if len(rows) >= MAX_LINES and ws.max_row else None))
     return tables
 
 
@@ -154,7 +158,7 @@ def _xls(content: bytes) -> list[Table]:
             rows.append(row)
         rows = _clean(rows)
         if rows:
-            tables.append(Table(sheet.name, "sheet", rows))
+            tables.append(Table(sheet.name, "sheet", rows, sheet.nrows if sheet.nrows > MAX_LINES else None))
     return tables
 
 

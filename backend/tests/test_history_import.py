@@ -490,7 +490,7 @@ def test_history_and_undo_keep_edited_records(client, make_user, db):
     assert detail["undo_removes"] == 3 and detail["undo_keeps"] == [{"reason": "Edited after the import", "rows": 1}]
 
     res = client.post(f"{API}/{done['id']}/undo", headers=headers(me)).json()
-    assert res == {"removed": 3, "kept": 1, "remaining": 0, "status": "PARTIALLY_UNDONE",
+    assert res == {"removed": 3, "kept": 1, "remaining": 0, "status": "PARTIALLY_UNDONE", "already_deleted": 0,
                    "accounts_removed": [], "accounts_deactivated": []}
     db.expire_all()
     assert [e.item_name for e in db.scalars(select(Expense))] == ["Metro card"]
@@ -524,7 +524,7 @@ def test_undo_keeps_records_in_a_locked_period(client, make_user, db):
     _, done = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}})
     client.put("/api/accounting/settings", json={"lock_date": str(DAY1)}, headers=headers(me))
     res = client.post(f"{API}/{done['id']}/undo", headers=headers(me)).json()
-    assert res == {"removed": 2, "kept": 2, "remaining": 0, "status": "PARTIALLY_UNDONE",
+    assert res == {"removed": 2, "kept": 2, "remaining": 0, "status": "PARTIALLY_UNDONE", "already_deleted": 0,
                    "accounts_removed": [], "accounts_deactivated": []}
 
 
@@ -549,7 +549,7 @@ def test_rows_imported_before_show_as_such_even_without_a_category(client, make_
     assert done["rows_imported"] == 2
     again = upload(client, me, "bank.csv", content).json()
     prev = client.post(f"{API}/preview", json={"rows": again["tables"][0]["rows"], "mapping": again["guess"]}, headers=headers(me)).json()
-    assert [(r["status"], r["can_import"]) for r in prev["records"]] == [("IMPORTED_BEFORE", False), ("IMPORTED_BEFORE", True)]
+    assert [(r["status"], r["can_import"]) for r in prev["records"]] == [("IMPORTED_BEFORE", False), ("IMPORTED_BEFORE", False)]  # never imported twice
     assert "Choose a category" in prev["records"][0]["warnings"][-1]
 
 
