@@ -140,27 +140,36 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
     Indian grouping, Dr / Cr, brackets or a minus sign. Without a description column, the notes are the description.
   - **Categories** not in the app yet must be mapped to one, or created; nothing is put in an unrelated category.
     *Use the suggestions* maps the obvious ones (Fuel → Transport, Internet → Bills…), *Create the rest as new*
-    creates the others in one click.
+    creates the others in one click. Less certain matches (Mobile → Bills, Gift → Shopping) are only shown as
+    "maybe" for you to decide, and a row much bigger than the rest of its category (a ₹54,647 phone among ₹299
+    recharges) is flagged under *To check*. Each row also has a note box for a note of your own.
   - **Money that isn't spending or income**: a category can be moved to an account instead: investments (mutual
     funds, shares, F&O, PF) to an **Investments** account, money paid for someone and paid back (reimbursements,
-    money returned) to **Money with others**. Its rows become transfers, so bank balances stay right and spending /
+    money returned, money given and repaid) to **Money with others**. Its rows become transfers, so bank balances stay right and spending /
     income aren't inflated. Suggested for the usual names; both account types post to Investments and Loans &
     Advances in the books.
   - **Accounts**: the file's account column by default (or the primary account, none, or one account for the whole
     file). Names match your accounts exactly (dots, spaces and capitals ignored) or by last 4 digits; the others can
-    be created during the import, with a suggested type (bank, cash, credit card, wallet, investments…). Accounts
-    created by an import are removed by a full Undo when nothing else uses them (deactivated instead when they have
-    entries in the books).
+    be created during the import, with a suggested type (bank, cash, credit card, wallet for FasTag / Paytm,
+    investments…). Accounts created by an import are removed by a full Undo when nothing else uses them (deactivated
+    instead when they have entries in the books). A bank, cash or wallet account that would end below zero is
+    flagged: some of its rows are probably missing (a FasTag's top-ups), so import its own statement too.
+  - **Your choices are remembered**: the categories, moves and accounts you chose are filled in again the next time
+    the same names come up, e.g. in the next year's file.
   - **Checks**: missing or unrecognised dates and amounts, future dates, locked accounting periods (rejected with
     the reason), records already in the app on the same date for the same amount (left out unless ticked), rows
-    imported before (re-uploading a file adds nothing), and balance / total lines.
+    imported before (shown under *Already imported* and never imported twice: re-uploading a file adds nothing),
+    and balance / total lines. A description longer than 100 characters is kept in full in the note.
   - **After the import**: records keep their original date and show on every page; the 3-day edit window starts on
     the import day; no budget alert is sent; they post to the books like any other record. A whole history from
     another app (e.g. a Money Manager export with transfers and opening balances) ends with every account at the
     balance the other app shows.
   - **Import history**: each upload with its file, date, status, rows imported / left out / failed (each with its
     reason) and totals. **Undo** removes only the records that upload created, keeping any edited since, reconciled
-    with a bank statement or in a locked accounting period (a big import is undone 200 records per request).
+    with a bank statement or in a locked accounting period (a big import is undone 200 records per request). With
+    Accounting on, the books keep the import and its reversal (as in Tally): the earlier years it added stay, and
+    the accounts it created are deactivated rather than deleted.
+- **Transfers between accounts** (*Settings → Accounts*) are listed 50 at a time, newest first.
 - **Profile**: change your name, email, password and **profile photo** (upload or remove).
   **Username**: you can change it yourself once every `USERNAME_LOCK_DAYS` (15) days. Inside that window you raise
   a request, and an admin approves or rejects it. An approved change restarts your 15 days.

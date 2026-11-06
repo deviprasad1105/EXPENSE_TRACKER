@@ -36,12 +36,14 @@ from ..models import (
     ACCOUNT_KINDS, Account, AccountTransfer, Expense, Fund, SplitBill, SplitGroup, SplitMember, SplitShare, User,
 )
 from ..routers.expenses import user_categories
+from ..services.accounts import balances
 from ..services.splits import split_evenly
 from ..timeutil import now_local, today_local
 from .models import (
     COMPLETED, COMPLETED_WITH_ERRORS, FAILED, IN_PROGRESS, KIND_EXPENSE, KIND_INCOME, KIND_OPENING, KIND_SPLIT,
     KIND_TRANSFER, PARTIALLY_UNDONE,
     REC_FAILED, REC_IMPORTED, REC_KEPT, REC_SKIPPED, REC_UNDONE, UNDONE, ImportBatch, ImportRecord,
+    CHOICE_ACCOUNT, CHOICE_CATEGORY, CHOICE_TREATMENT, ImportChoice,
 )
 from .parse import CENT, MAX_AMOUNT, is_me
 from .schemas import ImportOptions, RecordIn
@@ -53,7 +55,9 @@ NEEDS_CATEGORY = "NEEDS_CATEGORY"
 NEEDS_ACCOUNT = "NEEDS_ACCOUNT"
 DUPLICATE = "DUPLICATE"
 IMPORTED_BEFORE = "IMPORTED_BEFORE"
-IMPORTABLE = (READY, DUPLICATE, IMPORTED_BEFORE)
+# A row imported before can't be imported again; a possible duplicate (same date and amount as a record already in
+# the app) is left out unless the user ticks it
+IMPORTABLE = (READY, DUPLICATE)
 SPLIT_GROUP_NAME = "Imported split bills"
 OTHERS = "Others"
 _IN_CHUNK = 900  # Oracle allows at most 1000 values in an IN list
@@ -167,36 +171,46 @@ def suggest_kind(name: str) -> str:
 _KIND_HINTS = (
     (r"credit|card", "CREDIT_CARD"),
     (r"\bcash\b|petty", "CASH"),
-    (r"wallet|paytm|phonepe|gpay|google pay|amazon pay|upi", "WALLET"),
+    (r"wallet|paytm|phonepe|gpay|google pay|amazon pay|upi|fas\s*tag|toll|prepaid|freecharge|mobikwik|sodexo|pluxee", "WALLET"),
     (r"invest|mutual|groww|zerodha|demat|broker|\bmf\b|stock|share|\bppf\b|\bpf\b|\bfd\b|deposit", "INVESTMENT"),
     (r"lent|loan to|receivable|friends|others", "RECEIVABLE"),
 )
-# Suggested category for a category that isn't in the app, when one of these defaults exists
+# Suggested category for a category that isn't in the app, when one of these defaults exists. "Sure" suggestions
+# are applied by "Use the suggestions"; the others are only shown as "maybe" for the user to confirm (a "Mobile"
+# category may hold recharges or a new phone; gifts aren't really shopping)
 _CATEGORY_HINTS = (
     (r"fuel|petrol|diesel|\bcng\b|cab\b|taxi|\bauto\b|uber|\bola\b|metro|\bbus\b|train|transport|parking|fastag|toll|travel",
-     "Transport"),
-    (r"grocer|vegetable|kirana|supermarket|mart\b", "Groceries"),
-    (r"food|restaurant|dining|snack|cafe|zomato|swiggy|lunch|dinner|breakfast|tiffin|eat", "Food"),
-    (r"electric|water\b|gas\b|mobile|recharge|internet|broadband|\bdth\b|cable|bill|rent|utilit|phone", "Bills"),
-    (r"doctor|medic|health|pharma|hospital|clinic|dental|gym|fitness", "Health"),
-    (r"movie|entertain|netflix|prime|ott|game|music|concert|party", "Entertainment"),
-    (r"cloth|apparel|shoe|shopping|amazon|flipkart|myntra|beauty|cosmetic|electronic|gadget|gift", "Shopping"),
-    (r"cigar|smok|tobacco", "Smoking"),
+     "Transport", True),
+    (r"grocer|vegetable|kirana|supermarket|mart\b", "Groceries", True),
+    (r"food|restaurant|dining|snack|cafe|zomato|swiggy|lunch|dinner|breakfast|tiffin|eat", "Food", True),
+    (r"electric|water\b|gas\b|recharge|internet|broadband|\bdth\b|cable|bill|rent|utilit", "Bills", True),
+    (r"doctor|medic|health|pharma|hospital|clinic|dental|gym|fitness", "Health", True),
+    (r"movie|entertain|netflix|prime|ott|game|music|concert|party", "Entertainment", True),
+    (r"cloth|apparel|shoe|shopping|amazon|flipkart|myntra", "Shopping", True),
+    (r"cigar|smok|tobacco", "Smoking", True),
+    (r"mobile|phone", "Bills", False),
+    (r"beauty|cosmetic|electronic|gadget|gift", "Shopping", False),
 )
+# A row this much bigger than the usual one of its category is flagged for the user to check its category
+_LARGE_ROW = Decimal(10_000)
+_LARGE_FACTOR = 20
 # Categories that are usually not spending or income: suggested as transfers to an account of this kind
 _TREATMENT_HINTS = (
     (r"invest|mutual|\bsip\b|\bshares?\b|stock|f\s*&\s*o|trading|demat|\bpf\b|\bppf\b|\bfd\b|fixed deposit|\bipo\b|"
      r"brokerage|bal tnf", "INVESTMENT", "Investments"),
-    (r"reimburse|on behalf|money return|returned|\blent\b|\blend|borrow|money received|paid back|transfer money and "
-     r"received cash|ticket money", "RECEIVABLE", "Money with others"),
+    (r"reimburse|on behalf|money return|returned|\blent\b|\blend|borrow|money received|money given|cash received|"
+     r"paid back|transfer money and received cash|ticket money", "RECEIVABLE", "Money with others"),
 )
 
 
-def suggest_category(raw: str, known: dict[str, str]) -> str | None:
+def suggest_category(raw: str, known: dict[str, str], sure: bool = True) -> str | None:
+    """The suggested app category: a sure one (sure=True), or a "maybe" for the user to confirm (sure=False)."""
     n = (raw or "").casefold()
-    for pattern, category in _CATEGORY_HINTS:
-        if re.search(pattern, n) and category.casefold() in known:
-            return known[category.casefold()]
+    for pattern, category, strong in _CATEGORY_HINTS:
+        if re.search(pattern, n):
+            if strong != sure:
+                return None
+            return known.get(category.casefold())
     return None
 
 
@@ -278,7 +292,10 @@ class _Accounts:
             out.append({
                 "value": v, "rows": n, "account_id": int(ref[3:]) if ref and ref.startswith("id:") else None,
                 "ref": ref, "mapped": k in self.map, "create_kind": self.create.get(k),
-                "suggested_kind": suggest_kind(v), "new_name": clean_account_name(v),
+                "suggested_kind": suggest_kind(v), "new_name": clean_account_name(v), "matched_name": self.label(ref)
+                if ref and ref.startswith("id:") else None,
+                "matched_inactive": bool(ref and ref.startswith("id:") and not next(
+                    (a.is_active for a in self.accounts if a.id == int(ref[3:])), True)),
             })
         return out
 
@@ -328,6 +345,12 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         if opts.account_mode == "none":
             return "none"
         return f"id:{primary}" if primary else "none"
+
+    amounts: dict[str, list] = defaultdict(list)
+    for r in records:
+        if r.kind in (KIND_EXPENSE, KIND_SPLIT) and r.amount and r.amount > 0:
+            amounts[_key(r.category)].append(r.amount)
+    typical = {k: sorted(v)[len(v) // 2] for k, v in amounts.items() if len(v) >= 4}
 
     out = []
     cat_stats: dict[str, Counter] = defaultdict(Counter)
@@ -455,6 +478,11 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         if treated and state in (READY, DUPLICATE, IMPORTED_BEFORE):
             warnings.append(f"Not spending or income: moved {'to' if r.kind == KIND_EXPENSE else 'from'} {acc.label(treated)}")
 
+        to_check = bool(r.kind in (KIND_EXPENSE, KIND_SPLIT) and not treated and r.amount and ck in typical
+                        and r.amount >= max(_LARGE_ROW, typical[ck] * _LARGE_FACTOR) and state != IMPORTED_BEFORE)
+        if to_check:
+            warnings.append(f"Much bigger than the other “{raw_cat}” rows (usually about ₹{typical[ck]:,.0f}): "
+                            "check that this is the right category")
         can = state in IMPORTABLE and can_map
         default = can and state == READY and not r.parse_warnings
         out.append({
@@ -464,11 +492,19 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
             "effective_kind": KIND_TRANSFER if treated else r.kind,
             "account_ref": account_ref, "to_account_ref": to_ref,
             "account_id": _ref_id(account_ref), "to_account_id": _ref_id(to_ref),
-            "account_label": acc.label(account_ref), "to_account_label": acc.label(to_ref),
+            "account_label": acc.label(account_ref), "to_account_label": acc.label(to_ref), "to_check": to_check,
         })
 
     counts = Counter(o["status"] for o in out)
     chosen = [o for o in out if o["can_import"] and o["include"]]
+    category_values = [
+        {"value": v, "rows": s["rows"], "expense_rows": s["expense_rows"], "income_rows": s["income_rows"],
+         "mapped_to": cat_map.get(_key(v)) or known.get(_key(v)), "known": _key(v) in known,
+         "treatment": treat.get(_key(v)), "suggested": suggest_category(v, known),
+         "maybe": suggest_category(v, known, sure=False), "suggested_treatment": suggest_treatment(v)}
+        for v, s in sorted(cat_stats.items(), key=lambda x: (-x[1]["rows"], x[0]))
+    ]
+    account_values = acc.values()
     kinds = Counter(o["effective_kind"] for o in chosen)
     return {
         "records": out,
@@ -480,15 +516,13 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
             "expense_total": str(sum((Decimal(o["amount"]) for o in chosen if o["effective_kind"] in (KIND_EXPENSE, KIND_SPLIT)), Decimal(0))),
             "income_total": str(sum((Decimal(o["amount"]) for o in chosen if o["effective_kind"] == KIND_INCOME), Decimal(0))),
             "transfer_total": str(sum((Decimal(o["amount"]) for o in chosen if o["effective_kind"] == KIND_TRANSFER), Decimal(0))),
+            "to_check": sum(1 for o in out if o["to_check"]),
+            "account_warnings": _below_zero(db, user.id, accounts, chosen),
         },
         "categories": sorted(known.values(), key=str.casefold),
-        "category_values": [
-            {"value": v, "rows": s["rows"], "expense_rows": s["expense_rows"], "income_rows": s["income_rows"],
-             "mapped_to": cat_map.get(_key(v)) or known.get(_key(v)), "known": _key(v) in known,
-             "treatment": treat.get(_key(v)), "suggested": suggest_category(v, known), "suggested_treatment": suggest_treatment(v)}
-            for v, s in sorted(cat_stats.items(), key=lambda x: (-x[1]["rows"], x[0]))
-        ],
-        "account_values": acc.values(),
+        "category_values": category_values,
+        "account_values": account_values,
+        "remembered": _remembered(db, user.id, accounts, category_values, account_values),
         "accounts": [{"id": a.id, "name": a.name, "last4": a.last4, "kind": a.kind, "is_primary": a.is_primary}
                      for a in accounts if a.is_active],
         "account_kinds": list(ACCOUNT_KINDS),
@@ -497,6 +531,104 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         "lock_date": lock,
         "max_records": settings.import_max_records,
     }
+
+
+# Accounts that can't normally go below zero (a card or a loan can)
+_NO_OVERDRAFT = {"SAVINGS", "CURRENT", "SALARY", "CASH", "WALLET"}
+
+
+def _below_zero(db: Session, user_id: int, accounts: list[Account], chosen: list[dict]) -> list[dict]:
+    """Accounts (bank, cash, wallet) that would end below zero once the chosen rows are imported: usually rows
+    missing from the file (a wallet's top-ups, a bank's own statement), which the user is told to import too."""
+    change: dict[str, Decimal] = defaultdict(Decimal)
+    for o in chosen:
+        amount = Decimal(o["amount"])
+        src, dst = o["account_ref"], o["to_account_ref"]
+        if o["effective_kind"] == KIND_TRANSFER:
+            change[src] -= amount
+            change[dst] += amount
+        elif o["kind"] == KIND_OPENING or o["effective_kind"] == KIND_INCOME:
+            change[src] += amount
+        elif o["effective_kind"] in (KIND_EXPENSE, KIND_SPLIT):
+            change[src] -= Decimal(o["my_share"]) if o["kind"] == KIND_SPLIT and o["my_share"] is not None else amount
+    by_id = {a.id: a for a in accounts}
+    now = balances(db, user_id, today_local().replace(day=1)) if any(r and r.startswith("id:") for r in change) else {}
+    out = []
+    for ref, delta in change.items():
+        if not ref or ref == "none":
+            continue
+        if ref.startswith("id:"):
+            account = by_id.get(int(ref[3:]))
+            if account is None:
+                continue
+            kind, name, start = account.kind, account.name, now.get(account.id, {}).get("balance", Decimal(0))
+        else:
+            _, kind, name = ref.split(":", 2)
+            start = Decimal(0)
+        end = start + delta
+        if kind in _NO_OVERDRAFT and end < 0:
+            out.append({"account": name, "kind": kind, "balance": str(end.quantize(CENT))})
+    return sorted(out, key=lambda x: x["account"].casefold())
+
+
+def _remembered(db: Session, user_id: int, accounts: list[Account], category_values: list[dict],
+                account_values: list[dict]) -> dict:
+    """The choices made in the user's earlier imports for the categories and accounts of this file, keyed like the
+    page's options (the value in lower case). Accounts no longer active are left out."""
+    saved = {(c.kind, c.source_key): c.value for c in db.scalars(select(ImportChoice).where(ImportChoice.user_id == user_id))}
+    if not saved:
+        return {}
+    active = {a.id for a in accounts if a.is_active}
+
+    def ok_ref(ref: str) -> bool:
+        if ref.startswith("id:"):
+            return ref[3:].isdigit() and int(ref[3:]) in active
+        return ref == "none" or ref.startswith("new:")
+
+    out = {"category_map": {}, "category_treatment": {}, "account_map": {}}
+    for c in category_values:
+        v, k = c["value"], _key(c["value"])
+        if (CHOICE_CATEGORY, k) in saved and c["expense_rows"] and not c["known"]:
+            out["category_map"][v.lower()] = saved[(CHOICE_CATEGORY, k)]
+        if (CHOICE_TREATMENT, k) in saved and ok_ref(saved[(CHOICE_TREATMENT, k)]) and saved[(CHOICE_TREATMENT, k)] != "none":
+            out["category_treatment"][v.lower()] = saved[(CHOICE_TREATMENT, k)]
+    for a in account_values:
+        ref = saved.get((CHOICE_ACCOUNT, _akey(a["value"])))
+        if ref and ok_ref(ref) and not ref.startswith("new:") and a["ref"] is None:
+            out["account_map"][a["value"].lower()] = None if ref == "none" else int(ref[3:])
+    return {k: v for k, v in out.items() if v}
+
+
+def _remember(db: Session, user: User, opts: ImportOptions) -> None:
+    """Keep this import's choices for the next one (an account created by the import is kept as that account)."""
+    accounts = {_akey(a.name): a for a in db.scalars(select(Account).where(Account.user_id == user.id))}
+    want: dict[tuple[str, str], str] = {}
+    for k, v in opts.category_map.items():
+        if v and v.strip() and _key(k):
+            want[(CHOICE_CATEGORY, _key(k))] = v.strip()[:50]
+    for k, v in opts.category_treatment.items():
+        if _key(k):
+            ref = v or "none"
+            if ref.startswith("new:") and len(ref.split(":", 2)) == 3 and _akey(ref.split(":", 2)[2]) in accounts:
+                ref = f"id:{accounts[_akey(ref.split(':', 2)[2])].id}"
+            want[(CHOICE_TREATMENT, _key(k))] = ref[:100]
+    for k, v in opts.account_map.items():
+        if _akey(k):
+            want[(CHOICE_ACCOUNT, _akey(k))] = "none" if v is None else f"id:{v}"
+    for k in opts.create_accounts:
+        a = accounts.get(_akey(clean_account_name(k)))
+        if a is not None and _akey(k):
+            want[(CHOICE_ACCOUNT, _akey(k))] = f"id:{a.id}"
+    if not want:
+        return
+    have = {(c.kind, c.source_key): c for c in db.scalars(select(ImportChoice).where(ImportChoice.user_id == user.id))}
+    for (kind, key), value in want.items():
+        key = key[:100]
+        row = have.get((kind, key))
+        if row is None:
+            db.add(ImportChoice(user_id=user.id, kind=kind, source_key=key, value=value))
+        elif row.value != value:
+            row.value, row.updated_at = value, now_local()
 
 
 # ---------- importing ----------
@@ -561,9 +693,12 @@ def _account(db: Session, user: User, ref: str | None, ctx: dict) -> Account | N
 
 def _create(db: Session, user: User, r: dict, ctx: dict) -> dict:
     d = r["date"]
-    description = " ".join((r["description"] or "").split())[:100]
+    full = " ".join((r["description"] or "").split())
+    description = full[:100]
     amount = Decimal(r["amount"])
     note = r["note"]
+    if len(full) > 100:  # the description holds 100 characters: the whole text goes in the note
+        note = " – ".join(x for x in (full, note) if x)[:500]
     if r["kind"] == KIND_OPENING:
         account = _account(db, user, r["account_ref"], ctx)
         account.opening_balance = Decimal(account.opening_balance or 0) + amount
@@ -571,7 +706,7 @@ def _create(db: Session, user: User, r: dict, ctx: dict) -> dict:
         return {"account_id": account.id}
     if r["effective_kind"] == KIND_TRANSFER:
         src, dst = _account(db, user, r["account_ref"], ctx), _account(db, user, r["to_account_ref"], ctx)
-        text = " – ".join(x for x in (description, note) if x) or None
+        text = (note if len(full) > 100 else " – ".join(x for x in (description, note) if x)) or None
         transfer = AccountTransfer(user_id=user.id, from_account_id=src.id, to_account_id=dst.id, amount=amount,
                                    transfer_date=d, note=text and text[:200])
         db.add(transfer)
@@ -580,7 +715,7 @@ def _create(db: Session, user: User, r: dict, ctx: dict) -> dict:
     r = {**r, "account_id": _account(db, user, r["account_ref"], ctx).id if r["account_ref"] not in (None, "none") else None}
     if r["kind"] == KIND_INCOME:
         source = (r["category"] or "").strip()[:100] or "Income"
-        fund_note = " – ".join(x for x in (description, note) if x)[:500] or None
+        fund_note = (note if len(full) > 100 else " – ".join(x for x in (description, note) if x))[:500] or None
         fund = Fund(user_id=user.id, fund_date=d, amount=amount, source=source, note=fund_note, account_id=r["account_id"])
         db.add(fund)
         db.flush()
@@ -661,10 +796,14 @@ def import_chunk(db: Session, user: User, batch: ImportBatch, records: list[Reco
             elif r["can_import"]:
                 db.add(_record(batch, r, REC_SKIPPED, "; ".join(r["warnings"]) or "Left out by you"))
                 counts[REC_SKIPPED] += 1
+            elif r["status"] == IMPORTED_BEFORE:  # never imported twice
+                db.add(_record(batch, r, REC_SKIPPED, "Already imported from an earlier upload"))
+                counts[REC_SKIPPED] += 1
             else:
                 db.add(_record(batch, r, REC_FAILED, "; ".join(r["problems"])))
                 counts[REC_FAILED] += 1
         _add_counts(batch, counts, exp_total, inc_total)
+        _remember(db, user, opts)
         if ctx.get("created_account_ids"):
             ids = [x for x in (batch.created_accounts or "").split(",") if x] + [str(i) for i in ctx["created_account_ids"]]
             while len(",".join(ids)) > 500:  # whole ids only (the rest simply stay after an Undo)
@@ -772,7 +911,7 @@ def undo(db: Session, batch: ImportBatch, limit: int | None = None) -> dict:
     limit = limit or UNDO_CHUNK
     imported = [r for r in batch.records if r.status == REC_IMPORTED]
     todo = imported[:limit] if imported else [r for r in batch.records if r.status == REC_KEPT][:limit]
-    removed = kept = 0
+    removed = kept = gone = 0
     for rec, objs, reason in _undo_plan(db, batch, todo):
         if reason:
             rec.status, rec.reason = REC_KEPT, reason
@@ -786,7 +925,10 @@ def undo(db: Session, batch: ImportBatch, limit: int | None = None) -> dict:
                 db.delete(o)
         rec.status = REC_UNDONE
         rec.reason = "Removed by Undo" if objs else "Already deleted before Undo"
-        removed += 1
+        if objs:
+            removed += 1
+        else:
+            gone += 1
     batch.rows_undone = sum(1 for r in batch.records if r.status == REC_UNDONE)
     remaining = sum(1 for r in batch.records if r.status == REC_IMPORTED)
     still = remaining + sum(1 for r in batch.records if r.status == REC_KEPT)
@@ -794,7 +936,7 @@ def undo(db: Session, batch: ImportBatch, limit: int | None = None) -> dict:
     batch.undone_at = now_local()
     db.commit()  # reverses the vouchers of what was removed
     accounts = _drop_created_accounts(db, batch) if batch.status == UNDONE else {"removed": [], "deactivated": []}
-    return {"removed": removed, "kept": kept, "remaining": remaining, "status": batch.status,
+    return {"removed": removed, "kept": kept, "already_deleted": gone, "remaining": remaining, "status": batch.status,
             "accounts_removed": accounts["removed"], "accounts_deactivated": accounts["deactivated"]}
 
 

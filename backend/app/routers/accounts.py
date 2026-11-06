@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import delete, func, or_, select, true, update
 from sqlalchemy.orm import Session
 
@@ -110,11 +110,16 @@ def delete_account(account_id: int, viewer: User = Depends(get_current_user), db
 
 # ---------- transfers between own accounts ----------
 @router.get("/transfers", response_model=list[TransferOut])
-def list_transfers(user_id: int | None = None, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_transfers(response: Response, user_id: int | None = None, offset: int = Query(0, ge=0),
+                   limit: int = Query(200, ge=1, le=200), viewer: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    """Newest first, `limit` at a time from `offset`; the X-Total-Count header holds how many there are in all."""
     target = resolve_target(db, viewer, user_id)
+    where = AccountTransfer.user_id == target.user.id
+    response.headers["X-Total-Count"] = str(db.scalar(select(func.count(AccountTransfer.id)).where(where)) or 0)
     return db.scalars(
-        select(AccountTransfer).where(AccountTransfer.user_id == target.user.id)
-        .order_by(AccountTransfer.transfer_date.desc(), AccountTransfer.id.desc()).limit(200)
+        select(AccountTransfer).where(where)
+        .order_by(AccountTransfer.transfer_date.desc(), AccountTransfer.id.desc()).offset(offset).limit(limit)
     ).all()
 
 

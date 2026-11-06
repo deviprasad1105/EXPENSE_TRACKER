@@ -53,27 +53,37 @@ export default function ImportHistory() {
     if (!detail.undo_removes) {
       return setMsg({ type: 'warn', text: `Nothing can be undone in ${b.filename}. ${detail.undo_keeps.map((k) => `${k.rows}: ${k.reason}`).join('; ')}` })
     }
-    if (!window.confirm(`Undo ${b.filename}?\n\n${detail.undo_removes} record(s) it created will be removed.${keeps ? `\n${keeps}` : ''}\n\nOther records in the app are not touched.`)) return
+    const books = detail.books
+      ? '\n\nYour accounting books keep a record of this import and its reversal (as in Tally), so the earlier years it added stay, and accounts it created are deactivated rather than deleted.'
+      : ''
+    if (!window.confirm(`Undo ${b.filename}?\n\n${detail.undo_removes} record(s) it created will be removed.${keeps ? `\n${keeps}` : ''}\n\nOther records in the app are not touched.${books}`)) return
     // A big import is undone a few hundred records per request
     let removed = 0
     let kept = 0
+    let gone = 0
     let last = null
     try {
       for (;;) {
         const res = (await api.post(`/imports/${b.id}/undo`)).data
         last = res
+        gone += res.already_deleted || 0
         removed += res.removed
         kept += res.kept
         if (!res.remaining) break
         setMsg({ type: 'info', text: `Undoing ${b.filename}… ${removed} removed, ${res.remaining} to go` })
       }
-      const gone = last?.accounts_removed || []
+      const dropped = last?.accounts_removed || []
       const off = last?.accounts_deactivated || []
       const accounts = [
-        gone.length ? ` Account(s) it created removed: ${gone.join(', ')}.` : '',
+        dropped.length ? ` Account(s) it created removed: ${dropped.join(', ')}.` : '',
         off.length ? ` Deactivated (they have entries in your books): ${off.join(', ')}.` : '',
       ].join('')
-      setMsg({ type: 'ok', text: `${removed} record(s) removed${kept ? `, ${kept} kept (see the details)` : ''}.${accounts}` })
+      const parts = [
+        removed || !gone ? `${removed} record(s) removed` : '',
+        gone ? `${gone} already deleted before the Undo` : '',
+        kept ? `${kept} kept (see the details)` : '',
+      ].filter(Boolean)
+      setMsg({ type: 'ok', text: `${parts.join(', ')}.${accounts}` })
     } catch (err) {
       setMsg({ type: 'error', text: `${errorMessage(err)}${removed ? ` (${removed} record(s) were removed before this; Undo again to continue)` : ''}` })
     }
