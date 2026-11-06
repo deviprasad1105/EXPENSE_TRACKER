@@ -101,6 +101,6 @@ export const useAuth = () => useContext(AuthContext)
 export const hasFeature = (user, feature) =>
   !!user &&
   (user.role === 'ADMIN' ||
-    (!!user[`feature_${feature}`] && (feature !== 'accounting' || !!user.feature_expense)))
+    (!!user[`feature_${feature}`] && (!['accounting', 'upi'].includes(feature) || !!user.feature_expense)))
 /** Split bills can be used by anyone added to a group, but only users with the plan can create groups. */
 export const canUseSplits = (user) => hasFeature(user, 'split') || !!user?.in_split_group

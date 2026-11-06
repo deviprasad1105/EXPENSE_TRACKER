@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import AccountBalanceOutlined from '@mui/icons-material/AccountBalanceOutlined'
 import AccountBalanceWalletOutlined from '@mui/icons-material/AccountBalanceWalletOutlined'
 import AccountTreeOutlined from '@mui/icons-material/AccountTreeOutlined'
@@ -18,6 +18,9 @@ import LogoutOutlined from '@mui/icons-material/LogoutOutlined'
 import MenuBookOutlined from '@mui/icons-material/MenuBookOutlined'
 import NotificationsNoneOutlined from '@mui/icons-material/NotificationsNoneOutlined'
 import PersonOutlineOutlined from '@mui/icons-material/PersonOutlineOutlined'
+import HomeOutlined from '@mui/icons-material/HomeOutlined'
+import ChevronRightRounded from '@mui/icons-material/ChevronRightRounded'
+import PhonelinkRingOutlined from '@mui/icons-material/PhonelinkRingOutlined'
 import ReceiptLongOutlined from '@mui/icons-material/ReceiptLongOutlined'
 import SettingsOutlined from '@mui/icons-material/SettingsOutlined'
 import SpaceDashboardOutlined from '@mui/icons-material/SpaceDashboardOutlined'
@@ -31,6 +34,7 @@ import { canUseSplits, hasFeature, useAuth } from '../auth'
 import Avatar from './Avatar'
 import Tour from './Tour'
 import Logo from './Logo'
+import { PageBannerContext } from './ui'
 
 const ACCESS = {
   OWNER: { label: 'Your data', cls: 'ok' },
@@ -147,6 +151,7 @@ export default function Layout() {
               ['/expenses', 'Expenses', ReceiptLongOutlined, 'nav-expenses'],
             ]
           : []),
+        ...(hasFeature(user, 'upi') ? [['/upi', 'UPI Tracker', PhonelinkRingOutlined, 'nav-upi']] : []),
         ...(split ? [['/splits', 'Split Bills', CallSplitOutlined, 'nav-splits']] : []),
         ...(subscription ? [['/subscriptions', 'Subscriptions', EventRepeatOutlined, 'nav-subscriptions']] : []),
       ],
@@ -227,7 +232,9 @@ export default function Layout() {
 
       <main className="main">
         <header className="topbar">
-          {canSwitch && (expense || subscription) && !location.pathname.startsWith('/splits') ? (
+          <div className="topbar-left">
+          <Breadcrumbs sections={sections} />
+          {canSwitch && (expense || subscription) && !location.pathname.startsWith('/splits') && (
           <div className="viewing" data-tour="view-switch">
             <VisibilityOutlined style={{ fontSize: 18 }} className="muted" />
             <select value={target?.id || ''} onChange={(e) => setViewUserId(Number(e.target.value))} aria-label="Whose data to view">
@@ -239,9 +246,8 @@ export default function Layout() {
             </select>
             <span className={`badge ${access.cls}`}>{access.label}</span>
           </div>
-          ) : (
-            <span />
           )}
+          </div>
           <div className="topbar-actions">
             <button className="icon-btn" onClick={toggleTheme} title="Toggle dark mode">
               {user.theme === 'dark' ? <LightModeOutlined style={{ fontSize: 20 }} /> : <DarkModeOutlined style={{ fontSize: 20 }} />}
@@ -280,18 +286,85 @@ export default function Layout() {
           </div>
         </header>
 
-        {todayMissing && location.pathname !== '/daily' && (
-          <div className="alert warn banner">
-            <WarningAmberRounded style={{ fontSize: 20 }} />
-            <span className="grow">You haven’t added any expenses for today.</span>
-            <Link to="/daily">Add them now →</Link>
-          </div>
-        )}
         <div className="content">
-          <Outlet />
+          {/* The page shows this notice right after its header */}
+          <PageBannerContext.Provider
+            value={
+              todayMissing && location.pathname !== '/daily' ? (
+                <div className="alert warn banner">
+                  <WarningAmberRounded style={{ fontSize: 20 }} />
+                  <span className="grow">You haven’t added any expenses for today.</span>
+                  <Link to="/daily">Add them now →</Link>
+                </div>
+              ) : null
+            }
+          >
+            <Outlet />
+          </PageBannerContext.Provider>
         </div>
       </main>
       {tourOpen && <Tour onClose={closeTour} />}
     </div>
+  )
+}
+
+// Parts of a page reached by a link (/settings#upi, /import/history, /splits/12) and what to call them
+const SUBPAGES = { history: 'Import history' }
+const HASHES = {
+  '/settings': { accounts: 'Bank accounts', budgets: 'Budgets & alerts', categories: 'Categories', aliases: 'Transaction aliases', upi: 'UPI tracker' },
+}
+
+/** Home › menu section › page › part of the page, built from the sidebar menu so the two always agree. */
+function Breadcrumbs({ sections }) {
+  const location = useLocation()
+  const [search] = useSearchParams()
+  const pages = sections.flatMap((s) => s.items.map(([to, label]) => ({ to, label, section: s.title })))
+  if (!pages.length) return null
+  const path = location.pathname.replace(/\/+$/, '') || '/'
+  const page =
+    pages.find((p) => p.to === path) ||
+    pages.filter((p) => p.to !== '/' && path.startsWith(`${p.to}/`)).sort((a, b) => b.to.length - a.to.length)[0]
+  if (!page) return null
+
+  const home = pages[0]
+  const crumbs = []
+  if (page.section !== page.label) crumbs.push({ label: page.section })
+  crumbs.push({ label: page.label, to: page.to })
+  if (path !== page.to) {
+    const rest = path.slice(page.to.length + 1)
+    crumbs.push({ label: SUBPAGES[rest] || (/^\d+$/.test(rest) && page.to === '/splits' ? 'Group' : rest) })
+  }
+  const month = search.get('month')
+  if (path === '/' && /^\d{4}-\d{2}$/.test(month || '')) {
+    crumbs.push({ label: new Date(`${month}-01T00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) })
+  }
+  const part = HASHES[path]?.[location.hash.slice(1)]
+  if (part) crumbs.push({ label: part })
+
+  return (
+    <nav aria-label="Breadcrumb">
+      <ol className="breadcrumb">
+        <li>
+          <Link to={home.to} title={`Home (${home.label})`} aria-label="Home">
+            <HomeOutlined style={{ fontSize: 16 }} />
+          </Link>
+        </li>
+        {crumbs.map((c, i) => {
+          const last = i === crumbs.length - 1
+          return (
+            <li key={`${c.label}-${i}`}>
+              <ChevronRightRounded className="sep" style={{ fontSize: 16 }} />
+              {last ? (
+                <span aria-current="page">{c.label}</span>
+              ) : c.to ? (
+                <Link to={c.to}>{c.label}</Link>
+              ) : (
+                <span className="plain">{c.label}</span>
+              )}
+            </li>
+          )
+        })}
+      </ol>
+    </nav>
   )
 }

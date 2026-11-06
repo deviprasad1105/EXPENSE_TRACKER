@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -45,7 +45,17 @@ def dashboard(
 
 
 @router.get("/insights")
-def insights(user_id: int | None = None, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """This month compared with last month and the six months before: expenses, subscriptions, split bills, budgets."""
+def insights(
+    user_id: int | None = None,
+    month: str | None = Query(None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$", description="YYYY-MM; default this month"),
+    viewer: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """A month (this one by default) compared with the month before and the six before that: expenses, subscriptions,
+    split bills, budgets."""
     target = resolve_target(db, viewer, user_id)
-    return build(db, target.user.id, today_local())
+    today = today_local()
+    chosen = date(int(month[:4]), int(month[5:]), 1) if month else None
+    if chosen and chosen > today:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose this month or an earlier one")
+    return build(db, target.user.id, today, chosen)

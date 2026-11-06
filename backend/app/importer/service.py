@@ -36,6 +36,7 @@ from ..models import (
     ACCOUNT_KINDS, Account, AccountTransfer, Expense, Fund, SplitBill, SplitGroup, SplitMember, SplitShare, User,
 )
 from ..routers.expenses import user_categories
+from ..services.aliases import find_alias, label_new, payee_key, suggest_alias, user_aliases
 from ..services.accounts import balances
 from ..services.splits import split_evenly
 from ..timeutil import now_local, today_local
@@ -330,6 +331,8 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
     imported_before = _imported_fingerprints(db, user.id, fps, batch_id)
     existing = _existing(db, user.id, records, batch_id)
     my_names = {_key(user.full_name), _key(user.username)} - {""}
+    aliases = user_aliases(db, user.id)
+    payees: dict[str, dict] = {}
 
     def payer_of(r: RecordIn) -> str | None:
         """Who paid a split row: None = the user."""
@@ -441,20 +444,41 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
             state = IMPORTED_BEFORE
             warnings.append("Already imported from an earlier upload")
 
+        # The payee (UPI ID or name in the description) and the alias that will name it
+        key = alias = None
+        if r.kind in (KIND_EXPENSE, KIND_INCOME, KIND_SPLIT) and not treated and description:
+            key = payee_key(description)
+            alias = find_alias(aliases, key, description)
+            if key and state not in (INVALID,):
+                p = payees.setdefault(key, {
+                    "payee_key": key, "description": description[:100], "sent_count": 0, "sent_total": Decimal(0),
+                    "received_count": 0, "received_total": Decimal(0), "alias_id": alias and alias.id,
+                    "alias": alias and alias.alias, "alias_category": alias and alias.category,
+                    "suggestion": alias.alias if alias else suggest_alias(key, description),
+                })
+                side = "received" if r.kind == KIND_INCOME else "sent"
+                p[f"{side}_count"] += 1
+                p[f"{side}_total"] += abs(r.amount or 0)
+        # A row without a category of its own takes its alias's category, so it needs no mapping
+        alias_category = alias.category if alias and alias.category and not raw_cat else None
+
         category = None
-        if r.kind in (KIND_EXPENSE, KIND_INCOME, KIND_SPLIT):
+        if r.kind in (KIND_EXPENSE, KIND_INCOME, KIND_SPLIT) and not (alias_category and r.kind != KIND_INCOME):
             stats = cat_stats[raw_cat]
             stats["rows"] += 1
             stats["income_rows" if r.kind == KIND_INCOME else "expense_rows"] += 1
         if r.kind in (KIND_EXPENSE, KIND_SPLIT) and not treated:
-            if ck in cat_map and cat_map[ck]:
+            if alias_category:
+                category = alias_category[:50]
+            elif ck in cat_map and cat_map[ck]:
                 category = cat_map[ck][:50]
             elif ck and ck in known:
                 category = known[ck]
             elif state in (READY, IMPORTED_BEFORE):
                 mapping_problems.append((NEEDS_CATEGORY, f"Choose a category for “{raw_cat}”" if raw_cat else "Choose a category for rows without one"))
         elif r.kind == KIND_INCOME and not treated:
-            category = (cat_map.get(ck) or raw_cat or "Income")[:100]
+            # Money received is named by its source: the file's category, else (a bank statement) its description
+            category = ((cat_map.get(ck) or raw_cat) if raw_cat else (description or cat_map.get(ck) or "Income"))[:100]
 
         can_map = not mapping_problems
         if mapping_problems and state == READY:
@@ -493,6 +517,7 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
             "account_ref": account_ref, "to_account_ref": to_ref,
             "account_id": _ref_id(account_ref), "to_account_id": _ref_id(to_ref),
             "account_label": acc.label(account_ref), "to_account_label": acc.label(to_ref), "to_check": to_check,
+            "payee_key": key, "alias_id": alias and alias.id, "alias_name": alias and alias.alias,
         })
 
     counts = Counter(o["status"] for o in out)
@@ -523,6 +548,10 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         "category_values": category_values,
         "account_values": account_values,
         "remembered": _remembered(db, user.id, accounts, category_values, account_values),
+        "payees": sorted(
+            ({**p, "sent_total": str(p["sent_total"]), "received_total": str(p["received_total"])} for p in payees.values()),
+            key=lambda p: (-(p["sent_count"] + p["received_count"]), p["payee_key"]),
+        ),
         "accounts": [{"id": a.id, "name": a.name, "last4": a.last4, "kind": a.kind, "is_primary": a.is_primary}
                      for a in accounts if a.is_active],
         "account_kinds": list(ACCOUNT_KINDS),
@@ -714,9 +743,13 @@ def _create(db: Session, user: User, r: dict, ctx: dict) -> dict:
         return {"transfer_id": transfer.id}
     r = {**r, "account_id": _account(db, user, r["account_ref"], ctx).id if r["account_ref"] not in (None, "none") else None}
     if r["kind"] == KIND_INCOME:
-        source = (r["category"] or "").strip()[:100] or "Income"
-        fund_note = (note if len(full) > 100 else " – ".join(x for x in (description, note) if x))[:500] or None
+        source = (r.get("category_final") or r["category"] or "").strip()[:100] or "Income"
+        # The description is the name when there was no category (the rest of a long one goes in the note);
+        # otherwise the description goes in the note, in full
+        shown = (full if len(full) > 100 else None) if source == description[:100] else full
+        fund_note = " – ".join(x for x in (shown, r["note"]) if x)[:500] or None
         fund = Fund(user_id=user.id, fund_date=d, amount=amount, source=source, note=fund_note, account_id=r["account_id"])
+        label_new(db, fund, aliases=_aliases(db, user, ctx), text=description or source)
         db.add(fund)
         db.flush()
         return {"fund_id": fund.id}
@@ -758,10 +791,18 @@ def _create(db: Session, user: User, r: dict, ctx: dict) -> dict:
         note = " – ".join(x for x in (note, f"Your share of ₹{Decimal(r['amount']):,.2f} split bill") if x)[:500]
     expense = Expense(user_id=user.id, expense_date=d, item_name=item, category=r["category_final"], quantity=r["quantity"],
                       amount=amount, note=note, is_extra=False, account_id=r["account_id"], created_by=user.id)
+    # The category was mapped during the review, so the alias only renames
+    label_new(db, expense, set_category=False, aliases=_aliases(db, user, ctx))
     db.add(expense)
     db.flush()
     links["expense_id"] = expense.id
     return links
+
+
+def _aliases(db: Session, user, ctx: dict):
+    if "aliases" not in ctx:
+        ctx["aliases"] = user_aliases(db, user.id)
+    return ctx["aliases"]
 
 
 def _record(batch: ImportBatch, r: dict, status_: str, reason: str | None, **links) -> ImportRecord:

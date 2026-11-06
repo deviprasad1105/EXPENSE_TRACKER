@@ -54,17 +54,18 @@ FEATURE_EXPENSE = "expense"
 FEATURE_SPLIT = "split"
 FEATURE_SUBSCRIPTION = "subscription"
 FEATURE_ACCOUNTING = "accounting"
+FEATURE_UPI = "upi"
 FEATURE_LABEL = {
     FEATURE_EXPENSE: "Expense tracking", FEATURE_SPLIT: "Split bills", FEATURE_SUBSCRIPTION: "Subscriptions",
-    FEATURE_ACCOUNTING: "Accounting",
+    FEATURE_ACCOUNTING: "Accounting", FEATURE_UPI: "UPI tracker",
 }
 
 
 def has_feature(user: User, feature: str) -> bool:
     if user.role == ROLE_ADMIN:
         return True
-    if feature == FEATURE_ACCOUNTING and not user.feature_expense:
-        # The books are built from expense tracking, so accounting needs it too
+    if feature in (FEATURE_ACCOUNTING, FEATURE_UPI) and not user.feature_expense:
+        # The books and the UPI tracker are built on expense tracking, so they need it too
         return False
     return bool(getattr(user, f"feature_{feature}"))
 

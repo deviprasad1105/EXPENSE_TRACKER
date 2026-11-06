@@ -54,6 +54,8 @@ class UserOut(ORM):
     feature_split: bool = False
     feature_subscription: bool = False
     feature_accounting: bool = False
+    feature_upi: bool = False
+    upi_enabled: bool = False
     in_split_group: bool = False
     ask_account: bool = True
     background_updated_at: datetime | None = None
@@ -100,6 +102,7 @@ class AdminUserUpdate(BaseModel):
     feature_split: bool | None = None
     feature_subscription: bool | None = None
     feature_accounting: bool | None = None
+    feature_upi: bool | None = None
 
 
 class PasswordChange(BaseModel):
@@ -247,6 +250,9 @@ class ExpenseOut(ORM):
     locked: bool = False
     editable: bool = False
     lock_at: datetime | None = None
+    raw_name: str | None = None
+    alias_id: int | None = None
+    origin: str | None = None
 
 
 # ---------- funds ----------
@@ -262,6 +268,148 @@ class FundOut(ORM, FundIn):
     id: int
     user_id: int
     created_at: datetime
+    raw_name: str | None = None
+    alias_id: int | None = None
+    origin: str | None = None
+
+
+# ---------- transaction aliases ----------
+class AliasIn(BaseModel):
+    # A payee key from the detected groups (a UPI ID, or the words of the description), or words to look for
+    match_key: str = Field(min_length=2, max_length=120)
+    alias: str = Field(min_length=1, max_length=100)
+    category: str | None = Field(default=None, max_length=50)
+    # Existing records to rename now (from the preview); empty leaves old records as they are
+    expense_ids: list[int] = Field(default_factory=list, max_length=20000)
+    fund_ids: list[int] = Field(default_factory=list, max_length=20000)
+    # Rename every existing record it matches (the import review's "also rename old records"), instead of the ids
+    apply_all_existing: bool = False
+    # Give the renamed old expenses the alias's category too (new ones always get it)
+    set_category_existing: bool = False
+
+
+class AliasUpdate(BaseModel):
+    alias: str | None = Field(default=None, min_length=1, max_length=100)
+    category: str | None = Field(default=None, max_length=50)
+    clear_category: bool = False
+
+
+class AliasApply(BaseModel):
+    expense_ids: list[int] = Field(default_factory=list, max_length=20000)
+    fund_ids: list[int] = Field(default_factory=list, max_length=20000)
+    set_category_existing: bool = False
+
+
+class AliasOut(ORM):
+    id: int
+    match_key: str
+    alias: str
+    category: str | None
+    created_at: datetime
+    updated_at: datetime | None
+    records: int = 0
+    unnamed: int = 0
+
+
+class AliasRecord(BaseModel):
+    """An expense (kind EXPENSE) or money received (kind FUND) shown in the alias preview."""
+
+    kind: str
+    id: int
+    date: date
+    name: str
+    original: str | None
+    amount: Decimal
+    category: str | None = None
+    origin: str | None = None
+
+
+class AliasGroup(BaseModel):
+    """Records with the same payee key and no alias yet: a payee the user might want to name."""
+
+    match_key: str
+    names: list[str]
+    suggestion: str
+    expense_count: int
+    expense_total: Decimal
+    fund_count: int
+    fund_total: Decimal
+    last_date: date
+    # An alias with this key already exists: these are old records it hasn't renamed
+    alias_id: int | None = None
+    alias: str | None = None
+
+
+class AliasChangeOut(BaseModel):
+    alias: AliasOut | None = None
+    renamed: int = 0
+    skipped_locked: int = 0
+
+
+# ---------- UPI tracker ----------
+class UpiIdIn(BaseModel):
+    vpa: str = Field(min_length=3, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}@[A-Za-z][A-Za-z0-9]{1,30}$")
+    account_id: int | None = None
+    is_active: bool = True
+
+
+class UpiIdOut(ORM):
+    id: int
+    vpa: str
+    account_id: int | None
+    is_active: bool
+    created_at: datetime
+
+
+class UpiSettingsOut(BaseModel):
+    enabled: bool
+    has_token: bool
+    token_hint: str | None
+    upi_ids: list[UpiIdOut]
+
+
+class UpiSettingsIn(BaseModel):
+    enabled: bool
+
+
+class UpiTokenOut(BaseModel):
+    token: str
+    hook_path: str
+
+
+class UpiMessageIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class UpiEventOut(ORM):
+    id: int
+    received_at: datetime
+    status: str
+    reason: str | None
+    direction: str | None
+    amount: Decimal | None
+    counterparty: str | None
+    payee_key: str | None
+    ref: str | None
+    txn_date: date | None
+    raw_text: str | None
+    expense_id: int | None
+    fund_id: int | None
+    upi_id: int | None
+    name: str | None = None
+    alias_id: int | None = None
+
+
+class UpiDay(BaseModel):
+    date: date
+    paid: Decimal
+    received: Decimal
+    count: int
+
+
+class UpiActivityOut(BaseModel):
+    events: list[UpiEventOut]
+    days: list[UpiDay]
 
 
 # ---------- sharing ----------

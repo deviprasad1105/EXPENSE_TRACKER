@@ -179,6 +179,10 @@ Every saved expense, one row per item per day.
 | `updated_at` | DATE | Last edit. |
 | `created_by` | INTEGER, FK → `app_users.id` | Who saved it (the owner, or an admin acting for them). |
 | `account_id` | INTEGER, FK → `accounts.id`, nullable | The account it was paid from. Empty on create means the primary account; `NULL` if the user has no accounts. |
+| `payee_key` | VARCHAR(120), nullable | Who the money went to / came from, worked out from the description: its UPI ID, else its words without reference numbers and banking noise (`ramesh@ybl`, `tea stall`). Groups records by payee for aliases. Indexed. |
+| `raw_name` | VARCHAR(200), nullable | The original description once an alias (or the UPI tracker) has renamed `item_name`. |
+| `alias_id` | INTEGER, FK → `transaction_aliases.id`, nullable | The alias naming it. Cleared when the user renames the record by hand. |
+| `origin` | VARCHAR(10), nullable | `UPI` when the UPI tracker recorded it; `NULL` when typed or imported. |
 
 **Edit lock:** the owner may edit or delete a row only until `created_at + EDIT_WINDOW_DAYS` (3 days). After that
 the API refuses with 403. Admins can always edit or delete. Managers and people it was shared with can never
@@ -197,6 +201,10 @@ Money added to the balance (salary, pocket money…).
 | `note` | VARCHAR2(500) | |
 | `account_id` | INTEGER, FK → `accounts.id`, nullable | The account it was received in (primary by default). |
 | `created_at` | DATE | |
+| `payee_key` | VARCHAR(120), nullable | Who the money went to / came from, worked out from the description: its UPI ID, else its words without reference numbers and banking noise (`ramesh@ybl`, `tea stall`). Groups records by payee for aliases. Indexed. |
+| `raw_name` | VARCHAR(200), nullable | The original description once an alias (or the UPI tracker) has renamed `source`. |
+| `alias_id` | INTEGER, FK → `transaction_aliases.id`, nullable | The alias naming it. Cleared when the user renames the record by hand. |
+| `origin` | VARCHAR(10), nullable | `UPI` when the UPI tracker recorded it; `NULL` when typed or imported. |
 
 **Available balance** = `SUM(funds.amount)` − `SUM(expenses.amount)` for the user, over all time.
 
@@ -505,6 +513,54 @@ released automatically.
 - **Year end:** income and expense ledgers start each year at zero; earlier years' profit is carried into capital by
   calculation, so there is no closing entry to forget.
 - **Deleting a user** (admin) backs up and deletes their books with the rest of their data.
+
+---
+
+## Transaction aliases and the UPI tracker
+
+### TRANSACTION_ALIASES
+A readable name for a payee (*Settings → Transaction aliases*). Unique per (`user_id`, `match_key`).
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | INTEGER, PK | |
+| `user_id` | INTEGER, FK → `app_users.id` | Owner. |
+| `match_key` | VARCHAR(120) | A payee key. Matches a record whose `payee_key` is equal, or (typed keys) whose description contains all its words / the UPI ID. |
+| `alias` | VARCHAR(100) | The name shown: written into `item_name` / `source` of every record it names. |
+| `category` | VARCHAR(50), nullable | Given to *new* expenses it names (typed ones only when left as General). Old records keep theirs. |
+| `created_at`, `updated_at` | DATE | |
+
+**Rules:** new expenses and money received (typed, imported or from the UPI tracker) are named as they are saved.
+Old records are renamed only when the user ticks them in the preview. Renaming an alias renames every record it names;
+deleting it can put the original descriptions back. Records dated in a locked accounting period are never changed.
+Renaming doesn't set `updated_at`, so it neither counts as an edit for an import Undo nor touches the 3-day edit window.
+
+### USER_CATEGORIES
+Categories the user added (`is_hidden` false), and ones they hid from every category list (`is_hidden` true, a default
+like Smoking or one of their own). Unique per (`user_id`, `name`). Expenses keep a hidden category; adding it again shows it.
+
+### UPI_IDS
+The user's own UPI IDs (VPAs). Unique per (`user_id`, `vpa`). `account_id` (nullable) is the account its payments
+come from / go into (the primary account when empty); `is_active` pauses one.
+
+### UPI_EVENTS
+Each message the UPI tracker received and what became of it.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `status` | VARCHAR(10) | `CREATED` (recorded), `DUPLICATE` (same UPI reference already recorded), `IGNORED` (tracking off, not in the plan, no UPI ID), `FAILED` (unreadable, OTP, card alert, locked period). |
+| `reason` | VARCHAR(300) | Why, for anything but a clean `CREATED`. |
+| `direction` | VARCHAR(6) | `DEBIT` (paid → expense) or `CREDIT` (received → fund). |
+| `amount`, `txn_date` | NUMBER(12,2), DATE | As read from the message (a future or year-old date becomes today). |
+| `counterparty`, `payee_key` | VARCHAR(120) | The other party's name / UPI ID, and its payee key. |
+| `ref` | VARCHAR(40) | UPI reference (RRN): a message forwarded twice is recorded once. Indexed. |
+| `raw_text` | VARCHAR(1000) | The message. |
+| `expense_id` / `fund_id` | INTEGER, FK, nullable | What it created (`NULL` again if that record is deleted). |
+| `upi_id` | INTEGER, FK → `upi_ids.id`, nullable | Which of the user's UPI IDs it was matched to. |
+
+`APP_USERS` holds the switches: `feature_upi` (granted by an admin; needs `feature_expense`), `upi_enabled` (the user's
+own on / off) and `upi_token_hash` / `upi_token_hint` (SHA-256 and last 4 characters of the private forwarding link's
+token; the token itself is shown once and never stored).
 
 ---
 

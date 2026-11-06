@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowRight, FileUp, History, Keyboard, Plus, RefreshCw, Sparkles, Trash2, Upload } from 'lucide-react'
+import { ArrowRight, FileUp, History, Keyboard, Plus, RefreshCw, Sparkles, Tag, Trash2, Upload } from 'lucide-react'
 import api, { errorMessage, money, todayISO } from '../api'
 import { useAuth } from '../auth'
 import { ACCOUNT_KINDS } from '../components/Accounts'
@@ -328,6 +328,9 @@ function Review({ source, onCancel, onDone, onError }) {
   const [filter, setFilter] = useState('all')
   const [page, setPage] = useState(0)
   const [progress, setProgress] = useState(null)
+  // Alias names / categories typed in "Payees in this file", not saved yet: { payee key: { alias, category } }
+  const [drafts, setDrafts] = useState({})
+  const [renameOld, setRenameOld] = useState(true)
   const version = useRef(0)
   const timer = useRef(null)
 
@@ -383,11 +386,46 @@ function Review({ source, onCancel, onDone, onError }) {
     try {
       const res = await api.post('/imports/check', { records: recs.map(clean), options: opts })
       if (v === version.current) apply(res.data)
+      return res.data
     } catch (err) {
       if (v === version.current) onError(errorMessage(err))
     } finally {
       if (v === version.current) setChecking(false)
     }
+  }
+
+  // Changed payee names: a new alias, or a new name / category for an existing one
+  const pending = (info?.payees || []).filter((p) => {
+    const d = drafts[p.payee_key]
+    if (!d) return false
+    const name = (d.alias ?? '').trim()
+    const cat = (d.category ?? '').trim()
+    return p.alias_id ? (name && name !== p.alias) || cat !== (p.alias_category || '') : !!name
+  })
+
+  /** Save the payee names, then check again so the rows show them (and their categories). Returns the new records. */
+  const saveAliases = async () => {
+    if (!pending.length) return records
+    setChecking(true)
+    let saved = 0
+    try {
+      for (const p of pending) {
+        const d = drafts[p.payee_key]
+        const name = (d.alias ?? p.alias ?? '').trim()
+        const category = (d.category ?? p.alias_category ?? '').trim() || null
+        if (p.alias_id) await api.put(`/aliases/${p.alias_id}`, { alias: name, category, clear_category: !category })
+        else
+          await api.post('/aliases', { match_key: p.payee_key, alias: name, category, apply_all_existing: renameOld, set_category_existing: renameOld && !!category })
+        saved++
+      }
+    } catch (err) {
+      onError(`${errorMessage(err)} (${saved} of ${pending.length} payee name(s) saved)`)
+    }
+    setDrafts({})
+    const data = await check(records, options)
+    if (!data) return null
+    // Rows that became importable are ticked, as on screen
+    return data.records.map((r, i) => (records[i] && !records[i].can_import && r.can_import ? { ...r, include: r.default_include } : r))
   }
   const scheduleCheck = (recs, opts = options) => {
     version.current++
@@ -438,16 +476,23 @@ function Review({ source, onCancel, onDone, onError }) {
   const s = info?.summary
 
   const runImport = async () => {
-    const left = records.length - chosen.length
-    if (!window.confirm(`Import ${chosen.length} record(s)?${left ? `\n\n${left} other row(s) will be listed in the import history as skipped or failed, with the reason.` : ''}`)) return
-    setProgress({ done: 0, total: records.length })
+    let recs = records
+    if (pending.length) {
+      if (!window.confirm(`Save the ${pending.length} payee name(s) you typed first, so these records get them?`)) return
+      recs = await saveAliases()
+      if (!recs) return
+    }
+    const picked = recs.filter((r) => r.can_import && r.include)
+    const left = recs.length - picked.length
+    if (!window.confirm(`Import ${picked.length} record(s)?${left ? `\n\n${left} other row(s) will be listed in the import history as skipped or failed, with the reason.` : ''}`)) return
+    setProgress({ done: 0, total: recs.length })
     try {
       const batch = (await api.post('/imports', { filename: source.filename, file_type: source.file_type, file_hash: source.file_hash })).data
       const created = []
-      for (let i = 0; i < records.length; i += CHUNK) {
-        const res = await api.post(`/imports/${batch.id}/rows`, { records: records.slice(i, i + CHUNK).map(clean), options })
+      for (let i = 0; i < recs.length; i += CHUNK) {
+        const res = await api.post(`/imports/${batch.id}/rows`, { records: recs.slice(i, i + CHUNK).map(clean), options })
         created.push(...(res.data.accounts_created || []))
-        setProgress({ done: Math.min(records.length, i + CHUNK), total: records.length })
+        setProgress({ done: Math.min(recs.length, i + CHUNK), total: recs.length })
       }
       const done = (await api.post(`/imports/${batch.id}/finish`)).data
       onDone({ ...done, accounts_created: created, account_warnings: s?.account_warnings })
@@ -526,6 +571,10 @@ function Review({ source, onCancel, onDone, onError }) {
         {info.lock_date && <p className="hint">Your accounting books are locked up to {new Date(info.lock_date).toLocaleDateString('en-IN')}: records dated on or before it can’t be imported.</p>}
 
         <AccountMap info={info} options={options} setOption={setOption} />
+        <PayeeMap
+          info={info} drafts={drafts} setDrafts={setDrafts} pending={pending} onSave={saveAliases} busy={checking}
+          renameOld={renameOld} setRenameOld={setRenameOld}
+        />
         <CategoryMap info={info} options={options} setOption={setOption} />
         <TreatmentMap info={info} options={options} setOption={setOption} />
       </div>
@@ -650,6 +699,7 @@ function Row({ r, hasSplit, onEdit, onRemove }) {
       </td>
       <td>
         <input value={r.description || ''} maxLength={300} onChange={(e) => onEdit({ description: e.target.value })} />
+        {r.alias_name && <div className="hint" style={{ margin: '4px 0 0' }}>→ shown as <b>{r.alias_name}</b></div>}
         <input value={r.note || ''} maxLength={500} placeholder="Note (optional)" aria-label={`Note for row ${r.row_no}`}
                style={{ marginTop: 4 }} onChange={(e) => onEdit({ note: e.target.value || null })} />
       </td>
@@ -689,6 +739,115 @@ function Row({ r, hasSplit, onEdit, onRemove }) {
         </button>
       </td>
     </tr>
+  )
+}
+
+/** Payees in the file, grouped by UPI ID / name: their alias, or a name and category to give them now. */
+function PayeeMap({ info, drafts, setDrafts, pending, onSave, busy, renameOld, setRenameOld }) {
+  const [side, setSide] = useState('all')
+  const [showAll, setShowAll] = useState(false)
+  const payees = info.payees || []
+  if (!payees.length) return null
+  const named = payees.filter((p) => p.alias_id).length
+  const list = payees.filter((p) => side === 'all' || (side === 'sent' ? p.sent_count : p.received_count))
+  const shown = showAll ? list : list.slice(0, 12)
+  const set = (key, patch) => setDrafts((d) => ({ ...d, [key]: { ...d[key], ...patch } }))
+  const useSuggestions = () =>
+    setDrafts((d) => {
+      const next = { ...d }
+      for (const p of list) if (!p.alias_id && !next[p.payee_key]?.alias) next[p.payee_key] = { ...next[p.payee_key], alias: p.suggestion }
+      return next
+    })
+
+  return (
+    <div className="map-block">
+      <div className="card-head wrap" style={{ marginBottom: 8 }}>
+        <div>
+          <h4 style={{ margin: 0 }}>
+            <Tag size={15} style={{ verticalAlign: '-2px' }} /> Payees in this file
+          </h4>
+          <p className="hint" style={{ margin: 0 }}>
+            {named} of {payees.length} already have an alias: their rows get its name and category, so they need no category mapping. Give the others a
+            name (and a category) and every record from or to them, now and later, is shown that way.
+          </p>
+        </div>
+        <div className="segmented" role="tablist" aria-label="Sent or received">
+          {[
+            ['all', `All (${payees.length})`],
+            ['sent', `Sent (${payees.filter((p) => p.sent_count).length})`],
+            ['received', `Received (${payees.filter((p) => p.received_count).length})`],
+          ].map(([k, l]) => (
+            <button key={k} className={side === k ? 'on' : ''} onClick={() => setSide(k)}>
+              {l}
+            </button>
+          ))}
+        </div>
+      </div>
+      <datalist id="payee-categories">
+        {info.categories.map((c) => (
+          <option key={c} value={c} />
+        ))}
+      </datalist>
+      <div className="table-wrap">
+        <table className="table mini-table">
+          <thead>
+            <tr>
+              <th>Payee</th>
+              <th className="num">Sent</th>
+              <th className="num">Received</th>
+              <th>Show as</th>
+              <th>Category</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((p) => {
+              const d = drafts[p.payee_key] || {}
+              const changed = pending.includes(p)
+              return (
+                <tr key={p.payee_key}>
+                  <td style={{ wordBreak: 'break-word', maxWidth: 320 }}>
+                    <b>{p.description}</b>
+                    <div className="hint">
+                      <code>{p.payee_key}</code> {p.alias_id && !changed && <span className="badge ok">alias</span>}
+                      {changed && <span className="badge warn">not saved</span>}
+                    </div>
+                  </td>
+                  <td className="num">{p.sent_count ? <>{money(p.sent_total)}<div className="hint">{p.sent_count}×</div></> : '—'}</td>
+                  <td className="num">{p.received_count ? <><span className="net-pos">{money(p.received_total)}</span><div className="hint">{p.received_count}×</div></> : '—'}</td>
+                  <td>
+                    <input value={d.alias ?? p.alias ?? ''} placeholder={p.suggestion} maxLength={100} style={{ minWidth: 150 }}
+                           onChange={(e) => set(p.payee_key, { alias: e.target.value })} aria-label={`Alias for ${p.description}`} />
+                  </td>
+                  <td>
+                    <input value={d.category ?? p.alias_category ?? ''} list="payee-categories" placeholder={p.sent_count ? 'Pick or type' : '—'} maxLength={50}
+                           style={{ minWidth: 130 }} disabled={!p.sent_count} title={p.sent_count ? '' : 'Money received has no category'}
+                           onChange={(e) => set(p.payee_key, { category: e.target.value })} aria-label={`Category for ${p.description}`} />
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="form-actions" style={{ justifyContent: 'space-between', flexWrap: 'wrap', marginTop: 8 }}>
+        <div className="actions">
+          {list.length > 12 && (
+            <button className="btn ghost small" onClick={() => setShowAll(!showAll)}>
+              {showAll ? 'Show fewer' : `Show all ${list.length}`}
+            </button>
+          )}
+          <button className="btn ghost small" onClick={useSuggestions} title="Fill the empty names with the suggested ones">
+            <Sparkles size={14} /> Use suggested names
+          </button>
+          <label className="check small">
+            <input type="checkbox" checked={renameOld} onChange={(e) => setRenameOld(e.target.checked)} /> Also rename matching records already in the app
+          </label>
+        </div>
+        <button className="btn secondary" disabled={busy || !pending.length} onClick={onSave}>
+          Save {pending.length || ''} name{pending.length === 1 ? '' : 's'} &amp; apply
+        </button>
+      </div>
+    </div>
   )
 }
 

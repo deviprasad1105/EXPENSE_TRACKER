@@ -194,6 +194,7 @@ export default function Admin() {
                               ['feature_split', 'Split bills'],
                               ['feature_subscription', 'Subscriptions'],
                               ['feature_accounting', 'Accounting'],
+                              ['feature_upi', 'UPI tracker'],
                             ].map(([key, label]) => (
                               <label key={key} className="check" style={{ whiteSpace: 'nowrap' }}>
                                 <input
@@ -207,7 +208,7 @@ export default function Admin() {
                                   }
                                 />
                                 {label}
-                                {key === 'feature_accounting' && u.feature_accounting && !u.feature_expense && (
+                                {(key === 'feature_accounting' || key === 'feature_upi') && u[key] && !u.feature_expense && (
                                   <span className="muted small">(needs Expenses)</span>
                                 )}
                               </label>

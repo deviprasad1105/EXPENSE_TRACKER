@@ -31,7 +31,7 @@ npm install
 npm run dev
 ```
 
-On first start the backend creates its 22 tables in `dev_dr_expense` and an admin from `.env`
+On first start the backend creates its 26 tables in `dev_dr_expense` and an admin from `.env`
 (default **admin / admin123**, change it: with `ENVIRONMENT=production` the backend refuses to start while the admin
 password is the default or `JWT_SECRET` is shorter than 32 characters). **[docs/DATABASE.md](docs/DATABASE.md)** describes every table,
 what it stores, and how the rules work. `backend/sql/schema.sql` holds the equivalent Postgres DDL.
@@ -113,6 +113,35 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
   records money moved from one of your accounts to another without counting it as income or spending. Each
   account shows its balance and this month's spending. Turn off "Ask which account for each expense" to send
   everything to the primary account automatically. Subscription charges are paid from the primary account.
+- **Transaction aliases** (*Settings → Transaction aliases*): name a payee once and every transaction to or from it
+  shows that name. Records are grouped automatically by payee (the UPI ID in the description, or its words without
+  reference numbers: `UPI/DR/4123…/RAMESH TEA STALL/YBL/ramesh@ybl` → `ramesh@ybl`), with how often and how much.
+  *Set alias* (e.g. **Tea**, optionally with a category) lists the existing records it matches, all ticked: untick any
+  to keep, or rename none. Future expenses and money received (typed, imported or from the UPI tracker) get the alias
+  as they are saved. An alias can also be typed by hand (a UPI ID, or words such as `acme` to match any description
+  containing them). Renaming an alias renames all its records; old records it matches but hasn't renamed show as
+  *+N not renamed*; deleting it can put the original descriptions back. The original description is kept (hover the
+  name in Expenses), search finds both, and records in a locked accounting period are never changed.
+- **Categories** (*Settings → Categories*): add your own categories, and hide the ones you never use (e.g. Smoking):
+  a hidden category disappears from every category list (entry, filters, budgets, aliases, imports); expenses that have
+  it keep it. Adding a hidden one again shows it again.
+- **Aliases in imports**: the review step lists the *Payees in this file* (grouped by UPI ID or name; All / Sent /
+  Received), with each one's alias. Rows of a payee with an alias show the name they'll get, and take the alias's
+  category when the file has none, so a bank statement needs far less category mapping. Type a name (and category) for
+  the others, or *Use suggested names*; *Save & apply* creates the aliases (optionally renaming matching records already
+  in the app) and re-checks the rows. Names typed but not saved are saved when you press Import. Money received from a
+  statement without a category column is named after its narration. An alias's category can also be put on the old
+  records it renames (*Also put the ticked old expenses in …*).
+- **UPI tracker** (*UPI Tracker*, plan feature *UPI tracker*, needs Expenses): records UPI payments as expenses and
+  money received as income, from the bank's UPI alerts. No bank or UPI app lets another app read payments directly,
+  so in *Settings → UPI tracker* the user adds **their UPI ID(s)** (each linked to an account), switches tracking on,
+  and makes a **private forwarding link** for an SMS-forwarding app (Android) or a Shortcuts automation (iPhone);
+  messages can also be pasted on the tracker page. Alerts from HDFC, SBI, ICICI, Axis, Kotak and similar formats are
+  read for the amount, paid / received, the other party, the UPI reference and the date. The alias is applied
+  automatically; payees without one are flagged with a *Set alias* button. A message forwarded twice is recorded once
+  (same UPI reference); OTPs, payment requests and card / ATM alerts are refused. The page shows today's UPI spending,
+  per-day totals and every message with its status. Recorded entries appear in Expenses / Balance with a **UPI** badge,
+  count towards budgets and post to the books. The admin grants the feature per user; the user turns it on or off.
 - **Custom background** (*Settings → Appearance*): upload your own picture (up to 5 MB) to show behind the app;
   *Reset to default* removes it.
 - **Reports**: Excel (summary with charts, daily totals, detailed list) or PDF for any period.
@@ -181,7 +210,7 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
   only signed out when your token is rejected (expired after `JWT_EXPIRE_MINUTES`, or invalid). If the backend is
   down you get a *Retry* screen instead.
 - **Plans (feature access)**: the admin chooses what each user can use under *Administration → Users → Plan*:
-  **Expenses** (everything above), **Split bills** and **Subscriptions**. New users get Expenses only. A user without
+  **Expenses** (everything above), **Split bills**, **Subscriptions**, **Accounting** and **UPI tracker**. New users get Expenses only. A user without
   Expenses sees only the features they have, and the API refuses the expense endpoints for them. Admins always have every feature.
 - **Split Bills**:
   - **Who can use it**: creating groups and adding guests needs the Split bills plan. Anyone added to a group
