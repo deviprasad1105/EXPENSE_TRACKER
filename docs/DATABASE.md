@@ -577,11 +577,14 @@ One row per upload (or per set of records typed in by hand).
 | `user_id` | INTEGER, FK | Whose records; each user imports into their own account. |
 | `filename`, `file_type` | VARCHAR | As uploaded (`xlsx`, `csv`, `pdf`, `docx`…; `manual` when typed in). |
 | `file_hash` | VARCHAR(64), nullable | SHA-256 of the file: warns when the same file is uploaded again. |
-| `status` | VARCHAR(25) | `IN_PROGRESS`, `COMPLETED`, `COMPLETED_WITH_ERRORS`, `FAILED` (nothing imported), `UNDONE`, `PARTIALLY_UNDONE`. |
+| `status` | VARCHAR(25) | `IN_PROGRESS`, `COMPLETED`, `COMPLETED_WITH_ERRORS` and `FAILED` (imports from before the whole-file check), `UNDONE`, `PARTIALLY_UNDONE`, `REPLACED` (purged and replaced by a corrected file), `ROLLED_BACK` (stopped before it finished and taken back), `PURGED`. |
 | `rows_total`, `rows_imported`, `rows_skipped`, `rows_failed`, `rows_undone` | INTEGER | Counts of the rows below. |
 | `expense_total`, `income_total` | NUMERIC(14,2) | What was imported: spending (split rows at their full amount) and money received. |
 | `created_at`, `finished_at`, `undone_at` | TIMESTAMP | |
 | `created_accounts` | VARCHAR(500) | Ids (comma-separated) of the accounts the import created; a full Undo removes those nothing else uses (or deactivates one with entries in the books). |
+| `rows_expected` | INTEGER, nullable | Rows in the file, checked as a whole when the import started: it finishes only with all of them. |
+| `replaces_id` | INTEGER, nullable | Purge & re-import: the earlier import this one replaces. |
+| `replaced_by_id` | INTEGER, nullable | On the earlier import: the import that replaced it (set when that one finishes; the earlier one is then purged). |
 
 ### IMPORT_RECORDS
 One row per row of the file.
@@ -591,7 +594,7 @@ One row per row of the file.
 | `batch_id`, `user_id` | FK | |
 | `row_no` | INTEGER | Row number in the file (1 = its first row). |
 | `kind` | VARCHAR(10) | `EXPENSE`, `INCOME`, `SPLIT`, `TRANSFER` or `OPENING` (an account's opening balance). |
-| `status` | VARCHAR(10) | `IMPORTED`, `SKIPPED` (a duplicate, a balance line or unticked), `FAILED`, `UNDONE`, `KEPT` (Undo left it: edited since, reconciled, or in a locked period). |
+| `status` | VARCHAR(10) | `IMPORTED`, `SKIPPED` (a balance or total line; before the whole-file check also duplicates and unticked rows), `FAILED` (before the whole-file check), `UNDONE` (removed by Undo, a purge or a take-back), `KEPT` (Undo left it: edited since, reconciled, or in a locked period). |
 | `reason` | VARCHAR(500) | Why it was skipped, failed or kept. |
 | `record_date`, `description`, `amount` | | As read from the file (after corrections in the review). |
 | `fingerprint` | VARCHAR(64) | Kind, date, amount and description, plus which occurrence in the file: a row imported before is recognised when the file is uploaded again. Indexed with `user_id`. |

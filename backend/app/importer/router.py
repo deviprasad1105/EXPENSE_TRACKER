@@ -2,13 +2,19 @@
 
 1. POST /extract (the file) → its tables and a guess of the columns. Nothing is saved.
 2. POST /preview (a table + the columns) → the records, each checked; POST /check after the user edits them.
-3. POST "" starts an import; POST /{id}/rows sends the records in chunks (the page sends 200; at most 500, each
-   saved as a whole, so a big file never hits the server's time limit); POST /{id}/finish closes it.
-4. GET "" (history), GET /{id} (its rows and what Undo would do), POST /{id}/undo (200 records per call: call
-   again while `remaining` > 0).
+3. POST "" starts an import with the whole file, which is checked first: any problem in the file blocks it (the
+   user fixes the file and uploads it again). POST /{id}/rows then sends the records in chunks (the page sends 200;
+   at most 500, each saved as a whole, so a big file never hits the server's time limit); POST /{id}/finish closes
+   it once every row is in. An import that stops before it finishes is taken back with POST /{id}/purge.
+4. GET "" (history), GET /{id} (its rows, what Undo and Purge & re-import would do), POST /{id}/undo (200 records
+   per call: call again while `remaining` > 0).
+5. Purge & re-import: preview / check / start with `replaces_id` (the earlier import's records don't count as
+   duplicates); once the corrected file is in, POST /{old id}/purge removes the earlier import entirely.
 
 Each user imports into their own account only.
 """
+
+from datetime import date
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import select
@@ -19,12 +25,14 @@ from ..database import get_db
 from ..deps import get_current_user
 from ..models import User
 from ..timeutil import today_local
+from . import purge as range_purge
 from . import service
 from .extract import extract, file_hash, file_type, gunzip
 from .models import ImportBatch
 from .parse import Mapping, guess_mapping, parse_records
 from .schemas import (
-    BatchDetail, BatchIn, BatchOut, CheckIn, CheckOut, ChunkIn, ExtractOut, ImportRecordOut, PreviewIn, RecordIn, TableOut,
+    BatchDetail, BatchIn, BatchOut, CheckIn, CheckOut, ChunkIn, ExtractOut, ImportRecordOut, PreviewIn, PurgeRangeIn,
+    RecordIn, TableOut,
 )
 
 router = APIRouter(prefix="/api/imports", tags=["imports"])
@@ -75,22 +83,35 @@ def preview(data: PreviewIn, user: User = Depends(get_current_user), db: Session
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     records = [RecordIn(**r) for r in rows]
-    result = service.check(db, user, records, data.options, fresh=True)
+    replaces = _batch(db, user, data.replaces_id) if data.replaces_id else None
+    result = service.check(db, user, records, data.options, fresh=True, replaces=replaces)
     return {**result, "ignored_rows": ignored}
 
 
 @router.post("/check", response_model=CheckOut)
 def check(data: CheckIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return service.check(db, user, data.records, data.options)
+    replaces = _batch(db, user, data.replaces_id) if data.replaces_id else None
+    return service.check(db, user, data.records, data.options, replaces=replaces)
+
+
+# ---------- purge a date range (Import Records → Purge) ----------
+@router.get("/purge/preview")
+def purge_preview(start: date, end: date, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """What purging the range would remove: expenses, money received and transfers (typed or imported)."""
+    return range_purge.preview(db, user, start, end)
+
+
+@router.post("/purge")
+def purge_range(data: PurgeRangeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Remove every record in the range, 200 per call (backed up first): call again with `backup_id` while
+    `remaining` > 0."""
+    return range_purge.purge(db, user, data.start, data.end, data.backup_id)
 
 
 @router.post("", response_model=BatchOut, status_code=201)
 def start(data: BatchIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    batch = ImportBatch(user_id=user.id, filename=data.filename.strip(), file_type=data.file_type[:10] or "manual",
-                        file_hash=data.file_hash)
-    db.add(batch)
-    db.commit()
-    return batch
+    return service.start(db, user, data.filename, data.file_type, data.file_hash, data.records, data.options,
+                         data.replaces_id)
 
 
 @router.post("/{batch_id}/rows")
@@ -115,10 +136,16 @@ def detail(batch_id: int, user: User = Depends(get_current_user), db: Session = 
     return BatchDetail(
         **BatchOut.model_validate(batch).model_dump(),
         records=[ImportRecordOut.model_validate(r) for r in batch.records], undo_removes=removes, undo_keeps=keeps,
-        books=service.get_books(db, user.id) is not None,
+        books=service.get_books(db, user.id) is not None, **service.purge_preview(db, batch),
     )
 
 
 @router.post("/{batch_id}/undo")
 def undo(batch_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return service.undo(db, _batch(db, user, batch_id))
+
+
+@router.post("/{batch_id}/purge")
+def purge(batch_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Remove an import entirely (200 records per call): one replaced by Purge & re-import, or one that stopped."""
+    return service.purge(db, _batch(db, user, batch_id))

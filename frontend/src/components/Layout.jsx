@@ -309,7 +309,7 @@ export default function Layout() {
 }
 
 // Parts of a page reached by a link (/settings#upi, /import/history, /splits/12) and what to call them
-const SUBPAGES = { history: 'Import history' }
+const SUBPAGES = { history: 'Import history', purge: 'Purge records' }
 const HASHES = {
   '/settings': { accounts: 'Bank accounts', budgets: 'Budgets & alerts', categories: 'Categories', aliases: 'Transaction aliases', upi: 'UPI tracker' },
 }

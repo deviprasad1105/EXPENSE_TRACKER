@@ -577,6 +577,9 @@ CREATE TABLE import_batches (
 	finished_at TIMESTAMP WITHOUT TIME ZONE, 
 	undone_at TIMESTAMP WITHOUT TIME ZONE, 
 	created_accounts VARCHAR(500), 
+	rows_expected INTEGER, 
+	replaces_id INTEGER, 
+	replaced_by_id INTEGER, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(user_id) REFERENCES app_users (id) ON DELETE CASCADE
 );

@@ -22,6 +22,7 @@ import SplitGroup from './pages/SplitGroup'
 import Subscriptions from './pages/Subscriptions'
 import ImportRecords from './pages/Import'
 import ImportHistory from './pages/ImportHistory'
+import ImportPurge from './pages/ImportPurge'
 import UpiTracker from './pages/UpiTracker'
 import Vouchers from './accounting/Vouchers'
 import Ledgers from './accounting/Ledgers'
@@ -92,6 +93,7 @@ export default function App() {
         <Route path="sharing" element={<Feature name="expense"><Sharing /></Feature>} />
         <Route path="import" element={<Feature name="expense"><ImportRecords /></Feature>} />
         <Route path="import/history" element={<Feature name="expense"><ImportHistory /></Feature>} />
+        <Route path="import/purge" element={<Feature name="expense"><ImportPurge /></Feature>} />
         <Route path="splits" element={<Feature name="split"><Splits /></Feature>} />
         <Route path="splits/:groupId" element={<Feature name="split"><SplitGroup /></Feature>} />
         <Route path="upi" element={<Feature name="upi"><UpiTracker /></Feature>} />

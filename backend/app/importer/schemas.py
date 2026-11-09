@@ -52,6 +52,8 @@ class RecordIn(BaseModel):
     row_no: int = Field(ge=0)
     kind: Kind | None = None
     date: Date | None = None
+    # The time of day, when the file has one ("14:05"): identical rows with different times are different records
+    time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}(:\d{2})?$")
     description: str = Field(default="", max_length=300)
     category: str | None = Field(default=None, max_length=100)
     amount: Decimal | None = None
@@ -100,11 +102,14 @@ class PreviewIn(BaseModel):
     rows: list[list[str]] = Field(max_length=25_000)
     mapping: Mapping
     options: ImportOptions = Field(default_factory=ImportOptions)
+    # Purge & re-import: the earlier import this file replaces (its records don't count as duplicates)
+    replaces_id: int | None = None
 
 
 class CheckIn(BaseModel):
     records: list[RecordIn]
     options: ImportOptions = Field(default_factory=ImportOptions)
+    replaces_id: int | None = None
 
 
 class CheckOut(BaseModel):
@@ -128,12 +133,31 @@ class CheckOut(BaseModel):
     max_records: int
     # Choices from the user's earlier imports for the values in this file (same shape as the options)
     remembered: dict = Field(default_factory=dict)
+    # The whole file is checked: any row with a problem in the file blocks it (fix the file, upload it again);
+    # choices (a category, an account) are made here. `can_import`: nothing blocks and nothing is left to choose.
+    blocked: bool = False
+    can_import: bool = False
+    # Earlier imports that rows of this file were already imported by (offered for Purge & re-import)
+    earlier_imports: list[dict] = []
+    # Purge & re-import: the import being replaced, what purging it removes, and why it can't be (empty = it can)
+    replaces: dict | None = None
 
 
 class BatchIn(BaseModel):
     filename: str = Field(min_length=1, max_length=200)
     file_type: str = Field(max_length=10)
     file_hash: str | None = Field(default=None, max_length=64)
+    # The whole file, checked before the import starts: it starts only if every row can be imported
+    records: list[RecordIn] = Field(max_length=25_000)
+    options: ImportOptions = Field(default_factory=ImportOptions)
+    replaces_id: int | None = None
+
+
+class PurgeRangeIn(BaseModel):
+    start: Date
+    end: Date
+    # The purge's backup, from its first call: the next calls remove the rest of what it holds
+    backup_id: int | None = None
 
 
 class ChunkIn(BaseModel):
@@ -158,6 +182,9 @@ class BatchOut(BaseModel):
     created_at: datetime
     finished_at: datetime | None
     undone_at: datetime | None
+    rows_expected: int | None = None
+    replaces_id: int | None = None
+    replaced_by_id: int | None = None
 
 
 class ImportRecordOut(BaseModel):
@@ -183,5 +210,9 @@ class BatchDetail(BatchOut):
     # What Undo would do now: how many records it removes, and why the others stay
     undo_removes: int
     undo_keeps: list[dict]
+    # What Purge & re-import would remove (also records edited since), and why it can't be done (empty = it can)
+    purge_removes: int = 0
+    purge_edited: int = 0
+    purge_blocks: list[dict] = []
     # The user keeps accounting books (Undo then reverses entries instead of erasing them)
     books: bool = False

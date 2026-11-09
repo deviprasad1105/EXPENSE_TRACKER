@@ -16,7 +16,7 @@ from .models import KIND_EXPENSE, KIND_INCOME, KIND_OPENING, KIND_SPLIT, KIND_TR
 
 CENT = Decimal("0.01")
 MAX_AMOUNT = Decimal("9999999999.99")  # NUMERIC(12,2)
-ROLES = ("date", "description", "category", "amount", "debit", "credit", "type", "account", "to_account", "note",
+ROLES = ("date", "time", "description", "category", "amount", "debit", "credit", "type", "account", "to_account", "note",
          "quantity", "my_share", "split_with", "paid_by")
 DATE_ORDERS = ("DMY", "MDY", "YMD")
 
@@ -25,6 +25,9 @@ class Mapping(BaseModel):
     # Row index of the column headings in the table; -1 = the table has no heading row
     header_row: int = Field(default=0, ge=-1)
     date: int | None = Field(default=None, ge=0)
+    # A separate time column (a time in the date cell is read too): rows that look the same but have different
+    # times are different records
+    time: int | None = Field(default=None, ge=0)
     description: int | None = Field(default=None, ge=0)
     category: int | None = Field(default=None, ge=0)
     # One amount column (its sign or a Dr/Cr mark, a type column, or default_type tells money in from out)…
@@ -54,6 +57,25 @@ _NAMED_DATE = re.compile(r"^(\d{1,2})(?:st|nd|rd|th)?[\s\-/.,]*([a-z]{3,9})\.?[\
 _NAMED_DATE_US = re.compile(r"^([a-z]{3,9})\.?[\s\-/.]*(\d{1,2})(?:st|nd|rd|th)?[\s,\-/.]+(\d{2,4})$")
 _TIME = re.compile(r"[ T]\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?\s*(am|pm)?(z|[+-]\d{2}:?\d{2})?$", re.I)
 _EXCEL_EPOCH = date(1899, 12, 30)
+_CLOCK = re.compile(r"(?:^|[ T])(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?\s*(am|pm)?(?:z|[+-]\d{2}:?\d{2})?$", re.I)
+
+
+def parse_time(value) -> str | None:
+    """'2024-06-02 14:05', '02/06/2024 2:05 PM' or '14:05:30' → '14:05' / '14:05:30' (24-hour). None when there is no
+    time (or it isn't a valid one)."""
+    if isinstance(value, datetime):
+        return value.strftime("%H:%M:%S") if value.second else value.strftime("%H:%M")
+    m = _CLOCK.search(str(value or "").strip())
+    if not m:
+        return None
+    h, mi, sec, ampm = int(m.group(1)), int(m.group(2)), m.group(3), (m.group(4) or "").lower()
+    if ampm:
+        if not 1 <= h <= 12:
+            return None
+        h = h % 12 + (12 if ampm == "pm" else 0)
+    if h > 23 or mi > 59 or (sec and int(sec) > 59):
+        return None
+    return f"{h:02d}:{mi:02d}" + (f":{int(sec):02d}" if sec and int(sec) else "")
 
 
 def _year(y: int) -> int:
@@ -168,6 +190,7 @@ def parse_money(value) -> tuple[Decimal | None, str | None, str | None]:
 # Words in a heading, strongest first. A heading matches a role when it equals one of its words or contains it as
 # whole words. Roles are tried in this order and each column is used once.
 SYNONYMS = {
+    "time": ["time", "txn time", "transaction time", "time of transaction", "trans time"],
     "date": ["date", "txn date", "transaction date", "tran date", "posting date", "posted on", "booking date",
              "bill date", "invoice date", "paid on", "day", "when", "value date"],
     "debit": ["debit", "withdrawal", "withdrawals", "withdrawal amt", "debit amount", "dr", "money out", "paid out",
@@ -193,7 +216,7 @@ SYNONYMS = {
                     "title", "name", "transaction details", "transaction description", "purpose", "expense name",
                     "for", "what"],
 }
-ORDER = ("date", "debit", "credit", "my_share", "paid_by", "split_with", "amount", "type", "category", "to_account", "account",
+ORDER = ("time", "date", "debit", "credit", "my_share", "paid_by", "split_with", "amount", "type", "category", "to_account", "account",
          "quantity", "note", "description")
 
 
@@ -224,6 +247,8 @@ def _guess_from_headings(headings: list[str]) -> dict[str, int]:
         for j, h in enumerate(norm):
             if j in used:
                 continue
+            if role == "time" and "date" in h:
+                continue  # "Date & time" is the date column (its time is read from it)
             if role == "date" and "value date" in h and any("date" in x and "value" not in x for x in norm):
                 continue  # prefer the transaction date over the value date
             if role in ("amount", "debit", "credit") and any(w in h.split() for w in ("balance", "share", "date", "dt")):
@@ -377,6 +402,7 @@ def parse_records(rows: list[list[str]], m: Mapping, today: date) -> tuple[list[
             errors.append(f"Unrecognised date “{raw_date[:30]}”")
         elif d > today:
             errors.append("Date is in the future")
+        clock = parse_time(cell(row, m.time)) if m.time is not None and cell(row, m.time) else parse_time(raw_date)
 
         kind, amount = None, None
         type_kind = kind_from_text(cell(row, m.type)) if m.type is not None else None
@@ -482,6 +508,7 @@ def parse_records(rows: list[list[str]], m: Mapping, today: date) -> tuple[list[
             "row_no": index + 1,
             "kind": kind,
             "date": d.isoformat() if d else None,
+            "time": clock,
             "description": description[:300],
             "category": cell(row, m.category)[:100] or None,
             "amount": str(amount) if amount is not None else None,

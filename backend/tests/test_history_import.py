@@ -40,8 +40,12 @@ def run_import(client, user, extracted, *, options=None, table=None, mapping=Non
         r["include"] = r["default_include"] if include is None else include(r)
         if edit:
             edit(r)
-    batch = client.post(API, json={"filename": extracted["filename"], "file_type": extracted["file_type"],
-                                   "file_hash": extracted["file_hash"]}, headers=headers(user)).json()
+    start = client.post(API, json={"filename": extracted["filename"], "file_type": extracted["file_type"],
+                                   "file_hash": extracted["file_hash"], "records": records, "options": options or {}},
+                        headers=headers(user))
+    if start.status_code != 201:  # the whole file is checked first: a problem in it blocks it
+        return prev.json(), {"blocked": start.json()["detail"], "status_code": start.status_code}
+    batch = start.json()
     for i in range(0, len(records), 2):  # tiny chunks: the chunked path is what matters
         res = client.post(f"{API}/{batch['id']}/rows", json={"records": records[i:i + 2], "options": options or {}},
                           headers=headers(user))
@@ -319,53 +323,82 @@ def test_import_creates_expenses_and_income_with_their_dates(client, make_user, 
     assert db.scalar(select(func.count(Notification.id)).where(Notification.kind == "BUDGET_ALERT")) == 0
 
 
-def test_same_file_again_adds_nothing(client, make_user, db):
+def test_the_same_row_twice_blocks_the_file_unless_their_times_differ(client, make_user, db):
     me = make_user("asha")
-    content = (CSV + f"{dmy(DAY1)},Metro card,Transport,500,Expense\n").encode()  # the same row twice: both are real
+    content = (CSV + f"{dmy(DAY1)},Metro card,Transport,500,Expense\n").encode()  # row 6 repeats row 3, no time
     d = upload(client, me, "old.csv", content).json()
-    run_import(client, me, d, options={"category_map": {"fuel": "Transport"}})
-    assert db.scalar(select(func.count(Expense.id))) == 4
+    prev, done = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}})
+    row = prev["records"][4]
+    assert row["status"] == "REPEATED" and not row["can_import"] and "same as row 3 of this file" in row["problems"][0]
+    assert prev["blocked"] and not prev["can_import"] and prev["summary"]["repeated"] == 1
+    assert done["status_code"] == 400 and "Fix the file and upload it again" in done["blocked"]
+    assert db.scalar(select(func.count(Expense.id))) == 0  # nothing of the file
 
-    again = upload(client, me, "old (1).csv", content).json()
-    assert again["already_imported"]["rows"] == 5
-    first = client.post(f"{API}/preview", json={"rows": again["tables"][0]["rows"], "mapping": again["guess"]}, headers=headers(me)).json()
-    assert first["records"][4]["warnings"][0].startswith("Same as row 3 of this file")
+    # The file gives them their times: two different records
+    timed = ("Date,Description,Category,Amount,Type\n"
+             f"{dmy(DAY1)} 09:10,Metro card,Transport,500,Expense\n"
+             f"{dmy(DAY1)} 18:45,Metro card,Transport,500,Expense\n")
+    d = upload(client, me, "timed.csv", timed.encode()).json()
+    prev, done = run_import(client, me, d)
+    assert [r["time"] for r in prev["records"]] == ["09:10", "18:45"] and not prev["blocked"]
+    assert done["rows_imported"] == 2 and done["status"] == "COMPLETED"
+
+
+def test_the_same_file_again_is_blocked(client, make_user, db):
+    me = make_user("asha")
+    d = upload(client, me, "old.csv", CSV.encode()).json()
+    _, first = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}})
+    assert first["rows_imported"] == 4
+
+    again = upload(client, me, "old (1).csv", CSV.encode()).json()
+    assert again["already_imported"]["rows"] == 4 and again["already_imported"]["filename"] == "old.csv"
     prev, done = run_import(client, me, again, options={"category_map": {"fuel": "Transport"}})
-    assert prev["summary"]["imported_before"] == 5 and prev["summary"]["chosen"] == 0
-    assert done["rows_imported"] == 0 and done["rows_skipped"] == 5 and done["status"] == "FAILED"
+    assert prev["summary"]["imported_before"] == 4 and prev["blocked"]
+    assert "Purge & re-import" in prev["records"][0]["problems"][0]
+    assert prev["earlier_imports"] == [{**prev["earlier_imports"][0], "id": first["id"], "filename": "old.csv", "rows": 4}]
+    assert done["status_code"] == 400
     db.expire_all()
-    assert db.scalar(select(func.count(Expense.id))) == 4
+    assert db.scalar(select(func.count(Expense.id))) == 3  # never twice
 
 
-def test_records_already_in_the_app_are_flagged_and_left_out_unless_ticked(client, make_user, db):
+def test_a_record_already_in_the_app_blocks_the_file(client, make_user, db):
     me = make_user("asha")
     client.post("/api/expenses", json={"expense_date": str(DAY1), "item_name": "Dinner (typed by hand)", "category": "Food",
                                        "amount": "1250.50"}, headers=headers(me))
     d = upload(client, me, "old.csv", CSV.encode()).json()
-    prev, done = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}})
+    prev, done = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}},
+                            include=lambda r: True)  # ticking it changes nothing
     dup = next(r for r in prev["records"] if r["description"] == "Swiggy dinner")
-    assert dup["status"] == "DUPLICATE" and not dup["default_include"] and "Dinner (typed by hand)" in dup["warnings"][0]
-    assert done["rows_imported"] == 3 and done["rows_skipped"] == 1
-
-    # Ticked on purpose: imported anyway
-    d = upload(client, me, "other.csv", CSV.encode()).json()
-    _, done = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}},
-                         include=lambda r: r["description"] == "Swiggy dinner")
-    assert done["rows_imported"] == 1
+    assert dup["status"] == "DUPLICATE" and not dup["can_import"] and "Dinner (typed by hand)" in dup["problems"][0]
+    assert prev["blocked"] and done["status_code"] == 400 and "row 2" in done["blocked"]
+    assert db.scalar(select(func.count(Expense.id))) == 1  # only the one typed by hand
 
 
-def test_invalid_rows_are_recorded_with_their_reason(client, make_user):
+def test_an_invalid_row_blocks_the_whole_file(client, make_user, db):
     me = make_user("asha")
     content = ("Date,Item,Category,Amount\n"
                f"{dmy(DAY1)},Tea,Food,20\n"
-               f"bad,Coffee,Food,30\n"
+               f"31/02/{DAY1.year},Coffee,Food,30\n"
                f"{dmy(DAY1)},Juice,Food,\n").encode()
     d = upload(client, me, "mixed.csv", content).json()
-    _, done = run_import(client, me, d)
-    assert (done["status"], done["rows_imported"], done["rows_failed"]) == ("COMPLETED_WITH_ERRORS", 1, 2)
-    detail = client.get(f"{API}/{done['id']}", headers=headers(me)).json()
-    assert [(r["row_no"], r["status"], r["reason"]) for r in detail["records"]] == [
-        (2, "IMPORTED", None), (3, "FAILED", "Unrecognised date “bad”"), (4, "FAILED", "Missing amount")]
+    prev, done = run_import(client, me, d)
+    assert [(r["row_no"], r["status"], r["problems"]) for r in prev["records"]] == [
+        (2, "READY", []), (3, "INVALID", [f"Unrecognised date “31/02/{DAY1.year}”"]), (4, "INVALID", ["Missing amount"])]
+    assert prev["blocked"] and prev["summary"]["file_problems"] == 2
+    assert done["status_code"] == 400 and "2 row(s) have a problem in the file" in done["blocked"]
+    assert db.scalar(select(func.count(Expense.id))) == 0  # not even the good row: the file comes in whole
+    assert client.get(API, headers=headers(me)).json() == []  # no import was started
+
+
+def test_a_balance_or_total_line_is_left_out_without_blocking(client, make_user):
+    me = make_user("asha")
+    content = ("Date,Narration,Withdrawal,Deposit\n"
+               f"{dmy(DAY1)},UPI-SWIGGY,450,\n"
+               f"{dmy(DAY2)},Closing balance,,64550\n").encode()
+    d = upload(client, me, "bank.csv", content).json()
+    prev, done = run_import(client, me, d, options={"category_map": {"": "Food"}})
+    assert [r["status"] for r in prev["records"]] == ["READY", "IGNORED"] and not prev["blocked"]
+    assert (done["rows_imported"], done["rows_skipped"], done["status"]) == (1, 1, "COMPLETED")
 
 
 def test_rows_corrected_in_the_review_are_imported(client, make_user):
@@ -383,7 +416,7 @@ def test_records_typed_by_hand_without_a_file(client, make_user):
     records = [{"row_no": 1, "kind": "EXPENSE", "date": str(DAY1), "description": "Gym fee", "category": "Health", "amount": "1500"}]
     chk = client.post(f"{API}/check", json={"records": records}, headers=headers(me)).json()
     assert chk["records"][0]["status"] == "READY"
-    batch = client.post(API, json={"filename": "Typed by hand", "file_type": "manual"}, headers=headers(me)).json()
+    batch = client.post(API, json={"filename": "Typed by hand", "file_type": "manual", "records": records}, headers=headers(me)).json()
     assert client.post(f"{API}/{batch['id']}/rows", json={"records": records}, headers=headers(me)).json()["imported"] == 1
 
 
@@ -409,7 +442,9 @@ def test_accounts_fixed_or_from_the_file(client, make_user):
     got = {e["item_name"]: e["account_id"] for e in client.get("/api/expenses", headers=headers(me)).json()}
     assert got == {"Tea": card["id"], "Book": hdfc["id"], "Bus": None}
 
-    d = upload(client, me, "acc2.csv", content.replace(b"Tea,Food,20", b"Coffee,Food,45")).json()
+    other = ("Date,Item,Category,Amount,Paid with\n"
+             f"{dmy(DAY2)},Coffee,Food,45,ICICI Card\n").encode()
+    d = upload(client, me, "acc2.csv", other).json()
     _, done = run_import(client, me, d, options={"account_mode": "fixed", "account_id": card["id"]})
     coffee = next(e for e in client.get("/api/expenses", headers=headers(me)).json() if e["item_name"] == "Coffee")
     assert coffee["account_id"] == card["id"]
@@ -471,9 +506,13 @@ def test_imports_post_to_the_books_and_locked_periods_are_refused(client, make_u
     prev, done = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}})
     statuses = {r["description"]: r["status"] for r in prev["records"]}
     assert statuses == {"Swiggy dinner": "LOCKED", "Metro card": "LOCKED", "November salary": "READY", "Petrol": "READY"}
-    assert (done["rows_imported"], done["rows_failed"]) == (2, 2)
+    assert done["status_code"] == 400  # rows in the locked period block the file
+
+    client.put("/api/accounting/settings", json={"lock_date": str(DAY1 - timedelta(days=1))}, headers=headers(me))
+    _, done = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}})
+    assert done["rows_imported"] == 4
     vouchers = client.get("/api/accounting/vouchers", params={"hide_reversed": True}, headers=headers(me)).json()["items"]
-    assert sorted(v["source_type"] for v in vouchers if v["source_type"]) == ["EXPENSE", "FUND"]
+    assert sorted(v["source_type"] for v in vouchers if v["source_type"]) == ["EXPENSE", "EXPENSE", "EXPENSE", "FUND"]
 
 
 # ---------- history and undo ----------
@@ -550,7 +589,7 @@ def test_rows_imported_before_show_as_such_even_without_a_category(client, make_
     again = upload(client, me, "bank.csv", content).json()
     prev = client.post(f"{API}/preview", json={"rows": again["tables"][0]["rows"], "mapping": again["guess"]}, headers=headers(me)).json()
     assert [(r["status"], r["can_import"]) for r in prev["records"]] == [("IMPORTED_BEFORE", False), ("IMPORTED_BEFORE", False)]  # never imported twice
-    assert "Choose a category" in prev["records"][0]["warnings"][-1]
+    assert prev["blocked"] and "Purge & re-import" in prev["records"][0]["problems"][0]
 
 
 def test_big_imports_are_undone_over_several_requests(client, make_user, db, monkeypatch):
@@ -582,16 +621,20 @@ def test_a_split_someone_else_paid_is_my_share_owed_to_them(client, make_user, d
     text = ("Date,Description,Category,Total paid,My share,Paid by,Split with\n"
             f"{dmy(DAY1)},Dinner,Food,1200,400,Ravi,\n"
             f"{dmy(DAY1)},Movie,Entertainment,600,300,Me,Priya\n"
-            f"{dmy(DAY1)},Cab,Transport,500,250,asha,Priya\n"
-            f"{dmy(DAY1)},Lunch,Food,900,,Ravi,\n")
-    d = upload(client, me, "paid by.csv", text.encode()).json()
+            f"{dmy(DAY1)},Cab,Transport,500,250,asha,Priya\n")
+    maps = {"category_map": {"food": "Food", "entertainment": "Entertainment", "transport": "Transport"}}
+    # Ravi paid, but how much of it was mine? That row blocks the file until the file says
+    d = upload(client, me, "paid by.csv", (text + f"{dmy(DAY1)},Lunch,Food,900,,Ravi,\n").encode()).json()
     assert d["guess"]["paid_by"] == 5
-    prev, done = run_import(client, me, d, options={"category_map": {"food": "Food", "entertainment": "Entertainment", "transport": "Transport"}})
+    prev, done = run_import(client, me, d, options=maps)
+    lunch = next(r for r in prev["records"] if r["description"] == "Lunch")
+    assert lunch["status"] == "INVALID" and "Ravi paid" in lunch["problems"][0] and done["status_code"] == 400
+    d = upload(client, me, "paid by.csv", text.encode()).json()
+    prev, done = run_import(client, me, d, options=maps)
     rows = {r["description"]: r for r in prev["records"]}
     assert (rows["Dinner"]["kind"], rows["Dinner"]["paid_by"], rows["Dinner"]["account_ref"]) == ("SPLIT", "Ravi", "none")
     assert "you owe them" in " ".join(rows["Dinner"]["warnings"])
     assert rows["Movie"]["paid_by"] is None and rows["Cab"]["paid_by"] is None  # "Me" and the user's own name
-    assert rows["Lunch"]["status"] == "INVALID" and "Ravi paid" in rows["Lunch"]["problems"][0]
     assert done["rows_imported"] == 3
 
     dinner = db.scalar(select(Expense).where(Expense.item_name == "Dinner"))

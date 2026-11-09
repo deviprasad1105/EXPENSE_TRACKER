@@ -39,8 +39,10 @@ def preview(client, user, extracted, options=None):
 
 def run(client, user, extracted, options):
     prev = preview(client, user, extracted, options)
-    batch = client.post(API, json={"filename": extracted["filename"], "file_type": "csv", "file_hash": extracted["file_hash"]},
-                        headers=headers(user)).json()
+    start = client.post(API, json={"filename": extracted["filename"], "file_type": "csv", "file_hash": extracted["file_hash"],
+                                   "records": prev["records"], "options": options}, headers=headers(user))
+    assert start.status_code == 201, start.text
+    batch = start.json()
     res = client.post(f"{API}/{batch['id']}/rows", json={"records": prev["records"], "options": options}, headers=headers(user))
     assert res.status_code == 200, res.text
     return prev, client.post(f"{API}/{batch['id']}/finish", headers=headers(user)).json()
@@ -149,11 +151,17 @@ def test_rows_imported_before_cannot_be_ticked_back_in(client, make_user, db):
     prev = preview(client, me, ex)
     for r in prev["records"]:
         r["include"] = True  # even when ticked by hand
-    batch = client.post(API, json={"filename": "again.csv", "file_type": "csv", "file_hash": ex["file_hash"]}, headers=headers(me)).json()
-    res = client.post(f"{API}/{batch['id']}/rows", json={"records": prev["records"], "options": {}}, headers=headers(me)).json()
-    assert res["imported"] == 0 and res["skipped"] == 2
-    detail = client.get(f"{API}/{batch['id']}", headers=headers(me)).json()
-    assert {r["reason"] for r in detail["records"]} == {"Already imported from an earlier upload"}
+    res = client.post(API, json={"filename": "again.csv", "file_type": "csv", "file_hash": ex["file_hash"],
+                                 "records": prev["records"]}, headers=headers(me))
+    assert res.status_code == 400 and "Fix the file" in res.json()["detail"]
+    # Nor chunk by chunk into an import started for another file
+    other = upload(client, me, f"Date,Type,Amount,Category,Notes\n{d(5)},Expense,15,Food,Water\n", "other.csv")
+    p2 = preview(client, me, other)
+    batch = client.post(API, json={"filename": "other.csv", "file_type": "csv", "records": p2["records"]}, headers=headers(me)).json()
+    res = client.post(f"{API}/{batch['id']}/rows", json={"records": prev["records"] * 2, "options": {}}, headers=headers(me))
+    assert res.status_code == 400 and "More rows than the file" in res.json()["detail"]
+    res = client.post(f"{API}/{batch['id']}/rows", json={"records": prev["records"][:1], "options": {}}, headers=headers(me))
+    assert res.status_code == 409 and "Nothing from this file is kept" in res.json()["detail"]
     assert len(db.scalars(select(Expense)).all()) == 2
 
 

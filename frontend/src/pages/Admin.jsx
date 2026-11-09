@@ -6,7 +6,7 @@ import Avatar from '../components/Avatar'
 import { Alert, EmptyRow, Msg, PageHeader } from '../components/ui'
 
 const STATUS_CLS = { APPROVED: 'ok', PENDING: 'warn', REJECTED: 'bad' }
-const KIND_LABEL = { USER: 'Account + data', USER_DATA: 'All data', EXPENSE: 'Expense', FUND: 'Fund', DAILY_ITEM: 'Daily item' }
+const KIND_LABEL = { USER: 'Account + data', USER_DATA: 'All data', PURGE: 'Purged date range', EXPENSE: 'Expense', FUND: 'Fund', DAILY_ITEM: 'Daily item' }
 const size = (b) => (b > 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`)
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '')
 
