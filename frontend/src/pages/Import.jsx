@@ -117,7 +117,10 @@ export function ImportTabs({ active }) {
   return (
     <div className="segmented">
       <button className={active === 'new' ? 'on' : ''} onClick={() => navigate('/import')}>
-        <FileUp size={14} /> New import
+        <FileUp size={14} /> Import
+      </button>
+      <button className={active === 'purge' ? 'on' : ''} onClick={() => navigate('/import/purge')}>
+        <Trash2 size={14} /> Purge
       </button>
       <button className={active === 'history' ? 'on' : ''} onClick={() => navigate('/import/history')}>
         <History size={14} /> Import history

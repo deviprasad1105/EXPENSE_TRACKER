@@ -14,6 +14,8 @@
 Each user imports into their own account only.
 """
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -23,12 +25,14 @@ from ..database import get_db
 from ..deps import get_current_user
 from ..models import User
 from ..timeutil import today_local
+from . import purge as range_purge
 from . import service
 from .extract import extract, file_hash, file_type, gunzip
 from .models import ImportBatch
 from .parse import Mapping, guess_mapping, parse_records
 from .schemas import (
-    BatchDetail, BatchIn, BatchOut, CheckIn, CheckOut, ChunkIn, ExtractOut, ImportRecordOut, PreviewIn, RecordIn, TableOut,
+    BatchDetail, BatchIn, BatchOut, CheckIn, CheckOut, ChunkIn, ExtractOut, ImportRecordOut, PreviewIn, PurgeRangeIn,
+    RecordIn, TableOut,
 )
 
 router = APIRouter(prefix="/api/imports", tags=["imports"])
@@ -88,6 +92,20 @@ def preview(data: PreviewIn, user: User = Depends(get_current_user), db: Session
 def check(data: CheckIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     replaces = _batch(db, user, data.replaces_id) if data.replaces_id else None
     return service.check(db, user, data.records, data.options, replaces=replaces)
+
+
+# ---------- purge a date range (Import Records → Purge) ----------
+@router.get("/purge/preview")
+def purge_preview(start: date, end: date, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """What purging the range would remove: expenses, money received and transfers (typed or imported)."""
+    return range_purge.preview(db, user, start, end)
+
+
+@router.post("/purge")
+def purge_range(data: PurgeRangeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Remove every record in the range, 200 per call (backed up first): call again with `backup_id` while
+    `remaining` > 0."""
+    return range_purge.purge(db, user, data.start, data.end, data.backup_id)
 
 
 @router.post("", response_model=BatchOut, status_code=201)

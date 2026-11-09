@@ -153,6 +153,13 @@ class BatchIn(BaseModel):
     replaces_id: int | None = None
 
 
+class PurgeRangeIn(BaseModel):
+    start: Date
+    end: Date
+    # The purge's backup, from its first call: the next calls remove the rest of what it holds
+    backup_id: int | None = None
+
+
 class ChunkIn(BaseModel):
     records: list[RecordIn] = Field(max_length=500)
     options: ImportOptions = Field(default_factory=ImportOptions)

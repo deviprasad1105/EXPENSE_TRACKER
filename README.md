@@ -172,6 +172,14 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
     entirely, including records edited since, and shows as *Replaced*. It is refused up front when any of the
     earlier import's records is in a locked accounting period or reconciled with a bank statement, so it never stops
     halfway; if removing the earlier import is interrupted, *Finish replacing* completes it.
+  - **Purge** (the *Purge* tab, between *Import* and *Import history*): removes every expense, money received and
+    transfer dated from a *From* to a *To* date, typed in by hand or imported, e.g. to import that period again from
+    a corrected file. It shows what it would remove first (counts and amounts, how many were imported), and asks you
+    to type PURGE. A backup is saved before anything is deleted (an administrator can restore it from *Admin →
+    Backups*); the removed records are reversed in the books; the import rows they came from are marked as removed,
+    so the file can be imported again. Refused when part of the range is in a locked accounting period or a record in
+    it is reconciled with a bank statement. Split bills and settlements (shared with others), subscriptions, budgets,
+    accounts and opening balances aren't touched.
   - **What a row becomes**: spending → an expense; money in (deposit, credit, income, salary…) → money received;
     a split row (a *My share* or *Split with* column) → an expense for your share plus a split bill, paid by you, for
     the part paid for the others (the people named, or "Others"), in a group you choose or "Imported split bills".

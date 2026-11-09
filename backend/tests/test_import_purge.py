@@ -156,3 +156,73 @@ def test_a_finished_import_is_only_purged_through_a_replacement(client, make_use
     res = client.post(f"{API}/preview", json={"rows": t["rows"], "mapping": ex["guess"], "replaces_id": first["id"]},
                       headers=headers(other))
     assert res.status_code == 404
+
+
+# ---------- Purge a date range (Import Records → Purge) ----------
+def purge_range(client, user, start, end):
+    first = client.post(f"{API}/purge", json={"start": str(start), "end": str(end)}, headers=headers(user))
+    assert first.status_code == 200, first.text
+    out = first.json()
+    while out["remaining"]:
+        res = client.post(f"{API}/purge", json={"start": str(start), "end": str(end), "backup_id": out["backup_id"]},
+                          headers=headers(user))
+        assert res.status_code == 200, res.text
+        out = {**res.json(), "removed": out["removed"] + res.json()["removed"]}
+    return out
+
+
+def test_purge_a_date_range_removes_typed_and_imported_records(client, make_user, db, monkeypatch):
+    monkeypatch.setattr("app.importer.purge.UNDO_CHUNK", 2)  # several calls, as for a big range
+    me = make_user("asha", accounting=True)
+    admin = make_user("boss", admin=True)
+    client.get("/api/accounting/settings", headers=headers(me))
+    _, first = run(client, me, upload(client, me, V2, "money.csv"), OPTS)  # DAY .. DAY+3
+    h = headers(me)
+    client.post("/api/expenses", json={"expense_date": str(DAY + timedelta(days=1)), "item_name": "Typed lunch", "amount": "99"}, headers=h)
+    client.post("/api/expenses", json={"expense_date": str(DAY + timedelta(days=10)), "item_name": "Outside", "amount": "7"}, headers=h)
+
+    start, end = DAY, DAY + timedelta(days=3)
+    pv = client.get(f"{API}/purge/preview", params={"start": str(start), "end": str(end)}, headers=h).json()
+    assert (pv["expenses"]["count"], pv["funds"]["count"], pv["records"], pv["imported"], pv["typed"]) == (4, 1, 5, 4, 1)
+    assert pv["expenses"]["total"] == "224.00" and pv["blocks"] == []
+    assert pv["imports"] == [{**pv["imports"][0], "id": first["id"], "filename": "money.csv", "rows": 4}]
+
+    out = purge_range(client, me, start, end)
+    assert out["removed"] == 5 and out["remaining"] == 0
+    db.expire_all()
+    assert [e.item_name for e in db.scalars(select(Expense))] == ["Outside"]
+    assert db.scalars(select(Fund)).all() == []
+    batch = client.get(f"{API}/{first['id']}", headers=h).json()
+    assert batch["status"] == "PURGED" and {r["reason"] for r in batch["records"]} == {f"Purged ({start:%d %b %Y} to {end:%d %b %Y})"}
+    assert client.get("/api/accounting/reports/trial-balance", headers=h).json()["balanced"]
+
+    # The period can be imported again, whole
+    _, again = run(client, me, upload(client, me, V2, "money.csv"), OPTS)
+    assert again["rows_imported"] == 4
+    # The purge was backed up: an administrator can restore it
+    backups = client.get("/api/admin/backups", headers=headers(admin)).json()
+    mine = next(b for b in backups if b["kind"] == "PURGE")
+    assert mine["row_count"] == 5 and "Purged" in mine["summary"]
+
+
+def test_purge_is_refused_in_a_locked_period_and_checks_its_input(client, make_user, db):
+    me = make_user("asha", accounting=True)
+    client.get("/api/accounting/settings", headers=headers(me))
+    run(client, me, upload(client, me, V2, "money.csv"), OPTS)
+    client.put("/api/accounting/settings", json={"lock_date": str(DAY + timedelta(days=1))}, headers=headers(me))
+    h = headers(me)
+    pv = client.get(f"{API}/purge/preview", params={"start": str(DAY), "end": str(DAY + timedelta(days=5))}, headers=h).json()
+    assert "locked" in pv["blocks"][0]
+    res = client.post(f"{API}/purge", json={"start": str(DAY), "end": str(DAY + timedelta(days=5))}, headers=h)
+    assert res.status_code == 400 and res.json()["detail"].startswith("Nothing was removed")
+    assert len(db.scalars(select(Expense)).all()) == 3
+    # After the locked date: fine
+    assert purge_range(client, me, DAY + timedelta(days=2), DAY + timedelta(days=5))["removed"] == 2
+    bad = client.post(f"{API}/purge", json={"start": str(DAY), "end": str(DAY - timedelta(days=1))}, headers=h)
+    assert bad.status_code == 400
+    empty = client.post(f"{API}/purge", json={"start": "2001-01-01", "end": "2001-01-02"}, headers=h)
+    assert empty.status_code == 400 and "no records" in empty.json()["detail"]
+    other = make_user("ravi")
+    first = client.get("/api/admin/backups", headers=headers(make_user("boss", admin=True))).json()[0]
+    res = client.post(f"{API}/purge", json={"start": str(DAY), "end": str(DAY), "backup_id": first["id"]}, headers=headers(other))
+    assert res.status_code == 404
