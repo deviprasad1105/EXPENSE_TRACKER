@@ -54,7 +54,7 @@ export default function ImportHistory() {
       return setMsg({ type: 'warn', text: `Nothing can be undone in ${b.filename}. ${detail.undo_keeps.map((k) => `${k.rows}: ${k.reason}`).join('; ')}` })
     }
     const books = detail.books
-      ? '\n\nYour accounting books keep a record of this import and its reversal (as in Tally), so the earlier years it added stay, and accounts it created are deactivated rather than deleted.'
+      ? '\n\nYour accounting books keep a record of what was posted and its reversal (as in Tally), so accounts the import created are deactivated rather than deleted.'
       : ''
     if (!window.confirm(`Undo ${b.filename}?\n\n${detail.undo_removes} record(s) it created will be removed.${keeps ? `\n${keeps}` : ''}\n\nOther records in the app are not touched.${books}`)) return
     // A big import is undone a few hundred records per request

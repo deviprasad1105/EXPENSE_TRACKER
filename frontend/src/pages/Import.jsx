@@ -568,6 +568,13 @@ function Review({ source, onCancel, onDone, onError }) {
             ].filter(Boolean).join(', ')}. Change any of them below.
           </Alert>
         )}
+        {info.before_books > 0 && (
+          <p className="hint">
+            {info.before_books} record(s) are dated before your accounting books start ({new Date(info.books_start).toLocaleDateString('en-IN')}).
+            They show everywhere in the app, but aren’t posted as vouchers: their effect goes into the opening balances of
+            your accounts in the books, which keep their start date.
+          </p>
+        )}
         {info.lock_date && <p className="hint">Your accounting books are locked up to {new Date(info.lock_date).toLocaleDateString('en-IN')}: records dated on or before it can’t be imported.</p>}
 
         <AccountMap info={info} options={options} setOption={setOption} />

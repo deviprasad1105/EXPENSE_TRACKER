@@ -28,7 +28,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from ..accounting.engine import get_books
+from ..accounting.engine import get_books, sync_account_ledger
 from ..accounting.models import AccLedger, BankStatementLine, Voucher, VoucherLine
 from ..config import settings
 from ..deps import FEATURE_SPLIT, has_feature
@@ -558,6 +558,8 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         "split_groups": [{"id": g.id, "name": g.name} for g in _member_groups(db, user.id)],
         "split_enabled": split_ok,
         "lock_date": lock,
+        "books_start": books.books_start if books else None,
+        "before_books": sum(1 for o in chosen if books and o["date"] and o["date"] < books.books_start),
         "max_records": settings.import_max_records,
     }
 
@@ -863,8 +865,20 @@ def import_chunk(db: Session, user: User, batch: ImportBatch, records: list[Reco
             db.add(_record(batch, r, REC_FAILED, message))
         _add_counts(batch, counts, Decimal(0), Decimal(0))
         db.commit()
+    _carry_in(db, user.id)
     return {"imported": counts[REC_IMPORTED], "skipped": counts[REC_SKIPPED], "failed": counts[REC_FAILED],
             "accounts_created": ctx.get("created_accounts", [])}
+
+
+def _carry_in(db: Session, user_id: int) -> None:
+    """Imported records dated before the books start aren't posted; their effect goes into the accounts' opening
+    balances in the books, brought up to date here after an import or an Undo."""
+    books = get_books(db, user_id)
+    if books is None:
+        return
+    for account in db.scalars(select(Account).where(Account.user_id == user_id)):
+        sync_account_ledger(db, books, account)
+    db.commit()
 
 
 def _add_counts(batch: ImportBatch, counts: Counter, exp_total: Decimal, inc_total: Decimal):
@@ -976,6 +990,7 @@ def undo(db: Session, batch: ImportBatch, limit: int | None = None) -> dict:
     batch.status = UNDONE if not still else PARTIALLY_UNDONE
     batch.undone_at = now_local()
     db.commit()  # reverses the vouchers of what was removed
+    _carry_in(db, batch.user_id)
     accounts = _drop_created_accounts(db, batch) if batch.status == UNDONE else {"removed": [], "deactivated": []}
     return {"removed": removed, "kept": kept, "already_deleted": gone, "remaining": remaining, "status": batch.status,
             "accounts_removed": accounts["removed"], "accounts_deactivated": accounts["deactivated"]}

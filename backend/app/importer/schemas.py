@@ -121,6 +121,9 @@ class CheckOut(BaseModel):
     split_groups: list[dict]
     split_enabled: bool
     lock_date: Date | None = None
+    # The accounting books start: rows dated before it aren't posted, they go into the opening balances
+    books_start: Date | None = None
+    before_books: int = 0
     max_records: int
     # Choices from the user's earlier imports for the values in this file (same shape as the options)
     remembered: dict = Field(default_factory=dict)

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..models import Account, AccountTransfer, Expense, Fund, SplitBill, SplitMember, SplitSettlement, User
 from ..models import Subscription, SubscriptionCharge
+from ..importer.models import REC_IMPORTED, REC_KEPT, ImportRecord
 from ..timeutil import now_local, today_local
 from .chart import ACCOUNT_KIND_GROUP, CASH_BANK_GROUPS, NON_CASH_ACCOUNT_GROUPS, SEED_LEDGERS, fy_of, fy_start
 from .models import VOUCHER_POSTED, VOUCHER_REVERSED, AccLedger, AccSettings, Voucher, VoucherLine
@@ -131,11 +132,43 @@ def account_ledger(db: Session, books: AccSettings, account: Account) -> AccLedg
     return ledger or sync_account_ledger(db, books, account)
 
 
+def imported_source(db: Session, column, source_id: int) -> bool:
+    """Whether an expense / money received / transfer / split bill (by its ImportRecord column) came from an import."""
+    return db.scalar(
+        select(ImportRecord.id).where(column == source_id, ImportRecord.status.in_((REC_IMPORTED, REC_KEPT))).limit(1)
+    ) is not None
+
+
+def carried_in(db: Session, books: AccSettings, account_id: int) -> Decimal:
+    """What imported records dated before the books start did to this account. They aren't posted (an import never
+    moves the books start back, as in Tally, where history before the books is an opening balance); their effect is
+    carried in the account ledger's opening balance instead, so the books still agree with the account."""
+    start = books.books_start
+    live = (ImportRecord.user_id == books.user_id, ImportRecord.status.in_((REC_IMPORTED, REC_KEPT)))
+    if db.scalar(select(ImportRecord.id).where(*live, ImportRecord.record_date < start).limit(1)) is None:
+        return Decimal(0)
+
+    def total(amount, *where):
+        return Decimal(db.scalar(select(func.coalesce(func.sum(amount), 0)).where(*where)) or 0)
+
+    imported = lambda col: select(col).where(*live, col.is_not(None))  # noqa: E731
+    received = total(Fund.amount, Fund.account_id == account_id, Fund.fund_date < start, Fund.id.in_(imported(ImportRecord.fund_id)))
+    spent = total(Expense.amount, Expense.account_id == account_id, Expense.expense_date < start,
+                  Expense.id.in_(imported(ImportRecord.expense_id)))
+    moved = imported(ImportRecord.transfer_id)
+    t_in = total(AccountTransfer.amount, AccountTransfer.to_account_id == account_id, AccountTransfer.transfer_date < start,
+                 AccountTransfer.id.in_(moved))
+    t_out = total(AccountTransfer.amount, AccountTransfer.from_account_id == account_id,
+                  AccountTransfer.transfer_date < start, AccountTransfer.id.in_(moved))
+    return received - spent + t_in - t_out
+
+
 def sync_account_ledger(db: Session, books: AccSettings, account: Account) -> AccLedger:
-    """Keep the ledger of a bank account in step with it: name, group (from the kind), opening balance."""
+    """Keep the ledger of a bank account in step with it: name, group (from the kind), opening balance (the account's
+    own, plus imported history from before the books start)."""
     ledger = db.scalar(select(AccLedger).where(AccLedger.account_id == account.id))
     group = ACCOUNT_KIND_GROUP.get(account.kind, "BANK_ACCOUNTS")
-    opening = Decimal(account.opening_balance or 0)
+    opening = Decimal(account.opening_balance or 0) + carried_in(db, books, account.id)
     if ledger is None:
         ledger = AccLedger(
             user_id=account.user_id, account_id=account.id, group_code=group, opening_balance=opening,

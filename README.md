@@ -190,14 +190,16 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
     imported before (shown under *Already imported* and never imported twice: re-uploading a file adds nothing),
     and balance / total lines. A description longer than 100 characters is kept in full in the note.
   - **After the import**: records keep their original date and show on every page; the 3-day edit window starts on
-    the import day; no budget alert is sent; they post to the books like any other record. A whole history from
+    the import day; no budget alert is sent; they post to the books like any other record. An import never moves
+    the books' start date back: records dated before it aren't posted, and their effect goes into the accounts'
+    opening balances in the books (as in Tally, where history before the books is an opening balance). A whole history from
     another app (e.g. a Money Manager export with transfers and opening balances) ends with every account at the
     balance the other app shows.
   - **Import history**: each upload with its file, date, status, rows imported / left out / failed (each with its
     reason) and totals. **Undo** removes only the records that upload created, keeping any edited since, reconciled
     with a bank statement or in a locked accounting period (a big import is undone 200 records per request). With
-    Accounting on, the books keep the import and its reversal (as in Tally): the earlier years it added stay, and
-    the accounts it created are deactivated rather than deleted.
+    Accounting on, the books keep what was posted and its reversal (as in Tally), so the accounts the import created
+    are deactivated rather than deleted.
 - **Transfers between accounts** (*Settings → Accounts*) are listed 50 at a time, newest first.
 - **Profile**: change your name, email, password and **profile photo** (upload or remove).
   **Username**: you can change it yourself once every `USERNAME_LOCK_DAYS` (15) days. Inside that window you raise

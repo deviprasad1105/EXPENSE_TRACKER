@@ -35,6 +35,7 @@ from ..models import (
     User,
 )
 from .chart import EXPENSE_GROUPS, INCOME_GROUPS
+from ..importer.models import ImportRecord
 from .engine import (
     CONTRA,
     JOURNAL,
@@ -46,6 +47,7 @@ from .engine import (
     account_ledger,
     check_open,
     get_books,
+    imported_source,
     is_cash_or_bank,
     is_locked,
     payment_ledger,
@@ -333,6 +335,9 @@ def sync_source(
         if books is None:
             continue
         want = plans[uid](books) if uid in plans else None
+        if (want is not None and want.voucher_date < books.books_start and stype in _IMPORT_COLUMN
+                and imported_source(db, _IMPORT_COLUMN[stype], sid)):
+            want = None  # imported history before the books: carried in the accounts' opening balances instead
         _apply(db, books, stype, sid, want, active_voucher(db, uid, stype, sid), strict, report)
     return report
 
@@ -455,6 +460,26 @@ def sync_rule(db: Session, books: AccSettings, rule: PostingRule) -> SyncReport:
 
 # ---------- session hooks ----------
 _PENDING = "acc_pending"
+# The ImportRecord column that links a source to the import that created it
+_IMPORT_COLUMN = {
+    EXPENSE: ImportRecord.expense_id, FUND: ImportRecord.fund_id, TRANSFER: ImportRecord.transfer_id,
+    SPLIT_BILL: ImportRecord.split_bill_id,
+}
+
+
+def _mark_accounts(session: Session, obj, include_old: bool) -> None:
+    """An expense, money received or transfer changed: its accounts' ledgers may carry imported history in their
+    opening balance, so they are brought up to date too (also the account it was moved away from)."""
+    from sqlalchemy import inspect as sa_inspect
+
+    cols = ("from_account_id", "to_account_id") if isinstance(obj, AccountTransfer) else ("account_id",)
+    state = sa_inspect(obj)
+    for col in cols:
+        ids = {getattr(obj, col, None)}
+        if include_old:
+            ids |= set(state.attrs[col].history.deleted or ())
+        for account_id in ids - {None}:
+            _mark(session, (ACCOUNT, account_id))
 _TRACKED = {
     Expense: EXPENSE, Fund: FUND, AccountTransfer: TRANSFER, SubscriptionCharge: SUB_CHARGE,
     SplitBill: SPLIT_BILL, SplitSettlement: SPLIT_SETTLEMENT,
@@ -484,6 +509,8 @@ def _before_flush(session: Session, flush_context, instances):
         key = _key_for(obj)
         if key:
             _mark(session, key)
+        if isinstance(obj, (Expense, Fund, AccountTransfer)):
+            _mark_accounts(session, obj, include_old=True)
         if isinstance(obj, Expense):
             # A subscription charge logged as this expense now has to carry the posting itself
             for cid in session.scalars(select(SubscriptionCharge.id).where(SubscriptionCharge.expense_id == obj.id)):
@@ -501,6 +528,8 @@ def _after_flush(session: Session, flush_context):
             key = _key_for(obj)
             if key:
                 _mark(session, key)
+            if isinstance(obj, (Expense, Fund, AccountTransfer)):
+                _mark_accounts(session, obj, include_old=True)
 
 
 @event.listens_for(Session, "before_commit")
