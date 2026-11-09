@@ -185,18 +185,26 @@ function Appearance({ user, save, updateUser }) {
 }
 
 // ---------- bank accounts & transfers ----------
+const TRANSFER_PAGE = 50
+
 function Accounts({ user, save }) {
   const [accounts, setAccounts] = useState([])
   const [transfers, setTransfers] = useState([])
+  const [tPage, setTPage] = useState(0) // transfers are shown TRANSFER_PAGE at a time, newest first
+  const [tTotal, setTTotal] = useState(0)
   const [form, setForm] = useState(null) // account being added / edited
   const [transfer, setTransfer] = useState(null)
   const [msg, setMsg] = useState(null)
 
   const load = useCallback(async () => {
-    const [a, t] = await Promise.all([api.get('/accounts'), api.get('/accounts/transfers')])
+    const [a, t] = await Promise.all([
+      api.get('/accounts'),
+      api.get('/accounts/transfers', { params: { offset: tPage * TRANSFER_PAGE, limit: TRANSFER_PAGE } }),
+    ])
     setAccounts(a.data)
     setTransfers(t.data)
-  }, [])
+    setTTotal(Number(t.headers['x-total-count'] || t.data.length))
+  }, [tPage])
   useEffect(() => {
     load().catch((e) => setMsg({ type: 'error', text: errorMessage(e) }))
   }, [load])
@@ -471,6 +479,15 @@ function Accounts({ user, save }) {
               ))}
             </tbody>
           </table>
+          {tTotal > TRANSFER_PAGE && (
+            <div className="toolbar" style={{ borderBottom: 0 }}>
+              <button type="button" className="btn secondary small" disabled={tPage === 0} onClick={() => setTPage(tPage - 1)}>Newer</button>
+              <span className="muted small">
+                {tPage * TRANSFER_PAGE + 1}–{Math.min(tTotal, (tPage + 1) * TRANSFER_PAGE)} of {tTotal} transfers
+              </span>
+              <button type="button" className="btn secondary small" disabled={(tPage + 1) * TRANSFER_PAGE >= tTotal} onClick={() => setTPage(tPage + 1)}>Older</button>
+            </div>
+          )}
         </div>
       )}
     </div>

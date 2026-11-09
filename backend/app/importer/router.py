@@ -46,7 +46,9 @@ async def extract_file(file: UploadFile = File(...), user: User = Depends(get_cu
         content = gunzip(content, settings.import_max_bytes)
     tables = extract(content, name)
     limit = settings.import_max_records + 200  # room for headings and blank lines
-    out = [TableOut(name=t.name, source=t.source, rows=t.rows[:limit], truncated=len(t.rows) > limit) for t in tables]
+    out = [TableOut(name=t.name, source=t.source, rows=t.rows[:limit], truncated=len(t.rows) > limit,
+                    total_rows=max(len(t.rows), t.total or 0))
+           for t in tables]
     # Start on the table most likely to hold the records: the most rows that have a date and an amount
     def score(t: TableOut) -> int:
         g = guess_mapping(t.rows)
@@ -113,6 +115,7 @@ def detail(batch_id: int, user: User = Depends(get_current_user), db: Session = 
     return BatchDetail(
         **BatchOut.model_validate(batch).model_dump(),
         records=[ImportRecordOut.model_validate(r) for r in batch.records], undo_removes=removes, undo_keeps=keeps,
+        books=service.get_books(db, user.id) is not None,
     )
 
 

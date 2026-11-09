@@ -48,14 +48,34 @@ export const STATUS = {
   DUPLICATE: ['warn', 'Possible duplicate'],
   IMPORTED_BEFORE: ['info', 'Already imported'],
 }
+// [key, label, test, shown even when empty]
 const FILTERS = [
-  ['all', 'All', () => true],
-  ['ready', 'Ready', (r) => r.status === 'READY'],
-  ['attention', 'Needs attention', (r) => !r.can_import],
-  ['duplicates', 'Duplicates', (r) => r.status === 'DUPLICATE' || r.status === 'IMPORTED_BEFORE'],
-  ['transfers', 'Transfers', (r) => r.effective_kind === 'TRANSFER' || r.kind === 'OPENING'],
-  ['out', 'Left out', (r) => r.can_import && !r.include],
+  ['all', 'All', () => true, true],
+  ['ready', 'Ready', (r) => r.status === 'READY', true],
+  ['attention', 'Needs attention', (r) => !r.can_import && r.status !== 'IMPORTED_BEFORE', true],
+  ['check', 'To check', (r) => r.to_check],
+  ['duplicates', 'Possible duplicates', (r) => r.status === 'DUPLICATE'],
+  ['before', 'Already imported', (r) => r.status === 'IMPORTED_BEFORE'],
+  ['transfers', 'Transfers', (r) => r.effective_kind === 'TRANSFER' || r.kind === 'OPENING', true],
+  ['out', 'Left out', (r) => r.can_import && !r.include, true],
 ]
+const KIND_NAME = { WALLET: 'wallet', CASH: 'cash account', SAVINGS: 'bank account', CURRENT: 'bank account', SALARY: 'bank account' }
+
+// Accounts (bank, cash, wallet) that would end below zero: some of their rows are probably missing from the file
+function BelowZero({ warnings }) {
+  if (!warnings?.length) return null
+  return (
+    <Alert type="warn">
+      {warnings.map((w) => (
+        <div key={w.account}>
+          “{w.account}” would end at {money(w.balance)}. A {KIND_NAME[w.kind] || 'account'} can’t go below zero, so some of its
+          {w.kind === 'WALLET' ? ' top-ups' : ' money in'} are probably missing from this file. Import that {KIND_NAME[w.kind] || 'account'}’s own
+          statement (PDF, Excel or CSV) as well to complete it.
+        </div>
+      ))}
+    </Alert>
+  )
+}
 export const KIND_LABEL = { EXPENSE: 'Expense', INCOME: 'Income', SPLIT: 'Split bill', TRANSFER: 'Transfer', OPENING: 'Opening balance' }
 // What a category can be moved to instead of counting as spending / income
 const TREAT_NEW = [
@@ -256,7 +276,12 @@ function Columns({ file, onRead, onError }) {
           </div>
         )}
       </div>
-      {table.truncated && <Alert type="warn">This table is longer than the import limit: only its first rows are shown and read.</Alert>}
+      {table.truncated && (
+        <Alert type="error">
+          This table has {(table.total_rows || rows.length).toLocaleString('en-IN')} rows; up to about 5,000 records can be imported at once.
+          Split it into smaller files (for example one per year) and import them one after another.
+        </Alert>
+      )}
       <div className="table-wrap" style={{ maxHeight: 260, marginTop: 14 }}>
         <table className="mini-table">
           <thead>
@@ -282,7 +307,7 @@ function Columns({ file, onRead, onError }) {
       </div>
       <div className="form-actions" style={{ marginTop: 14 }}>
         <span className="muted small grow-space">{missing || `${rows.length - start - (mapping.header_row >= 0 ? 1 : 0)} rows under the heading`}</span>
-        <button className="btn" disabled={!!missing} onClick={() => onRead(rows, mapping)}>
+        <button className="btn" disabled={!!missing || table.truncated} onClick={() => onRead(rows, mapping)}>
           Read the records
         </button>
       </div>
@@ -299,6 +324,7 @@ function Review({ source, onCancel, onDone, onError }) {
     category_map: {}, category_treatment: {}, split_group_id: null,
   })
   const [checking, setChecking] = useState(false)
+  const [remembered, setRemembered] = useState(null) // what was filled in from the last import
   const [filter, setFilter] = useState('all')
   const [page, setPage] = useState(0)
   const [progress, setProgress] = useState(null)
@@ -326,6 +352,24 @@ function Review({ source, onCancel, onDone, onError }) {
           : await api.post('/imports/check', { records: [], options })
         apply(res.data)
         if (!source.rows) addRow([])
+        // Choices made in an earlier import for the same categories and accounts are filled in again
+        const rem = res.data.remembered || {}
+        if (Object.keys(rem).length) {
+          const next = {
+            ...options,
+            category_map: { ...rem.category_map, ...options.category_map },
+            category_treatment: { ...rem.category_treatment, ...options.category_treatment },
+            account_map: { ...rem.account_map, ...options.account_map },
+          }
+          setOptions(next)
+          setRemembered({
+            categories: Object.keys(rem.category_map || {}).length,
+            moves: Object.keys(rem.category_treatment || {}).length,
+            accounts: Object.keys(rem.account_map || {}).length,
+          })
+          const again = await api.post('/imports/check', { records: res.data.records.map(clean), options: next })
+          apply(again.data)
+        }
       } catch (err) {
         onError(errorMessage(err))
         onCancel()
@@ -420,7 +464,7 @@ function Review({ source, onCancel, onDone, onError }) {
   }, [records, filter])
   const pages = Math.max(1, Math.ceil(shown.length / PAGE))
   const chosen = records.filter((r) => r.can_import && r.include)
-  const problems = records.filter((r) => !r.can_import).length
+  const problems = records.filter((r) => !r.can_import && r.status !== 'IMPORTED_BEFORE').length
   const sumOf = (kinds) => chosen.filter((r) => kinds.includes(r.effective_kind)).reduce((s, r) => s + Number(r.amount || 0), 0)
   const totalOut = sumOf(['EXPENSE', 'SPLIT'])
   const totalIn = sumOf(['INCOME'])
@@ -451,7 +495,7 @@ function Review({ source, onCancel, onDone, onError }) {
         setProgress({ done: Math.min(recs.length, i + CHUNK), total: recs.length })
       }
       const done = (await api.post(`/imports/${batch.id}/finish`)).data
-      onDone({ ...done, accounts_created: created })
+      onDone({ ...done, accounts_created: created, account_warnings: s?.account_warnings })
     } catch (err) {
       onError(`${errorMessage(err)}. What was imported before the error is in Import history, where it can be undone.`)
       setProgress(null)
@@ -514,6 +558,23 @@ function Review({ source, onCancel, onDone, onError }) {
             A split row adds your share as an expense; what you paid for the others becomes a split bill they owe you (shared between the names in the row, or “Others”).
           </p>
         )}
+        {remembered && (
+          <Alert type="info">
+            Filled in from your earlier imports:{' '}
+            {[
+              remembered.categories && `${remembered.categories} category choice(s)`,
+              remembered.moves && `${remembered.moves} category move(s)`,
+              remembered.accounts && `${remembered.accounts} account(s)`,
+            ].filter(Boolean).join(', ')}. Change any of them below.
+          </Alert>
+        )}
+        {info.books_moves_to && (
+          <Alert type="info">
+            {info.before_books} record(s) are older than your accounting books, which start on{' '}
+            {new Date(info.books_start).toLocaleDateString('en-IN')}. The books will start from{' '}
+            {new Date(info.books_moves_to).toLocaleDateString('en-IN')} instead, so every record is posted and nothing is lost.
+          </Alert>
+        )}
         {info.lock_date && <p className="hint">Your accounting books are locked up to {new Date(info.lock_date).toLocaleDateString('en-IN')}: records dated on or before it can’t be imported.</p>}
 
         <AccountMap info={info} options={options} setOption={setOption} />
@@ -528,11 +589,15 @@ function Review({ source, onCancel, onDone, onError }) {
       <div className="card flush">
         <div className="toolbar wrap">
           <div className="segmented">
-            {FILTERS.map(([k, label, test]) => (
-              <button key={k} className={filter === k ? 'on' : ''} onClick={() => { setFilter(k); setPage(0) }}>
-                {label} <span className="pill">{records.filter(test).length}</span>
-              </button>
-            ))}
+            {FILTERS.map(([k, label, test, always]) => {
+              const n = records.filter(test).length
+              if (!always && !n && filter !== k) return null
+              return (
+                <button key={k} className={filter === k ? 'on' : ''} onClick={() => { setFilter(k); setPage(0) }}>
+                  {label} <span className="pill">{n}</span>
+                </button>
+              )
+            })}
           </div>
           <span className="spacer" />
           <button className="btn secondary small" onClick={() => addRow()}>
@@ -575,6 +640,7 @@ function Review({ source, onCancel, onDone, onError }) {
       </div>
 
       <div className="card">
+        <BelowZero warnings={s?.account_warnings} />
         <div className="form-actions">
           <div className="grow-space">
             <div className="strong">{chosen.length} record(s) to import</div>
@@ -582,7 +648,9 @@ function Review({ source, onCancel, onDone, onError }) {
               Spending {money(totalOut)} · Money received {money(totalIn)}
               {transfers ? ` · ${transfers} transfer(s) of ${money(totalMoved)}` : ''}
               {openings ? ` · ${openings} opening balance(s)` : ''}
-              {s && (s.duplicates || s.imported_before) ? ` · ${s.duplicates + s.imported_before} duplicate(s) left out unless ticked` : ''}
+              {s?.duplicates ? ` · ${s.duplicates} possible duplicate(s) left out unless ticked` : ''}
+              {s?.imported_before ? ` · ${s.imported_before} already imported (never imported twice)` : ''}
+              {s?.to_check ? ` · ${s.to_check} unusually large row(s) to check` : ''}
               {problems ? ` · ${problems} row(s) with problems won’t be imported` : ''}
             </div>
           </div>
@@ -639,6 +707,8 @@ function Row({ r, hasSplit, onEdit, onRemove }) {
       <td>
         <input value={r.description || ''} maxLength={300} onChange={(e) => onEdit({ description: e.target.value })} />
         {r.alias_name && <div className="hint" style={{ margin: '4px 0 0' }}>→ shown as <b>{r.alias_name}</b></div>}
+        <input value={r.note || ''} maxLength={500} placeholder="Note (optional)" aria-label={`Note for row ${r.row_no}`}
+               style={{ marginTop: 4 }} onChange={(e) => onEdit({ note: e.target.value || null })} />
       </td>
       <td>
         <input value={r.category || ''} maxLength={100} placeholder={r.kind === 'INCOME' ? 'Income' : ''} onChange={(e) => onEdit({ category: e.target.value || null })} />
@@ -822,14 +892,21 @@ function CategoryMap({ info, options, setOption }) {
         )}
         {open.length > 0 && <button className="btn secondary small" onClick={() => bulk(false)}>Create the rest as new categories</button>}
       </div>
-      <p className="hint" style={{ marginTop: 4 }}>Choose an existing category for each, or create it. Rows stay unimported until their category is chosen.</p>
+      <p className="hint" style={{ marginTop: 4 }}>
+        Choose an existing category for each, or create it. Rows stay unimported until their category is chosen.
+        {unknown.some((c) => c.maybe) && ' A “maybe” is not applied by “Use the suggestions”: check what its rows hold first (a “Mobile” category can hold recharges and a new phone).'}
+      </p>
       <div className="form-grid">
         {unknown.map((c) => {
           const mapped = options.category_map[c.value.toLowerCase()]
           const isNew = mapped && !info.categories.includes(mapped)
           return (
             <div key={c.value}>
-              <label>{c.value ? `“${c.value}”` : 'Rows without a category'} · {c.expense_rows} row(s){c.suggested && !mapped ? ` · suggested: ${c.suggested}` : ''}</label>
+              <label>
+                {c.value ? `“${c.value}”` : 'Rows without a category'} · {c.expense_rows} row(s)
+                {c.suggested && !mapped ? ` · suggested: ${c.suggested}` : ''}
+                {c.maybe && !mapped ? ` · maybe ${c.maybe}? Please check` : ''}
+              </label>
               <select value={mapped ? (isNew ? `new:${mapped}` : mapped) : ''} onChange={(e) => choose(c.value, e.target.value.startsWith('new:') ? e.target.value.slice(4) : e.target.value)}>
                 <option value="">Choose…</option>
                 {c.value && <option value={`new:${c.value.trim()}`}>Create “{c.value.trim()}” as a new category</option>}
@@ -837,7 +914,7 @@ function CategoryMap({ info, options, setOption }) {
                 <option value="__new__">Create a new category with another name…</option>
                 <optgroup label="Your categories">
                   {info.categories.map((k) => (
-                    <option key={k} value={k}>{k}</option>
+                    <option key={k} value={k}>{k}{k === c.suggested ? ' (suggested)' : k === c.maybe ? ' (maybe)' : ''}</option>
                   ))}
                 </optgroup>
               </select>
@@ -885,12 +962,16 @@ function AccountMap({ info, options, setOption }) {
       </p>
       <div className="form-grid">
         {info.account_values.map((a) => {
-          const current = info.accounts.find((x) => x.id === a.account_id)
+          const current = a.matched_name
           return (
             <div key={a.value}>
               <label>{a.value ? `“${a.value}”` : 'Rows without an account'} · {a.rows} row(s)</label>
               <select value={valueOf(a)} onChange={(e) => choose(a, e.target.value)}>
-                <option value="">{current && !a.mapped ? `Matched: ${current.name}` : a.ref?.startsWith('new:') ? `New account: ${a.new_name}` : 'Choose…'}</option>
+                <option value="">
+                  {current && !a.mapped
+                    ? `Matched: ${current}${a.matched_inactive ? ' (inactive: it will be used again)' : ''}`
+                    : a.ref?.startsWith('new:') ? `New account: ${a.new_name}` : 'Choose…'}
+                </option>
                 <optgroup label={`Create “${a.new_name || a.value}” as`}>
                   {Object.entries(ACCOUNT_KINDS).map(([k, label]) => (
                     <option key={k} value={`create:${k}`}>{label}{k === a.suggested_kind ? ' (suggested)' : ''}</option>
@@ -983,6 +1064,7 @@ function Done({ result, onAgain }) {
       <p>
         Spending {money(result.expense_total)} · Money received {money(result.income_total)}
       </p>
+      <BelowZero warnings={result.account_warnings} />
       <div className="form-actions">
         <Link className="btn secondary" to="/expenses">Open Expenses</Link>
         <Link className="btn secondary" to="/import/history">See it in Import history</Link>

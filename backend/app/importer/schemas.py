@@ -15,6 +15,8 @@ class TableOut(BaseModel):
     source: str
     rows: list[list[str]]
     truncated: bool = False
+    # Rows in the table before it was cut to the import limit
+    total_rows: int | None = None
 
 
 class ExtractOut(BaseModel):
@@ -90,6 +92,8 @@ class RecordOut(RecordIn):
     payee_key: str | None = None
     alias_id: int | None = None
     alias_name: str | None = None
+    # Much bigger than the other rows of its category: the user is asked to check its category
+    to_check: bool = False
 
 
 class PreviewIn(BaseModel):
@@ -117,7 +121,13 @@ class CheckOut(BaseModel):
     split_groups: list[dict]
     split_enabled: bool
     lock_date: Date | None = None
+    # Rows older than the accounting books move the books' start back to this date (their financial year's start)
+    books_start: Date | None = None
+    books_moves_to: Date | None = None
+    before_books: int = 0
     max_records: int
+    # Choices from the user's earlier imports for the values in this file (same shape as the options)
+    remembered: dict = Field(default_factory=dict)
 
 
 class BatchIn(BaseModel):
@@ -173,3 +183,5 @@ class BatchDetail(BatchOut):
     # What Undo would do now: how many records it removes, and why the others stay
     undo_removes: int
     undo_keeps: list[dict]
+    # The user keeps accounting books (Undo then reverses entries instead of erasing them)
+    books: bool = False
