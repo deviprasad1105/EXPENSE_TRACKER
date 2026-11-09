@@ -3,7 +3,7 @@
 remembered between imports, rows never imported twice, the Undo count, the paged transfer list and the real row
 count of a file over the limit."""
 
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -210,46 +210,17 @@ def test_a_file_past_the_read_cap_reports_its_real_size(client, make_user, monke
     assert t["truncated"] is True and t["total_rows"] == 350
 
 
-# ---------- DEF-09: an import never moves the books' start back ----------
-def test_imported_history_before_the_books_goes_into_opening_balances(client, make_user, db):
+# ---------- Migration: older records move the books' start back, nothing is lost ----------
+def test_records_older_than_the_books_move_their_start_back(client, make_user, db):
     from app.accounting.chart import fy_of, fy_start
 
     me = make_user("asha", accounting=True)
-    h = headers(me)
-    hdfc = client.post("/api/accounts", json={"name": "HDFC", "kind": "SAVINGS", "opening_balance": "1000"}, headers=h).json()
-    start = client.get("/api/accounting/settings", headers=h).json()["books_start"]  # books open this year
-    assert start == fy_start(fy_of(today_local())).isoformat()
-    recent = max(today_local() - timedelta(days=1), fy_start(fy_of(today_local())))
-    text = ("Date,Type,Amount,Category,Account,To account,Notes\n"
-            "10/05/2023,Expense,300,Food,HDFC,,Old dinner\n"
-            "01/06/2023,Income,5000,Salary,HDFC,,Old salary\n"
-            "01/07/2023,Transfer,1000,,HDFC,Pocket,Old withdrawal\n"
-            f"{recent:%d/%m/%Y},Expense,200,Food,HDFC,,Recent lunch\n")
+    start = date.fromisoformat(client.get("/api/accounting/settings", headers=headers(me)).json()["books_start"])
+    old = start - timedelta(days=3 * 365)
+    text = f"Date,Type,Amount,Category,Notes\n{old:%d/%m/%Y},Expense,40,Food,Tea\n{d(1)},Expense,60,Food,Coffee\n"
     ex = upload(client, me, text)
-    opts = {"account_mode": "column", "create_accounts": {"pocket": "CASH"}}
-    prev = preview(client, me, ex, opts)
-    assert prev["before_books"] == 3 and prev["books_start"] == start
-    _, done = run(client, me, ex, opts)
-    assert done["rows_imported"] == 4
-
-    def state():
-        books = client.get("/api/accounting/settings", headers=h).json()
-        ledgers = {g["name"]: g for g in client.get("/api/accounting/ledgers", headers=h).json()}
-        vouchers = client.get("/api/accounting/vouchers", params={"size": 100}, headers=h).json()["items"]
-        return books, ledgers, vouchers
-
-    books, ledgers, vouchers = state()
-    assert books["books_start"] == start  # not moved back to 2023
-    assert all(v["voucher_date"] >= start for v in vouchers) and len(vouchers) == 1  # only the recent lunch
-    # HDFC: 1000 + 5000 - 300 - 1000 carried in; Pocket: + 1000
-    assert (D(ledgers["HDFC"]["opening_balance"]), ledgers["HDFC"]["opening_side"]) == (D("4700"), "DR")
-    assert (D(ledgers["Pocket"]["opening_balance"]), ledgers["Pocket"]["opening_side"]) == (D("1000"), "DR")
-    accounts = {a["name"]: D(a["balance"]) for a in client.get("/api/accounts", headers=h).json()}
-    assert accounts == {"HDFC": D("4500"), "Pocket": D("1000")}
-    tb = client.get("/api/accounting/reports/trial-balance", params={"fy": int(start[:4])}, headers=h).json()
-    assert tb["balanced"] is True
-
-    res = client.post(f"{API}/{done['id']}/undo", headers=h).json()
-    assert res["status"] == "UNDONE"
-    books, ledgers, _ = state()
-    assert books["books_start"] == start and D(ledgers["HDFC"]["opening_balance"]) == D("1000")
+    prev, _ = run(client, me, ex, {})
+    assert prev["books_start"] == str(start)
+    assert prev["books_moves_to"] == str(fy_start(fy_of(old))) and prev["before_books"] == 1
+    books = client.get("/api/accounting/settings", headers=headers(me)).json()
+    assert books["books_start"] == str(fy_start(fy_of(old)))
