@@ -1,23 +1,27 @@
 import { useEffect, useState } from 'react'
-import { Eye, Undo2 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Eye, RefreshCw, Trash2, Undo2 } from 'lucide-react'
 import api, { errorMessage, money } from '../api'
 import Modal from '../components/Modal'
 import { EmptyRow, Msg, PageHeader } from '../components/ui'
-import { ImportTabs } from './Import'
+import { ImportTabs, purgeAll } from './Import'
 
 const BATCH_STATUS = {
-  IN_PROGRESS: ['info', 'Interrupted'],
+  IN_PROGRESS: ['warn', 'Stopped before it finished'],
   COMPLETED: ['ok', 'Imported'],
   COMPLETED_WITH_ERRORS: ['warn', 'Imported with errors'],
   FAILED: ['bad', 'Nothing imported'],
   UNDONE: ['info', 'Undone'],
   PARTIALLY_UNDONE: ['warn', 'Partly undone'],
+  REPLACED: ['info', 'Replaced'],
+  ROLLED_BACK: ['info', 'Taken back'],
+  PURGED: ['info', 'Purged'],
 }
 const ROW_STATUS = {
   IMPORTED: ['ok', 'Imported'],
   SKIPPED: ['info', 'Left out'],
   FAILED: ['bad', 'Failed'],
-  UNDONE: ['info', 'Undone'],
+  UNDONE: ['info', 'Removed'],
   KEPT: ['warn', 'Kept by Undo'],
 }
 const KIND = { EXPENSE: 'Expense', INCOME: 'Income', SPLIT: 'Split bill', TRANSFER: 'Transfer', OPENING: 'Opening balance' }
@@ -28,6 +32,7 @@ export default function ImportHistory() {
   const [batches, setBatches] = useState(null)
   const [msg, setMsg] = useState(null)
   const [open, setOpen] = useState(null)
+  const navigate = useNavigate()
 
   const load = async () => {
     try {
@@ -40,7 +45,41 @@ export default function ImportHistory() {
     load()
   }, [])
 
-  const undoable = (b) => ['COMPLETED', 'COMPLETED_WITH_ERRORS', 'PARTIALLY_UNDONE', 'IN_PROGRESS'].includes(b.status) && b.rows_imported > b.rows_undone
+  const finished = (b) => ['COMPLETED', 'COMPLETED_WITH_ERRORS', 'PARTIALLY_UNDONE'].includes(b.status) && !b.replaced_by_id
+  const undoable = (b) => finished(b) && b.rows_imported > b.rows_undone
+  const nameOf = (id) => (batches || []).find((x) => x.id === id)?.filename || 'a later import'
+
+  // Purge & re-import: the corrected file is chosen on the import page, which replaces this import with it
+  const replace = async (b) => {
+    let detail
+    try {
+      detail = (await api.get(`/imports/${b.id}`)).data
+    } catch (err) {
+      return setMsg({ type: 'error', text: errorMessage(err) })
+    }
+    if (detail.purge_blocks.length) {
+      return setMsg({ type: 'error', text: `${b.filename} can't be purged: ${detail.purge_blocks.map((k) => `${k.rows} record(s): ${k.reason}`).join('; ')}. Unlock the period or unmatch the bank statement lines first.` })
+    }
+    const edited = detail.purge_edited ? `, including ${detail.purge_edited} edited since the import` : ''
+    if (!window.confirm(`Purge & re-import ${b.filename}?
+
+Choose the corrected file next. Once every row of it is checked and imported, the ${detail.purge_removes} record(s) this import created${edited} are removed.
+
+If the corrected file has a problem, nothing changes.`)) return
+    navigate(`/import?replace=${b.id}`)
+  }
+
+  // Remove an import entirely: the rest of a replacement, or an import that stopped before it finished
+  const purge = async (b, why) => {
+    if (!window.confirm(why)) return
+    try {
+      const res = await purgeAll(b.id, (n) => setMsg({ type: 'info', text: `Removing ${b.filename}… ${n} to go` }))
+      setMsg({ type: 'ok', text: `${b.filename}: ${res.removed} record(s) removed.` })
+    } catch (err) {
+      setMsg({ type: 'error', text: `${errorMessage(err)} (press the button again to continue)` })
+    }
+    load()
+  }
 
   const undo = async (b) => {
     let detail
@@ -92,7 +131,7 @@ export default function ImportHistory() {
 
   return (
     <div>
-      <PageHeader title="Import history" subtitle="Every file you imported, what came in, what was left out and why. Undo removes only the records an import created.">
+      <PageHeader title="Import history" subtitle="Every file you imported and what came in. A file is imported whole or not at all. To correct one, use Purge & re-import with the corrected file; Undo removes the records an import created (keeping those edited since).">
         <ImportTabs active="history" />
       </PageHeader>
       <Msg msg={msg} />
@@ -124,7 +163,10 @@ export default function ImportHistory() {
                     <td>{when(b.created_at)}</td>
                     <td>
                       <span className={`badge ${cls}`}>{label}</span>
-                      {b.rows_undone > 0 && <div className="muted small">{b.rows_undone} undone {b.undone_at ? `on ${day(b.undone_at)}` : ''}</div>}
+                      {b.status === 'REPLACED' && <div className="muted small">by {nameOf(b.replaced_by_id)} on {day(b.undone_at)}</div>}
+                      {b.replaced_by_id && b.status !== 'REPLACED' && <div className="muted small">Replaced by {nameOf(b.replaced_by_id)}: removing it didn’t finish</div>}
+                      {b.replaces_id && <div className="muted small">Replaces {nameOf(b.replaces_id)}</div>}
+                      {b.rows_undone > 0 && !['REPLACED', 'ROLLED_BACK'].includes(b.status) && <div className="muted small">{b.rows_undone} undone {b.undone_at ? `on ${day(b.undone_at)}` : ''}</div>}
                     </td>
                     <td className="num">{b.rows_imported}</td>
                     <td className="num">{b.rows_skipped}</td>
@@ -136,6 +178,26 @@ export default function ImportHistory() {
                         <button className="btn ghost small" title="Details" onClick={() => setOpen(b.id)}>
                           <Eye size={14} />
                         </button>
+                        {finished(b) && (
+                          <button className="btn ghost small" title="Purge & re-import: replace this import with a corrected file" onClick={() => replace(b)}>
+                            <RefreshCw size={14} /> Purge & re-import
+                          </button>
+                        )}
+                        {b.replaced_by_id && b.status !== 'REPLACED' && (
+                          <button className="btn small" onClick={() => purge(b, `Finish replacing ${b.filename}?
+
+Its remaining records are removed: ${nameOf(b.replaced_by_id)} replaced it.`)}>
+                            Finish replacing
+                          </button>
+                        )}
+                        {b.status === 'IN_PROGRESS' && (
+                          <button className="btn ghost small" title="Take back what this import saved before it stopped"
+                                  onClick={() => purge(b, `Take back ${b.filename}?
+
+It stopped before it finished: the ${b.rows_imported} record(s) it saved are removed, so you can import the file again, whole.`)}>
+                            <Trash2 size={14} /> Take back
+                          </button>
+                        )}
                         {undoable(b) && (
                           <button className="btn ghost small" title="Undo this import" onClick={() => undo(b)}>
                             <Undo2 size={14} />

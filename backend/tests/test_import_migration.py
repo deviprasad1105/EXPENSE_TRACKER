@@ -81,8 +81,10 @@ def preview(client, user, extracted, options):
 
 def run(client, user, extracted, options):
     prev = preview(client, user, extracted, options)
-    batch = client.post(API, json={"filename": extracted["filename"], "file_type": "csv", "file_hash": extracted["file_hash"]},
-                        headers=headers(user)).json()
+    start = client.post(API, json={"filename": extracted["filename"], "file_type": "csv", "file_hash": extracted["file_hash"],
+                                   "records": prev["records"], "options": options}, headers=headers(user))
+    assert start.status_code == 201, start.text
+    batch = start.json()
     created = []
     for i in range(0, len(prev["records"]), 4):  # small chunks: accounts created in one chunk are reused in the next
         res = client.post(f"{API}/{batch['id']}/rows", json={"records": prev["records"][i:i + 4], "options": options},

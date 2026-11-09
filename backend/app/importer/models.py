@@ -16,12 +16,15 @@ COMPLETED_WITH_ERRORS = "COMPLETED_WITH_ERRORS"
 FAILED = "FAILED"
 UNDONE = "UNDONE"
 PARTIALLY_UNDONE = "PARTIALLY_UNDONE"
+PURGED = "PURGED"  # everything it created was removed (also records edited since)
+REPLACED = "REPLACED"  # purged and replaced by a corrected file (replaced_by_id)
+ROLLED_BACK = "ROLLED_BACK"  # stopped before it finished: what it had saved was removed again, nothing kept
 
 # Record status
 REC_IMPORTED = "IMPORTED"
-REC_SKIPPED = "SKIPPED"  # left out on purpose (a duplicate, a balance line, or unticked by the user)
-REC_FAILED = "FAILED"  # couldn't be imported (invalid, locked period, no category…)
-REC_UNDONE = "UNDONE"  # removed again by Undo
+REC_SKIPPED = "SKIPPED"  # not a transaction (a balance or total line)
+REC_FAILED = "FAILED"  # couldn't be imported (imports before the whole-file check)
+REC_UNDONE = "UNDONE"  # removed again by Undo, a purge or a rollback
 REC_KEPT = "KEPT"  # Undo left it in place (edited since, reconciled, or in a locked period)
 
 KIND_EXPENSE = "EXPENSE"
@@ -53,6 +56,11 @@ class ImportBatch(Base):
     undone_at: Mapped[datetime | None] = mapped_column(DateTime)
     # Ids of the accounts this import created (comma-separated): a full Undo removes the ones nothing else uses
     created_accounts: Mapped[str | None] = mapped_column(String(500))
+    # How many rows the file has (checked as a whole when the import starts): the import finishes only with all of them
+    rows_expected: Mapped[int | None] = mapped_column(Integer)
+    # Purge & re-import: the earlier import this one replaces, and on that one the import that replaced it
+    replaces_id: Mapped[int | None] = mapped_column(Integer)
+    replaced_by_id: Mapped[int | None] = mapped_column(Integer)
 
     records: Mapped[list["ImportRecord"]] = relationship(
         back_populates="batch", cascade="all, delete-orphan", order_by="ImportRecord.row_no"

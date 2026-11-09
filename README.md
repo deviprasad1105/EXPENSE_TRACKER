@@ -154,8 +154,24 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
     password-protected files. A file that can't be read gets a clear message; records can also be typed in by hand.
   - **Steps**: 1. upload; 2. check the columns, guessed from their headings (`Txn Date`, `Narration`,
     `Withdrawal Amt.`, `Cost`, `Paid with`, `My share`…) or their contents, and how dates are written (day-first by
-    default); 3. review every record: its status, why it can't be imported, and edit, untick, remove or add rows;
-    4. import (sent in chunks of 200 rows, so big files stay within the server's time limit).
+    default); 3. review every record and choose categories and accounts; 4. import (sent in chunks of 200 rows, so
+    big files stay within the server's time limit).
+  - **A file comes in whole, or not at all.** Every row is checked before anything is saved. Any problem *in the
+    file* blocks the whole file: an invalid row (date, amount, type, a future date), a row in a locked accounting
+    period, a row matching a record already in the app (same date and amount), a row already imported by an earlier
+    upload, or the same row twice in the file (same date, amount, account and description) without different times
+    (a time in the date cell or a *Time* column tells two real purchases apart). The page lists the rows and why
+    (downloadable as a CSV); you fix the file and upload it again. Rows from a file can't be edited, unticked or
+    removed on the page, so the app always matches the file; only choices (a category, an account, a payee name)
+    and a note of your own are made there. Balance and total lines ("Closing balance", "Total") aren't transactions:
+    they are listed and left out. If an import stops before it finishes (a lost connection), what it saved is taken
+    back automatically (or with *Take back* in Import history), so a file never comes in half.
+  - **Purge & re-import** (Import history, or offered when an imported file is uploaded again): replaces an earlier
+    import with a corrected file. The corrected file is checked as a whole, with the earlier import's records set
+    aside (so they don't count as duplicates); once every row of it is imported, the earlier import is removed
+    entirely, including records edited since, and shows as *Replaced*. It is refused up front when any of the
+    earlier import's records is in a locked accounting period or reconciled with a bank statement, so it never stops
+    halfway; if removing the earlier import is interrupted, *Finish replacing* completes it.
   - **What a row becomes**: spending → an expense; money in (deposit, credit, income, salary…) → money received;
     a split row (a *My share* or *Split with* column) → an expense for your share plus a split bill, paid by you, for
     the part paid for the others (the people named, or "Others"), in a group you choose or "Imported split bills".
@@ -164,8 +180,8 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
     A **transfer** (type "Transfer", an account cell like `Axis Bank->SBI Bank`, or a *To account* column; credit-card
     bill payments and cash withdrawals too) → a transfer between your accounts. An **opening balance** row ("Balance
     cf", "Opening balance", "Balance B/F", dated before the account's other rows) → added to that account's opening
-    balance (a later "closing balance" row is flagged and left out). Subscriptions in a file are imported as
-    expenses. An unrecognised type is never guessed: the row waits for you to choose. Amounts may carry ₹ / Rs / INR,
+    balance (a later "closing balance" row is left out). Subscriptions in a file are imported as expenses. An
+    unrecognised type is never guessed: it is a problem in the file. Amounts may carry ₹ / Rs / INR,
     Indian grouping, Dr / Cr, brackets or a minus sign. Without a description column, the notes are the description.
   - **Categories** not in the app yet must be mapped to one, or created; nothing is put in an unrelated category.
     *Use the suggestions* maps the obvious ones (Fuel → Transport, Internet → Bills…), *Create the rest as new*
@@ -185,17 +201,14 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
     flagged: some of its rows are probably missing (a FasTag's top-ups), so import its own statement too.
   - **Your choices are remembered**: the categories, moves and accounts you chose are filled in again the next time
     the same names come up, e.g. in the next year's file.
-  - **Checks**: missing or unrecognised dates and amounts, future dates, locked accounting periods (rejected with
-    the reason), records already in the app on the same date for the same amount (left out unless ticked), rows
-    imported before (shown under *Already imported* and never imported twice: re-uploading a file adds nothing),
-    and balance / total lines. A description longer than 100 characters is kept in full in the note.
+  - A description longer than 100 characters is kept in full in the note.
   - **After the import**: records keep their original date and show on every page; the 3-day edit window starts on
     the import day; no budget alert is sent; they post to the books like any other record. A whole history from
     another app (e.g. a Money Manager export with transfers and opening balances) ends with every account at the
     balance the other app shows. Records older than the accounting books move the books' start back to their
     financial year (the review says so first), so a migration loses nothing.
-  - **Import history**: each upload with its file, date, status, rows imported / left out / failed (each with its
-    reason) and totals. **Undo** removes only the records that upload created, keeping any edited since, reconciled
+  - **Import history**: each upload with its file, date, status (*Imported*, *Replaced*, *Taken back*…), rows
+    imported / left out (each with its reason) and totals. **Undo** removes only the records that upload created, keeping any edited since, reconciled
     with a bank statement or in a locked accounting period (a big import is undone 200 records per request). With
     Accounting on, the books keep the import and its reversal (as in Tally): the earlier years it added stay, and
     the accounts it created are deactivated rather than deleted.

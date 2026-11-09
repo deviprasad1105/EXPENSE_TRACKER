@@ -1,11 +1,16 @@
 """Check, import and undo past records.
 
-Every row is checked before anything is saved: a date, an amount, a type, a category for spending, an account when
-the file's account column is used, and the accounting lock. Duplicates are looked for in two places:
-- rows imported before (same type, date, amount and description, and the same occurrence of it in its file), so
-  uploading the same file again adds nothing;
-- records already in the app on the same date for the same amount (typed in by hand, or from another file), which
-  the user reviews: they are left out unless ticked.
+A file is imported whole or not at all. Every row is checked before anything is saved: a date, an amount, a type,
+the accounting lock, and duplicates:
+- rows imported before (same type, date, amount and description, and the same occurrence of it in its file);
+- records already in the app on the same date for the same amount (typed in by hand, or from another file);
+- rows repeated in the file (same date, amount, account and description) without different times.
+Any of these blocks the whole file: the user fixes the file and uploads it again, so a file never comes in half,
+and nothing comes in twice. What the user chooses on the review page (a category, an account) isn't a problem in the
+file. Balance and total lines aren't transactions: they are listed and left out. An import that stops before it
+finishes (a network error) is taken back. To correct a file already imported, Purge & re-import replaces that
+import: the corrected file is checked without the earlier import's records, imported, then the earlier import is
+removed entirely (also records edited since).
 
 Imported records are ordinary expenses and money received: they show on every page and post to the books. Their
 original date is kept; the edit window starts on the day of the import; no budget alert is sent for them.
@@ -43,7 +48,7 @@ from ..services.splits import split_evenly
 from ..timeutil import now_local, today_local
 from .models import (
     COMPLETED, COMPLETED_WITH_ERRORS, FAILED, IN_PROGRESS, KIND_EXPENSE, KIND_INCOME, KIND_OPENING, KIND_SPLIT,
-    KIND_TRANSFER, PARTIALLY_UNDONE,
+    KIND_TRANSFER, PARTIALLY_UNDONE, PURGED, REPLACED, ROLLED_BACK,
     REC_FAILED, REC_IMPORTED, REC_KEPT, REC_SKIPPED, REC_UNDONE, UNDONE, ImportBatch, ImportRecord,
     CHOICE_ACCOUNT, CHOICE_CATEGORY, CHOICE_TREATMENT, ImportChoice,
 )
@@ -57,9 +62,14 @@ NEEDS_CATEGORY = "NEEDS_CATEGORY"
 NEEDS_ACCOUNT = "NEEDS_ACCOUNT"
 DUPLICATE = "DUPLICATE"
 IMPORTED_BEFORE = "IMPORTED_BEFORE"
-# A row imported before can't be imported again; a possible duplicate (same date and amount as a record already in
-# the app) is left out unless the user ticks it
-IMPORTABLE = (READY, DUPLICATE)
+REPEATED = "REPEATED"  # the same as an earlier row of the file, with no different time to tell them apart
+IGNORED = "IGNORED"  # a balance or total line: not a transaction
+# Problems in the file: any of them blocks the whole file (fix the file, upload it again)
+BLOCKING = (INVALID, LOCKED, DUPLICATE, IMPORTED_BEFORE, REPEATED)
+# Choices made on the review page
+CHOICES = (NEEDS_CATEGORY, NEEDS_ACCOUNT)
+IMPORTABLE = (READY,)
+TOTAL_LINE = "Looks like a balance or total line, not a transaction"
 SPLIT_GROUP_NAME = "Imported split bills"
 OTHERS = "Others"
 _IN_CHUNK = 900  # Oracle allows at most 1000 values in an IN list
@@ -109,29 +119,31 @@ def _in_chunks(values):
         yield values[i:i + _IN_CHUNK]
 
 
-def _imported_fingerprints(db: Session, user_id: int, fps, exclude_batch: int | None) -> set[str]:
-    found: set[str] = set()
+def _imported_fingerprints(db: Session, user_id: int, fps, exclude: list[int]) -> dict[str, int]:
+    """Fingerprints of the file imported before (and still in the app) → the import that brought each in."""
+    found: dict[str, int] = {}
     for part in _in_chunks({f for f in fps if f}):
-        stmt = select(ImportRecord.fingerprint).where(
+        stmt = select(ImportRecord.fingerprint, ImportRecord.batch_id).where(
             ImportRecord.user_id == user_id, ImportRecord.status.in_((REC_IMPORTED, REC_KEPT)), ImportRecord.fingerprint.in_(part)
         )
-        if exclude_batch:
-            stmt = stmt.where(ImportRecord.batch_id != exclude_batch)
-        found.update(db.scalars(stmt))
+        if exclude:
+            stmt = stmt.where(ImportRecord.batch_id.not_in(exclude))
+        found.update(dict(db.execute(stmt).all()))
     return found
 
 
-def _existing(db: Session, user_id: int, records: list[RecordIn], batch_id: int | None):
+def _existing(db: Session, user_id: int, records: list[RecordIn], exclude: list[int]):
     """Records already in the app on the dates of the file: (kind, date, amount) → names, for duplicate checks.
-    Records created by this same import (earlier chunks) don't count."""
+    Records created by the imports in `exclude` don't count: this import's earlier chunks, and the import being
+    replaced by Purge & re-import."""
     dates = [r.date for r in records if r.date]
     if not dates:
         return defaultdict(list)
     lo, hi = min(dates), max(dates)
     mine_exp, mine_fund, mine_tr = set(), set(), set()
-    if batch_id:
+    if exclude:
         for e, f, t in db.execute(select(ImportRecord.expense_id, ImportRecord.fund_id, ImportRecord.transfer_id)
-                                  .where(ImportRecord.batch_id == batch_id)):
+                                  .where(ImportRecord.batch_id.in_(exclude))):
             mine_exp.add(e)
             mine_fund.add(f)
             mine_tr.add(t)
@@ -312,8 +324,9 @@ def _ref_id(ref: str | None) -> int | None:
 
 
 def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions, batch_id: int | None = None,
-          fresh: bool = False) -> dict:
-    """Check every record. `fresh` (a first preview): each record's `include` becomes its default."""
+          fresh: bool = False, replaces: ImportBatch | None = None) -> dict:
+    """Check every record. `batch_id`: the import these rows are a chunk of (its records saved so far don't count as
+    duplicates); `replaces`: the import a Purge & re-import replaces (nor do its records)."""
     if len(records) > settings.import_max_records:
         _bad(f"This file has {len(records)} records; up to {settings.import_max_records:,} can be imported at once. Split the file.")
     today = today_local()
@@ -329,8 +342,9 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
     treat = {_key(k): acc.treatment(v) for k, v in opts.category_treatment.items() if v}
     split_ok = has_feature(user, FEATURE_SPLIT)
     fps = fingerprints(records)
-    imported_before = _imported_fingerprints(db, user.id, fps, batch_id)
-    existing = _existing(db, user.id, records, batch_id)
+    exclude = [i for i in (batch_id, replaces.id if replaces else None) if i]
+    imported_before = _imported_fingerprints(db, user.id, fps, exclude)
+    existing = _existing(db, user.id, records, exclude)
     my_names = {_key(user.full_name), _key(user.username)} - {""}
     aliases = user_aliases(db, user.id)
     payees: dict[str, dict] = {}
@@ -360,12 +374,13 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
     cat_stats: dict[str, Counter] = defaultdict(Counter)
     first_row: dict[str, int] = {}
     for r, fp in zip(records, fps):
-        problems, warnings = [], list(r.parse_warnings)
+        problems, warnings = [], [w for w in r.parse_warnings if w != TOTAL_LINE]
         base = fingerprint_base(r)
-        if base and base in first_row:
-            warnings.append(f"Same as row {first_row[base]} of this file (both are imported unless you untick one)")
-        elif base:
-            first_row[base] = r.row_no
+        # The same row twice: a duplicate in the file, unless the file gives them different times
+        same = f"{base}|{_akey(r.account)}|{r.time or ''}" if base else None
+        repeated_of = first_row.get(same) if same else None
+        if same and repeated_of is None:
+            first_row[same] = r.row_no
         state = READY
 
         def parse_msg(*words, default):
@@ -432,7 +447,10 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
                     mapping_problems.append((NEEDS_ACCOUNT, "Choose the account the money moved from or to"))
                 account_ref, to_ref = (account_ref, treated) if r.kind == KIND_EXPENSE else (treated, account_ref)
 
-        if problems:
+        if TOTAL_LINE in r.parse_warnings:
+            state, problems = IGNORED, []
+            warnings.append(f"{TOTAL_LINE}: left out")
+        elif problems:
             state = INVALID
         elif lock and r.kind == KIND_OPENING:
             state = LOCKED
@@ -441,16 +459,25 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
             state = LOCKED
             problems.append(f"Your books are locked up to {lock:%d %b %Y}: records on or before it can't be added")
         elif fp in imported_before:
-            # Shown as such even before its category is chosen; a category is only needed to import it again
             state = IMPORTED_BEFORE
-            warnings.append("Already imported from an earlier upload")
+            earlier = db.get(ImportBatch, imported_before[fp])
+            problems.append(
+                f"Already imported from “{earlier.filename}” on {earlier.created_at:%d %b %Y}. To correct that import, use "
+                "Purge & re-import on it in Import history" if earlier else "Already imported from an earlier upload")
+        elif repeated_of is not None:
+            state = REPEATED
+            problems.append(
+                f"The same as row {repeated_of} of this file (same date, amount, account and description"
+                + (", and the same time)" if r.time else ", and no time)")
+                + ". If both are real, give them their times in the file (or tell them apart in the description); "
+                  "otherwise remove one. Then upload the file again")
 
         # The payee (UPI ID or name in the description) and the alias that will name it
         key = alias = None
         if r.kind in (KIND_EXPENSE, KIND_INCOME, KIND_SPLIT) and not treated and description:
             key = payee_key(description)
             alias = find_alias(aliases, key, description)
-            if key and state not in (INVALID,):
+            if key and state not in (INVALID, IGNORED):
                 p = payees.setdefault(key, {
                     "payee_key": key, "description": description[:100], "sent_count": 0, "sent_total": Decimal(0),
                     "received_count": 0, "received_total": Decimal(0), "alias_id": alias and alias.id,
@@ -475,7 +502,7 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
                 category = cat_map[ck][:50]
             elif ck and ck in known:
                 category = known[ck]
-            elif state in (READY, IMPORTED_BEFORE):
+            elif state == READY:
                 mapping_problems.append((NEEDS_CATEGORY, f"Choose a category for “{raw_cat}”" if raw_cat else "Choose a category for rows without one"))
         elif r.kind == KIND_INCOME and not treated:
             # Money received is named by its source: the file's category, else (a bank statement) its description
@@ -485,8 +512,6 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         if mapping_problems and state == READY:
             state = mapping_problems[0][0]
             problems += [m for _, m in mapping_problems]
-        elif mapping_problems:  # imported before: to import it again, a category / account is still needed
-            warnings += [m for _, m in mapping_problems]
         if state == READY:
             dup = None
             if r.kind == KIND_TRANSFER or treated:
@@ -497,23 +522,24 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
                 dup = existing.get((KIND_INCOME if r.kind == KIND_INCOME else KIND_EXPENSE, r.date, amount))
             if dup:
                 state = DUPLICATE
-                warnings.append(f"Possible duplicate: “{dup.pop(0)}” for ₹{abs(r.amount):,.2f} on {r.date:%d %b %Y} is already in the app")
-        if payer_of(r) and state in (READY, DUPLICATE, IMPORTED_BEFORE):
+                problems.append(
+                    f"Already in the app: “{dup.pop(0)}” for ₹{abs(r.amount):,.2f} on {r.date:%d %b %Y}. Remove this row from "
+                    "the file (or delete that record in the app), then upload the file again")
+        if payer_of(r) and state == READY:
             warnings.append(f"Paid by {payer_of(r)}: you owe them your share")
-        if treated and state in (READY, DUPLICATE, IMPORTED_BEFORE):
+        if treated and state == READY:
             warnings.append(f"Not spending or income: moved {'to' if r.kind == KIND_EXPENSE else 'from'} {acc.label(treated)}")
 
         to_check = bool(r.kind in (KIND_EXPENSE, KIND_SPLIT) and not treated and r.amount and ck in typical
-                        and r.amount >= max(_LARGE_ROW, typical[ck] * _LARGE_FACTOR) and state != IMPORTED_BEFORE)
+                        and r.amount >= max(_LARGE_ROW, typical[ck] * _LARGE_FACTOR) and state not in BLOCKING + (IGNORED,))
         if to_check:
             warnings.append(f"Much bigger than the other “{raw_cat}” rows (usually about ₹{typical[ck]:,.0f}): "
                             "check that this is the right category")
         can = state in IMPORTABLE and can_map
-        default = can and state == READY and not r.parse_warnings
         out.append({
             **r.model_dump(), "paid_by": payer_of(r), "status": state, "problems": problems, "warnings": warnings, "can_import": can,
-            "default_include": default, "category_final": category, "fingerprint": fp,
-            "include": default if fresh else r.include,
+            "default_include": can, "category_final": category, "fingerprint": fp,
+            "include": can,  # a file is imported whole: no row is left out by choice
             "effective_kind": KIND_TRANSFER if treated else r.kind,
             "account_ref": account_ref, "to_account_ref": to_ref,
             "account_id": _ref_id(account_ref), "to_account_id": _ref_id(to_ref),
@@ -532,6 +558,13 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
     ]
     account_values = acc.values()
     kinds = Counter(o["effective_kind"] for o in chosen)
+    blocked = any(o["status"] in BLOCKING for o in out)
+    earlier = Counter(imported_before[o["fingerprint"]] for o in out if o["status"] == IMPORTED_BEFORE)
+    earlier_imports = []
+    for bid, n in earlier.most_common():
+        b = db.get(ImportBatch, bid)
+        earlier_imports.append({"id": bid, "filename": b.filename, "created_at": b.created_at, "rows": n,
+                                "status": b.status})
     # Records older than the books move the books' start back to their financial year, so nothing migrated is lost
     earliest = min((o["date"] for o in chosen if o["date"]), default=None)
     books_moves_to = (
@@ -542,7 +575,9 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         "summary": {
             "total": len(out), "ready": counts[READY], "invalid": counts[INVALID], "locked": counts[LOCKED],
             "needs_category": counts[NEEDS_CATEGORY], "needs_account": counts[NEEDS_ACCOUNT],
-            "duplicates": counts[DUPLICATE], "imported_before": counts[IMPORTED_BEFORE],
+            "duplicates": counts[DUPLICATE], "imported_before": counts[IMPORTED_BEFORE], "repeated": counts[REPEATED],
+            "ignored": counts[IGNORED], "file_problems": sum(counts[k] for k in BLOCKING),
+            "choices_left": sum(counts[k] for k in CHOICES),
             "chosen": len(chosen), "transfers": kinds[KIND_TRANSFER], "openings": kinds[KIND_OPENING],
             "expense_total": str(sum((Decimal(o["amount"]) for o in chosen if o["effective_kind"] in (KIND_EXPENSE, KIND_SPLIT)), Decimal(0))),
             "income_total": str(sum((Decimal(o["amount"]) for o in chosen if o["effective_kind"] == KIND_INCOME), Decimal(0))),
@@ -568,6 +603,10 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         "books_moves_to": books_moves_to,
         "before_books": sum(1 for o in chosen if books_moves_to and o["date"] and o["date"] < books.books_start),
         "max_records": settings.import_max_records,
+        "blocked": blocked,
+        "can_import": bool(chosen) and not blocked and not any(o["status"] in CHOICES for o in out),
+        "earlier_imports": earlier_imports,
+        "replaces": _replace_info(db, replaces) if replaces else None,
     }
 
 
@@ -823,35 +862,63 @@ def _record(batch: ImportBatch, r: dict, status_: str, reason: str | None, **lin
     )
 
 
+def _problem_list(rows: list[dict], limit: int = 5) -> str:
+    shown = "; ".join(f"row {o['row_no']}: {o['problems'][0] if o['problems'] else o['status']}" for o in rows[:limit])
+    return shown + (f"; and {len(rows) - limit} more" if len(rows) > limit else "")
+
+
+def start(db: Session, user: User, filename: str, file_type: str, file_hash: str | None, records: list[RecordIn],
+          opts: ImportOptions, replaces_id: int | None) -> ImportBatch:
+    """Start an import: the whole file is checked first, and the import starts only if every row can be imported
+    (no problem in the file, every category and account chosen). Purge & re-import: the earlier import must be one
+    that can be purged entirely."""
+    replaces = _replaceable(db, user, replaces_id) if replaces_id else None
+    result = check(db, user, records, opts, replaces=replaces)
+    bad = [o for o in result["records"] if o["status"] in BLOCKING]
+    if bad:
+        _bad(f"This file can't be imported: {len(bad)} row(s) have a problem in the file ({_problem_list(bad)}). "
+             "Fix the file and upload it again.")
+    open_ = [o for o in result["records"] if o["status"] in CHOICES]
+    if open_:
+        _bad(f"Choose a category or account for every row first ({_problem_list(open_)})")
+    if not any(o["can_import"] for o in result["records"]):
+        _bad("There is nothing to import in this file")
+    batch = ImportBatch(user_id=user.id, filename=filename.strip(), file_type=file_type[:10] or "manual",
+                        file_hash=file_hash, rows_expected=len(records), replaces_id=replaces.id if replaces else None)
+    db.add(batch)
+    db.commit()
+    return batch
+
+
 def import_chunk(db: Session, user: User, batch: ImportBatch, records: list[RecordIn], opts: ImportOptions) -> dict:
-    """Import one chunk of rows (all of it or none of it). Rows that can't be imported are recorded with the reason."""
+    """Import one chunk of the file (all of it or none of it). The file was checked as a whole when the import
+    started; each chunk is checked again, and a chunk with any row that can't be imported is refused (the page then
+    takes back what the import saved so far, so the file never comes in half)."""
     if batch.status != IN_PROGRESS:
         _bad("This import is already finished")
-    if len(records) + batch.rows_total > settings.import_max_records:
-        _bad(f"Up to {settings.import_max_records:,} records can be imported at once")
-    checked = check(db, user, records, opts, batch_id=batch.id)["records"]
+    if len(records) + batch.rows_total > (batch.rows_expected or settings.import_max_records):
+        _bad("More rows than the file that was checked")
+    replaces = db.get(ImportBatch, batch.replaces_id) if batch.replaces_id else None
+    checked = check(db, user, records, opts, batch_id=batch.id, replaces=replaces)["records"]
+    bad = [r for r in checked if r["status"] not in IMPORTABLE + (IGNORED,) or (r["status"] == READY and not r["can_import"])]
+    if bad:
+        _bad(f"The import stopped: {_problem_list(bad)}. Nothing from this file is kept.", status.HTTP_409_CONFLICT)
     ctx = {"group_id": opts.split_group_id}
     counts = Counter()
     exp_total = inc_total = Decimal(0)
     try:
         for r in checked:
-            if r["can_import"] and r["include"]:
-                links = _create(db, user, r, ctx)
-                db.add(_record(batch, r, REC_IMPORTED, "; ".join(r["warnings"]) or None, **links))
-                counts[REC_IMPORTED] += 1
-                if r["effective_kind"] == KIND_INCOME:
-                    inc_total += Decimal(r["amount"])
-                elif r["effective_kind"] in (KIND_EXPENSE, KIND_SPLIT):
-                    exp_total += Decimal(r["amount"])
-            elif r["can_import"]:
-                db.add(_record(batch, r, REC_SKIPPED, "; ".join(r["warnings"]) or "Left out by you"))
+            if r["status"] == IGNORED:
+                db.add(_record(batch, r, REC_SKIPPED, f"{TOTAL_LINE}: left out"))
                 counts[REC_SKIPPED] += 1
-            elif r["status"] == IMPORTED_BEFORE:  # never imported twice
-                db.add(_record(batch, r, REC_SKIPPED, "Already imported from an earlier upload"))
-                counts[REC_SKIPPED] += 1
-            else:
-                db.add(_record(batch, r, REC_FAILED, "; ".join(r["problems"])))
-                counts[REC_FAILED] += 1
+                continue
+            links = _create(db, user, r, ctx)
+            db.add(_record(batch, r, REC_IMPORTED, "; ".join(r["warnings"]) or None, **links))
+            counts[REC_IMPORTED] += 1
+            if r["effective_kind"] == KIND_INCOME:
+                inc_total += Decimal(r["amount"])
+            elif r["effective_kind"] in (KIND_EXPENSE, KIND_SPLIT):
+                exp_total += Decimal(r["amount"])
         _add_counts(batch, counts, exp_total, inc_total)
         _remember(db, user, opts)
         if ctx.get("created_account_ids"):
@@ -863,15 +930,10 @@ def import_chunk(db: Session, user: User, batch: ImportBatch, records: list[Reco
     except HTTPException:
         db.rollback()
         raise
-    except Exception as exc:  # e.g. the books were locked between the check and now
+    except Exception as exc:  # e.g. the books were locked between the check and now: nothing of this chunk is saved
         db.rollback()
         message = getattr(exc, "message", None) or "These rows couldn't be saved"
-        batch = db.get(ImportBatch, batch.id)
-        counts = Counter({REC_FAILED: len(checked)})
-        for r in checked:
-            db.add(_record(batch, r, REC_FAILED, message))
-        _add_counts(batch, counts, Decimal(0), Decimal(0))
-        db.commit()
+        _bad(f"The import stopped: {message}. Nothing from this file is kept.", status.HTTP_409_CONFLICT)
     return {"imported": counts[REC_IMPORTED], "skipped": counts[REC_SKIPPED], "failed": counts[REC_FAILED],
             "accounts_created": ctx.get("created_accounts", [])}
 
@@ -886,6 +948,15 @@ def _add_counts(batch: ImportBatch, counts: Counter, exp_total: Decimal, inc_tot
 
 
 def finish(db: Session, batch: ImportBatch) -> ImportBatch:
+    """Close an import. It must hold every row of the file checked when it started (else the page takes it back).
+    Purge & re-import: the earlier import is then marked as replaced by this one (the page purges it next)."""
+    if batch.status == IN_PROGRESS and batch.rows_expected is not None and batch.rows_total != batch.rows_expected:
+        _bad(f"The import is incomplete ({batch.rows_total} of {batch.rows_expected} rows): it will be taken back",
+             status.HTTP_409_CONFLICT)
+    if batch.status == IN_PROGRESS and batch.replaces_id:
+        old = db.get(ImportBatch, batch.replaces_id)
+        if old is not None and old.user_id == batch.user_id:
+            old.replaced_by_id = batch.id
     if batch.status == IN_PROGRESS:
         if batch.rows_imported == 0:
             batch.status = FAILED
@@ -958,6 +1029,8 @@ def undo(db: Session, batch: ImportBatch, limit: int | None = None) -> dict:
     Once nothing imported is left, a further Undo retries the records kept before (e.g. edited back, or unlocked)."""
     if batch.status == IN_PROGRESS:
         _bad("This import is still running")
+    if batch.status in (REPLACED, ROLLED_BACK, PURGED) or batch.replaced_by_id:
+        _bad("This import was replaced or taken back: there is nothing of it to undo")
     limit = limit or UNDO_CHUNK
     imported = [r for r in batch.records if r.status == REC_IMPORTED]
     todo = imported[:limit] if imported else [r for r in batch.records if r.status == REC_KEPT][:limit]
@@ -987,6 +1060,91 @@ def undo(db: Session, batch: ImportBatch, limit: int | None = None) -> dict:
     db.commit()  # reverses the vouchers of what was removed
     accounts = _drop_created_accounts(db, batch) if batch.status == UNDONE else {"removed": [], "deactivated": []}
     return {"removed": removed, "kept": kept, "already_deleted": gone, "remaining": remaining, "status": batch.status,
+            "accounts_removed": accounts["removed"], "accounts_deactivated": accounts["deactivated"]}
+
+
+# ---------- purge (Purge & re-import, and taking back an import that stopped) ----------
+def _purge_plan(db: Session, batch: ImportBatch, records: list[ImportRecord] | None = None):
+    """Per record the import created and that is still there: the objects to remove, and a reason when it can't be
+    removed. Unlike Undo, records edited since are removed too; only the books stop a purge: a locked period, or a
+    record reconciled with a bank statement."""
+    out = []
+    for rec, objs, reason in _undo_plan(db, batch, records):
+        if reason == "Edited after the import":
+            reason = None
+        out.append((rec, objs, reason))
+    return out
+
+
+def _edited(db: Session, batch: ImportBatch) -> int:
+    return sum(1 for _, _, reason in _undo_plan(db, batch) if reason == "Edited after the import")
+
+
+def _replace_info(db: Session, batch: ImportBatch) -> dict:
+    plan = _purge_plan(db, batch)
+    blocks = Counter(reason for _, _, reason in plan if reason)
+    return {"id": batch.id, "filename": batch.filename, "created_at": batch.created_at, "status": batch.status,
+            "removes": sum(1 for _, objs, reason in plan if objs and not reason), "edited": _edited(db, batch),
+            "blocks": [{"reason": k, "rows": n} for k, n in blocks.items()]}
+
+
+def _replaceable(db: Session, user: User, batch_id: int) -> ImportBatch:
+    """The earlier import a Purge & re-import replaces: the user's own, finished, not undone or replaced already,
+    and with nothing in the way of removing all of it (so the replacement can never stop halfway)."""
+    batch = db.get(ImportBatch, batch_id)
+    if batch is None or batch.user_id != user.id:
+        _bad("Import not found", status.HTTP_404_NOT_FOUND)
+    if batch.status not in (COMPLETED, COMPLETED_WITH_ERRORS, PARTIALLY_UNDONE):
+        _bad("Only a finished import that is still in the app can be purged and re-imported")
+    info = _replace_info(db, batch)
+    if info["blocks"]:
+        _bad(f"“{batch.filename}” can't be purged: " + "; ".join(f"{b['rows']} record(s): {b['reason']}" for b in info["blocks"])
+             + ". Unlock the period / unmatch the bank statement lines first.")
+    return batch
+
+
+def purge_preview(db: Session, batch: ImportBatch) -> dict:
+    info = _replace_info(db, batch)
+    return {"purge_removes": info["removes"], "purge_edited": info["edited"], "purge_blocks": info["blocks"]}
+
+
+def purge(db: Session, batch: ImportBatch, limit: int | None = None) -> dict:
+    """Remove what the import created, also records edited since: up to `limit` records per call (call again while
+    `remaining` > 0). Used by Purge & re-import once the corrected file is in (the import is then REPLACED), and to
+    take back an import that stopped before it finished (ROLLED_BACK). Refused as a whole if the books are in the
+    way of any record."""
+    if batch.status == IN_PROGRESS and batch.replaced_by_id:
+        _bad("This import is being replaced")
+    stopping = batch.status == IN_PROGRESS
+    if not stopping and not batch.replaced_by_id:
+        _bad("Only an import that was replaced, or one that stopped before it finished, is purged")
+    plan = _purge_plan(db, batch)
+    blocks = Counter(reason for _, _, reason in plan if reason)
+    if blocks:
+        _bad("It can't be purged: " + "; ".join(f"{n} record(s): {k}" for k, n in blocks.items()))
+    limit = limit or UNDO_CHUNK
+    removed = gone = 0
+    replaced_by = db.get(ImportBatch, batch.replaced_by_id) if batch.replaced_by_id else None
+    why = (f"Replaced by “{replaced_by.filename}”" if replaced_by else "Taken back: the import stopped before it finished")
+    for rec, objs, _ in plan[:limit]:
+        for o in objs:
+            if isinstance(o, tuple):  # an opening balance: take the imported amount off the account again
+                _, account, amount = o
+                account.opening_balance = Decimal(account.opening_balance or 0) - amount
+            else:
+                db.delete(o)
+        rec.status, rec.reason = REC_UNDONE, why if objs else f"{why} (already deleted before)"
+        removed += 1 if objs else 0
+        gone += 0 if objs else 1
+    remaining = max(0, len(plan) - limit)
+    batch.rows_undone = sum(1 for r in batch.records if r.status == REC_UNDONE)
+    batch.undone_at = now_local()
+    if not remaining:
+        batch.status = ROLLED_BACK if stopping else REPLACED
+        batch.finished_at = batch.finished_at or now_local()
+    db.commit()  # reverses the vouchers of what was removed
+    accounts = _drop_created_accounts(db, batch) if not remaining else {"removed": [], "deactivated": []}
+    return {"removed": removed, "already_deleted": gone, "remaining": remaining, "status": batch.status,
             "accounts_removed": accounts["removed"], "accounts_deactivated": accounts["deactivated"]}
 
 
@@ -1029,5 +1187,5 @@ def already_imported(db: Session, user_id: int, file_hash: str) -> dict | None:
     )
     if batch is None:
         return None
-    return {"batch_id": batch.id, "date": batch.created_at, "rows": batch.rows_imported}
+    return {"batch_id": batch.id, "filename": batch.filename, "date": batch.created_at, "rows": batch.rows_imported}
 

@@ -349,7 +349,7 @@ def test_statement_rows_take_alias_name_and_category(client, db, make_user):
     check = client.post("/api/imports/check", json={"records": prev["records"]}, headers=h).json()
     assert check["summary"]["needs_category"] == 0
     recs = [{**r, "include": r["can_import"]} for r in check["records"]]
-    batch = client.post("/api/imports", json={"filename": "s.csv", "file_type": "csv", "file_hash": d["file_hash"]}, headers=h).json()
+    batch = client.post("/api/imports", json={"filename": "s.csv", "file_type": "csv", "file_hash": d["file_hash"], "records": recs}, headers=h).json()
     client.post(f"/api/imports/{batch['id']}/rows", json={"records": recs}, headers=h)
     exp = sorted((e.item_name, e.category, e.amount) for e in db.query(Expense).filter_by(user_id=u.id))
     assert exp == [("Groceries shop", "Groceries", Decimal("185.00")), ("Tea", "Food", Decimal("20.00")), ("Tea", "Food", Decimal("30.00"))]

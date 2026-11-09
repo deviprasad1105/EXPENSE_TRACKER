@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { ArrowRight, FileUp, History, Keyboard, Plus, RefreshCw, Sparkles, Tag, Trash2, Upload } from 'lucide-react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { ArrowRight, Download, FileUp, History, Keyboard, Plus, RefreshCw, Sparkles, Tag, Trash2, Upload } from 'lucide-react'
 import api, { errorMessage, money, todayISO } from '../api'
 import { useAuth } from '../auth'
 import { ACCOUNT_KINDS } from '../components/Accounts'
@@ -25,6 +25,7 @@ async function uploadable(f) {
 }
 const ROLES = [
   ['date', 'Date', true],
+  ['time', 'Time (if in its own column)'],
   ['description', 'Description / item'],
   ['category', 'Category'],
   ['amount', 'Amount (one column)'],
@@ -41,24 +42,51 @@ const ROLES = [
 ]
 export const STATUS = {
   READY: ['ok', 'Ready'],
-  INVALID: ['bad', 'Problem'],
+  INVALID: ['bad', 'Problem in the file'],
   LOCKED: ['bad', 'Locked period'],
-  NEEDS_CATEGORY: ['warn', 'Needs a category'],
-  NEEDS_ACCOUNT: ['warn', 'Needs an account'],
-  DUPLICATE: ['warn', 'Possible duplicate'],
-  IMPORTED_BEFORE: ['info', 'Already imported'],
+  NEEDS_CATEGORY: ['warn', 'Choose a category'],
+  NEEDS_ACCOUNT: ['warn', 'Choose an account'],
+  DUPLICATE: ['bad', 'Already in the app'],
+  IMPORTED_BEFORE: ['bad', 'Already imported'],
+  REPEATED: ['bad', 'Repeated in the file'],
+  IGNORED: ['info', 'Not a transaction'],
 }
+// Problems in the file: any of them blocks the whole file
+const BLOCKING = ['INVALID', 'LOCKED', 'DUPLICATE', 'IMPORTED_BEFORE', 'REPEATED']
 // [key, label, test, shown even when empty]
 const FILTERS = [
   ['all', 'All', () => true, true],
-  ['ready', 'Ready', (r) => r.status === 'READY', true],
-  ['attention', 'Needs attention', (r) => !r.can_import && r.status !== 'IMPORTED_BEFORE', true],
+  ['ready', 'Ready', (r) => r.status === 'READY' && r.can_import, true],
+  ['problems', 'Problems in the file', (r) => BLOCKING.includes(r.status)],
+  ['choose', 'To choose', (r) => r.status === 'NEEDS_CATEGORY' || r.status === 'NEEDS_ACCOUNT'],
   ['check', 'To check', (r) => r.to_check],
-  ['duplicates', 'Possible duplicates', (r) => r.status === 'DUPLICATE'],
-  ['before', 'Already imported', (r) => r.status === 'IMPORTED_BEFORE'],
   ['transfers', 'Transfers', (r) => r.effective_kind === 'TRANSFER' || r.kind === 'OPENING', true],
-  ['out', 'Left out', (r) => r.can_import && !r.include, true],
+  ['ignored', 'Not transactions', (r) => r.status === 'IGNORED'],
 ]
+
+/** Remove an import entirely, a few hundred records per request (Purge & re-import, or taking back a stopped import). */
+export async function purgeAll(batchId, onProgress) {
+  let removed = 0
+  for (;;) {
+    const res = (await api.post(`/imports/${batchId}/purge`)).data
+    removed += res.removed
+    if (!res.remaining) return { ...res, removed }
+    onProgress?.(res.remaining)
+  }
+}
+
+// The rows with problems, as a CSV to fix the file with
+function problemsCsv(filename, rows) {
+  const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
+  const lines = [['Row', 'Date', 'Description', 'Amount', 'Problem'].map(q).join(',')]
+  for (const r of rows) lines.push([r.row_no, r.date, r.description, r.amount, (r.problems || []).join('; ')].map(q).join(','))
+  const url = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${filename.replace(/\.[^.]+$/, '')} - problems.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
 const KIND_NAME = { WALLET: 'wallet', CASH: 'cash account', SAVINGS: 'bank account', CURRENT: 'bank account', SALARY: 'bank account' }
 
 // Accounts (bank, cash, wallet) that would end below zero: some of their rows are probably missing from the file
@@ -106,6 +134,10 @@ export default function ImportRecords() {
   const [result, setResult] = useState(null)
   const [busy, setBusy] = useState(false)
   const viewingOther = target && target.id !== user.id
+  // Purge & re-import: the earlier import the next file replaces (from Import history, or offered after an upload)
+  const [params, setParams] = useSearchParams()
+  const replaceId = Number(params.get('replace')) || null
+  const setReplace = (id) => setParams(id ? { replace: String(id) } : {})
 
   const choose = async (input) => {
     const f = input.files[0]
@@ -143,12 +175,22 @@ export default function ImportRecords() {
       </PageHeader>
       {viewingOther && <Alert type="info">Imports always go into your own account, not the data you are viewing.</Alert>}
       <Msg msg={msg} />
+      {replaceId && !result && (
+        <Alert type="info">
+          Purge &amp; re-import: the file you choose replaces an earlier import. Once every row of it is checked and imported,
+          that import’s records are removed (also those edited since). If the file has a problem, nothing changes.{' '}
+          <button className="btn ghost small" onClick={() => setReplace(null)}>Cancel</button>
+        </Alert>
+      )}
 
       {result ? (
-        <Done result={result} onAgain={() => { setResult(null); setFile(null); setReview(null) }} />
+        <Done result={result} onAgain={() => { setResult(null); setFile(null); setReview(null); setReplace(null) }} />
       ) : review ? (
         <Review
+          key={`${replaceId || 0}`}
           source={review}
+          replaceId={replaceId}
+          onReplace={setReplace}
           onCancel={() => setReview(null)}
           onDone={(r) => { setReview(null); setFile(null); setResult(r) }}
           onError={(text) => setMsg({ type: 'error', text })}
@@ -175,6 +217,13 @@ export default function ImportRecords() {
               Scanned PDFs and photos of receipts can’t be read yet. Old Word .doc files: save them as .docx or PDF first.
             </p>
           </div>
+          {file?.already_imported && !replaceId && (
+            <Alert type="warn">
+              This file was imported on {new Date(file.already_imported.date).toLocaleDateString('en-IN')} as “{file.already_imported.filename}”
+              ({file.already_imported.rows} records), so it can’t be imported again. To correct that import, replace it with this file:{' '}
+              <button className="btn small" onClick={() => setReplace(file.already_imported.batch_id)}>Purge &amp; re-import</button>
+            </Alert>
+          )}
           {file && <Columns file={file} onRead={(rows, mapping) => setReview({ ...file, rows, mapping })} onError={(text) => setMsg({ type: 'error', text })} />}
         </>
       )}
@@ -315,7 +364,8 @@ function Columns({ file, onRead, onError }) {
   )
 }
 
-function Review({ source, onCancel, onDone, onError }) {
+function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
+  const fromFile = !!source.rows // rows from a file can't be changed here: the file is fixed and uploaded again
   const [records, setRecords] = useState([])
   const [info, setInfo] = useState(null) // the last check: summary, categories, accounts…
   // A file with an account column uses it (transfers and opening balances name their accounts anyway)
@@ -336,10 +386,7 @@ function Review({ source, onCancel, onDone, onError }) {
 
   const apply = (data) => {
     setInfo(data)
-    // A row fixed since the last check (problem → importable) is ticked as a new row would be
-    setRecords((prev) =>
-      data.records.map((r, i) => (prev[i] && !prev[i].can_import && r.can_import ? { ...r, include: r.default_include } : r)),
-    )
+    setRecords(data.records)
   }
 
   // First read: parse the table (or start an empty list when typing by hand)
@@ -348,7 +395,7 @@ function Review({ source, onCancel, onDone, onError }) {
       setChecking(true)
       try {
         const res = source.rows
-          ? await api.post('/imports/preview', { rows: source.rows, mapping: source.mapping, options })
+          ? await api.post('/imports/preview', { rows: source.rows, mapping: source.mapping, options, replaces_id: replaceId })
           : await api.post('/imports/check', { records: [], options })
         apply(res.data)
         if (!source.rows) addRow([])
@@ -367,7 +414,7 @@ function Review({ source, onCancel, onDone, onError }) {
             moves: Object.keys(rem.category_treatment || {}).length,
             accounts: Object.keys(rem.account_map || {}).length,
           })
-          const again = await api.post('/imports/check', { records: res.data.records.map(clean), options: next })
+          const again = await api.post('/imports/check', { records: res.data.records.map(clean), options: next, replaces_id: replaceId })
           apply(again.data)
         }
       } catch (err) {
@@ -384,7 +431,7 @@ function Review({ source, onCancel, onDone, onError }) {
     const v = ++version.current
     setChecking(true)
     try {
-      const res = await api.post('/imports/check', { records: recs.map(clean), options: opts })
+      const res = await api.post('/imports/check', { records: recs.map(clean), options: opts, replaces_id: replaceId })
       if (v === version.current) apply(res.data)
       return res.data
     } catch (err) {
@@ -423,9 +470,7 @@ function Review({ source, onCancel, onDone, onError }) {
     }
     setDrafts({})
     const data = await check(records, options)
-    if (!data) return null
-    // Rows that became importable are ticked, as on screen
-    return data.records.map((r, i) => (records[i] && !records[i].can_import && r.can_import ? { ...r, include: r.default_include } : r))
+    return data ? data.records : null
   }
   const scheduleCheck = (recs, opts = options) => {
     version.current++
@@ -463,8 +508,9 @@ function Review({ source, onCancel, onDone, onError }) {
     return records.map((r, i) => [r, i]).filter(([r]) => test(r))
   }, [records, filter])
   const pages = Math.max(1, Math.ceil(shown.length / PAGE))
-  const chosen = records.filter((r) => r.can_import && r.include)
-  const problems = records.filter((r) => !r.can_import && r.status !== 'IMPORTED_BEFORE').length
+  const chosen = records.filter((r) => r.can_import)
+  const fileProblems = records.filter((r) => BLOCKING.includes(r.status))
+  const toChoose = records.filter((r) => r.status === 'NEEDS_CATEGORY' || r.status === 'NEEDS_ACCOUNT').length
   const sumOf = (kinds) => chosen.filter((r) => kinds.includes(r.effective_kind)).reduce((s, r) => s + Number(r.amount || 0), 0)
   const totalOut = sumOf(['EXPENSE', 'SPLIT'])
   const totalIn = sumOf(['INCOME'])
@@ -482,22 +528,51 @@ function Review({ source, onCancel, onDone, onError }) {
       recs = await saveAliases()
       if (!recs) return
     }
-    const picked = recs.filter((r) => r.can_import && r.include)
-    const left = recs.length - picked.length
-    if (!window.confirm(`Import ${picked.length} record(s)?${left ? `\n\n${left} other row(s) will be listed in the import history as skipped or failed, with the reason.` : ''}`)) return
-    setProgress({ done: 0, total: recs.length })
+    const picked = recs.filter((r) => r.can_import)
+    const ignored = recs.filter((r) => r.status === 'IGNORED').length
+    const old = info.replaces
+    const replacing = old
+      ? `\n\nThen “${old.filename}” is removed: ${old.removes} record(s)${old.edited ? `, including ${old.edited} edited since its import` : ''}.`
+      : ''
+    if (!window.confirm(`Import all ${picked.length} record(s) of ${source.filename}?${ignored ? `\n\n${ignored} balance / total line(s) aren’t transactions and are left out.` : ''}${replacing}\n\nIf anything stops the import, what was saved is taken back: the file comes in whole or not at all.`)) return
+    setProgress({ done: 0, total: recs.length, label: 'Importing…' })
+    let batch = null
     try {
-      const batch = (await api.post('/imports', { filename: source.filename, file_type: source.file_type, file_hash: source.file_hash })).data
+      batch = (await api.post('/imports', {
+        filename: source.filename, file_type: source.file_type, file_hash: source.file_hash,
+        records: recs.map(clean), options, replaces_id: replaceId,
+      })).data
       const created = []
       for (let i = 0; i < recs.length; i += CHUNK) {
         const res = await api.post(`/imports/${batch.id}/rows`, { records: recs.slice(i, i + CHUNK).map(clean), options })
         created.push(...(res.data.accounts_created || []))
-        setProgress({ done: Math.min(recs.length, i + CHUNK), total: recs.length })
+        setProgress({ done: Math.min(recs.length, i + CHUNK), total: recs.length, label: 'Importing…' })
       }
       const done = (await api.post(`/imports/${batch.id}/finish`)).data
-      onDone({ ...done, accounts_created: created, account_warnings: s?.account_warnings })
+      batch = null // in: nothing to take back from here on
+      let replaced = null
+      if (old) {
+        try {
+          replaced = await purgeAll(old.id, (n) => setProgress({ done: old.removes - n, total: old.removes, label: `Removing “${old.filename}”…` }))
+          replaced = { ...replaced, filename: old.filename }
+        } catch (err) {
+          replaced = { error: errorMessage(err), filename: old.filename }
+        }
+      }
+      onReplace(null)
+      onDone({ ...done, accounts_created: created, account_warnings: s?.account_warnings, replaced })
     } catch (err) {
-      onError(`${errorMessage(err)}. What was imported before the error is in Import history, where it can be undone.`)
+      let why = errorMessage(err)
+      if (batch) {
+        // Take back what was saved: the file comes in whole or not at all
+        try {
+          await purgeAll(batch.id, (n) => setProgress({ done: n, total: recs.length, label: 'Taking it back…' }))
+          why += '. Nothing from this file was kept: try again'
+        } catch {
+          why += '. What was saved before the error couldn’t all be taken back: open Import history and press “Take back” on it'
+        }
+      }
+      onError(why)
       setProgress(null)
     }
   }
@@ -509,10 +584,13 @@ function Review({ source, onCancel, onDone, onError }) {
       <div className="card">
         <div className="card-head wrap">
           <div>
-            <h3>3. Review and correct</h3>
+            <h3>3. Review</h3>
             <p>
               {source.filename} · {records.length} record(s)
-              {info.ignored_rows ? ` · ${info.ignored_rows} blank or heading row(s) skipped` : ''}. Fix a row by editing it; untick what you don’t want.
+              {info.ignored_rows ? ` · ${info.ignored_rows} blank or heading row(s) skipped` : ''}.{' '}
+              {fromFile
+                ? 'The whole file is imported, or nothing: every row must be right. Choose categories and accounts below; anything else is fixed in the file, which you then upload again.'
+                : 'Add and correct the records; all of them are imported together.'}
             </p>
           </div>
           <div className="filters">
@@ -575,6 +653,35 @@ function Review({ source, onCancel, onDone, onError }) {
             {new Date(info.books_moves_to).toLocaleDateString('en-IN')} instead, so every record is posted and nothing is lost.
           </Alert>
         )}
+        {info.replaces && (
+          <Alert type={info.replaces.blocks.length ? 'error' : 'info'}>
+            This file replaces “{info.replaces.filename}”, imported on {new Date(info.replaces.created_at).toLocaleDateString('en-IN')}:
+            its {info.replaces.removes} record(s){info.replaces.edited ? `, including ${info.replaces.edited} edited since` : ''} are removed once this file is in.
+            {info.replaces.blocks.length > 0 && ` It can’t be purged: ${info.replaces.blocks.map((b) => `${b.rows} record(s): ${b.reason}`).join('; ')}. Unlock the period or unmatch the bank statement lines first.`}
+          </Alert>
+        )}
+        {info.blocked && (
+          <Alert type="error">
+            <div className="strong">This file can’t be imported: {fileProblems.length} row(s) have a problem in the file.</div>
+            Nothing is imported until every row is right, so a file never comes in half or twice. Fix these rows in the file and upload it again:
+            <ul style={{ margin: '6px 0' }}>
+              {fileProblems.slice(0, 8).map((r) => (
+                <li key={r.row_no}>Row {r.row_no}: {r.problems?.[0]}</li>
+              ))}
+              {fileProblems.length > 8 && <li>…and {fileProblems.length - 8} more (see “Problems in the file” below)</li>}
+            </ul>
+            <div className="filters">
+              <button className="btn secondary small" onClick={() => problemsCsv(source.filename, fileProblems)}>
+                <Download size={14} /> Download the list
+              </button>
+              {!replaceId && (info.earlier_imports || []).map((b) => (
+                <button key={b.id} className="btn small" onClick={() => onReplace(b.id)}>
+                  Purge &amp; re-import “{b.filename}” with this file
+                </button>
+              ))}
+            </div>
+          </Alert>
+        )}
         {info.lock_date && <p className="hint">Your accounting books are locked up to {new Date(info.lock_date).toLocaleDateString('en-IN')}: records dated on or before it can’t be imported.</p>}
 
         <AccountMap info={info} options={options} setOption={setOption} />
@@ -600,15 +707,16 @@ function Review({ source, onCancel, onDone, onError }) {
             })}
           </div>
           <span className="spacer" />
-          <button className="btn secondary small" onClick={() => addRow()}>
-            <Plus size={14} /> Add a record
-          </button>
+          {!fromFile && (
+            <button className="btn secondary small" onClick={() => addRow()}>
+              <Plus size={14} /> Add a record
+            </button>
+          )}
         </div>
         <div className="table-wrap">
           <table className="table import-table">
             <thead>
               <tr>
-                <th title="Import this row"></th>
                 <th>Row</th>
                 <th>Status</th>
                 <th>Date</th>
@@ -623,10 +731,10 @@ function Review({ source, onCancel, onDone, onError }) {
             </thead>
             <tbody>
               {shown.slice(page * PAGE, page * PAGE + PAGE).map(([r, i]) => (
-                <Row key={`${r.row_no}-${i}`} r={r} hasSplit={hasSplit}
+                <Row key={`${r.row_no}-${i}`} r={r} hasSplit={hasSplit} readOnly={fromFile}
                      onEdit={(patch) => edit(i, patch)} onRemove={() => removeRow(i)} />
               ))}
-              {!shown.length && <EmptyRow cols={11}>No records here.</EmptyRow>}
+              {!shown.length && <EmptyRow cols={10}>No records here.</EmptyRow>}
             </tbody>
           </table>
         </div>
@@ -648,41 +756,39 @@ function Review({ source, onCancel, onDone, onError }) {
               Spending {money(totalOut)} · Money received {money(totalIn)}
               {transfers ? ` · ${transfers} transfer(s) of ${money(totalMoved)}` : ''}
               {openings ? ` · ${openings} opening balance(s)` : ''}
-              {s?.duplicates ? ` · ${s.duplicates} possible duplicate(s) left out unless ticked` : ''}
-              {s?.imported_before ? ` · ${s.imported_before} already imported (never imported twice)` : ''}
+              {s?.ignored ? ` · ${s.ignored} balance / total line(s) left out` : ''}
               {s?.to_check ? ` · ${s.to_check} unusually large row(s) to check` : ''}
-              {problems ? ` · ${problems} row(s) with problems won’t be imported` : ''}
+              {fileProblems.length ? ` · ${fileProblems.length} row(s) with a problem in the file: fix the file and upload it again` : ''}
+              {toChoose ? ` · ${toChoose} row(s) still need a category or account` : ''}
             </div>
           </div>
           {progress ? (
             <div style={{ minWidth: 220 }}>
               <div className="progress"><i style={{ width: `${(100 * progress.done) / Math.max(1, progress.total)}%`, background: 'var(--primary)' }} /></div>
-              <div className="muted small">Importing… {progress.done} of {progress.total}</div>
+              <div className="muted small">{progress.label} {progress.done} of {progress.total}</div>
             </div>
           ) : (
-            <button className="btn" disabled={checking || !chosen.length} onClick={runImport}>
-              Import {chosen.length} record(s)
+            <button className="btn" disabled={checking || !info.can_import} onClick={runImport}
+                    title={info.blocked ? 'Fix the problems in the file and upload it again' : toChoose ? 'Choose the categories and accounts first' : ''}>
+              {info.replaces ? 'Import and replace' : 'Import'} all {records.filter((r) => r.status !== 'IGNORED').length} record(s)
             </button>
           )}
         </div>
         <p className="hint">
-          Records keep their original date and appear in Expenses, Balance, the Dashboard and Reports; transfers move money between your accounts and opening balances are added to them. They can be edited for 3 days from today, don’t trigger budget alerts, and post to your books if you use Accounting. You can undo the whole import from Import history.
+          Records keep their original date and appear in Expenses, Balance, the Dashboard and Reports; transfers move money between your accounts and opening balances are added to them. They can be edited for 3 days from today, don’t trigger budget alerts, and post to your books if you use Accounting. To correct the import later, use Purge &amp; re-import in Import history with the corrected file.
         </p>
       </div>
     </>
   )
 }
 
-function Row({ r, hasSplit, onEdit, onRemove }) {
+function Row({ r, hasSplit, readOnly, onEdit, onRemove }) {
   const [cls, label] = STATUS[r.status] || ['info', r.status]
   const notes = [...(r.problems || []), ...(r.warnings || [])]
   const num = (v) => (v === '' ? null : v)
+  if (readOnly) return <FileRow r={r} hasSplit={hasSplit} cls={cls} label={label} notes={notes} onEdit={onEdit} />
   return (
     <tr className={r.can_import ? '' : 'row-problem'}>
-      <td>
-        <input type="checkbox" aria-label={`Import row ${r.row_no}`} checked={!!(r.can_import && r.include)} disabled={!r.can_import}
-               onChange={(e) => onEdit({ include: e.target.checked })} />
-      </td>
       <td className="muted">{r.row_no}</td>
       <td style={{ minWidth: 150 }}>
         <span className={`badge ${cls}`}>{label}</span>
@@ -745,6 +851,51 @@ function Row({ r, hasSplit, onEdit, onRemove }) {
           <Trash2 size={14} />
         </button>
       </td>
+    </tr>
+  )
+}
+
+/** A row from a file, as the file has it: it is changed by fixing the file. Only a note of one's own can be added. */
+function FileRow({ r, hasSplit, cls, label, notes, onEdit }) {
+  return (
+    <tr className={r.can_import || r.status === 'IGNORED' ? '' : 'row-problem'}>
+      <td className="muted">{r.row_no}</td>
+      <td style={{ minWidth: 150 }}>
+        <span className={`badge ${cls}`}>{label}</span>
+        {notes.map((n, k) => (
+          <div key={k} className="hint" style={{ margin: '4px 0 0' }}>{n}</div>
+        ))}
+      </td>
+      <td>{r.date ? new Date(r.date).toLocaleDateString('en-IN') : <span className="muted">—</span>}{r.time && <div className="muted small">{r.time}</div>}</td>
+      <td>
+        {KIND_LABEL[r.kind] || <span className="muted">—</span>}
+        {r.effective_kind === 'TRANSFER' && r.kind !== 'TRANSFER' && <div className="hint" style={{ margin: '4px 0 0' }}>→ moved, not spent</div>}
+      </td>
+      <td>
+        {r.description || <span className="muted">—</span>}
+        {r.alias_name && <div className="hint" style={{ margin: '4px 0 0' }}>→ shown as <b>{r.alias_name}</b></div>}
+        {r.status !== 'IGNORED' && (
+          <input value={r.note || ''} maxLength={500} placeholder="Note (optional)" aria-label={`Note for row ${r.row_no}`}
+                 style={{ marginTop: 4 }} onChange={(e) => onEdit({ note: e.target.value || null })} />
+        )}
+      </td>
+      <td>
+        {r.category || <span className="muted">—</span>}
+        {r.category_final && r.category_final !== r.category && <div className="hint" style={{ margin: '4px 0 0' }}>→ {r.category_final}</div>}
+      </td>
+      <td className="num">{r.amount != null && r.amount !== '' ? money(r.amount) : <span className="muted">—</span>}</td>
+      {hasSplit && <td className="num">{r.kind === 'SPLIT' && r.my_share != null ? money(r.my_share) : ''}</td>}
+      <td style={{ minWidth: 150 }}>
+        {r.account || <span className="muted">—</span>}
+        {r.to_account && <> <ArrowRight size={11} /> {r.to_account}</>}
+        {r.account_label && (
+          <div className="hint" style={{ margin: '4px 0 0' }}>
+            {r.account_label}
+            {r.to_account_label && <> <ArrowRight size={11} /> {r.to_account_label}</>}
+          </div>
+        )}
+      </td>
+      <td></td>
     </tr>
   )
 }
@@ -1064,6 +1215,15 @@ function Done({ result, onAgain }) {
       <p>
         Spending {money(result.expense_total)} · Money received {money(result.income_total)}
       </p>
+      {result.replaced && !result.replaced.error && (
+        <Alert type="ok">Replaced “{result.replaced.filename}”: its {result.replaced.removed} record(s) were removed.</Alert>
+      )}
+      {result.replaced?.error && (
+        <Alert type="error">
+          The new file is in, but removing “{result.replaced.filename}” stopped ({result.replaced.error}). Open Import history and press
+          “Finish replacing” on it, so nothing stays twice.
+        </Alert>
+      )}
       <BelowZero warnings={result.account_warnings} />
       <div className="form-actions">
         <Link className="btn secondary" to="/expenses">Open Expenses</Link>
@@ -1077,10 +1237,10 @@ function Done({ result, onAgain }) {
 // What the server needs of a row (drops the check's own fields)
 function clean(r) {
   return {
-    row_no: r.row_no, kind: r.kind || null, date: r.date || null, description: r.description || '', category: r.category || null,
+    row_no: r.row_no, kind: r.kind || null, date: r.date || null, time: r.time || null, description: r.description || '', category: r.category || null,
     amount: r.amount === '' ? null : r.amount, my_share: r.kind === 'SPLIT' ? (r.my_share === '' ? null : r.my_share) : null,
     split_with: r.split_with || [], paid_by: r.kind === 'SPLIT' ? r.paid_by || null : null, account: r.account || null, to_account: r.kind === 'TRANSFER' ? r.to_account || null : null,
     note: r.note || null, quantity: r.quantity || 1,
-    include: r.include !== false, parse_errors: r.parse_errors || [], parse_warnings: r.parse_warnings || [], fingerprint: r.fingerprint || null,
+    include: true, parse_errors: r.parse_errors || [], parse_warnings: r.parse_warnings || [], fingerprint: r.fingerprint || null,
   }
 }
