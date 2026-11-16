@@ -47,11 +47,22 @@ export default function Register() {
           <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
             <div>
               <label>Username <span className="req" aria-hidden="true">*</span></label>
-              <input value={form.username} onChange={set('username')} required autoComplete="username" />
+              <input
+                value={form.username}
+                onChange={set('username')}
+                required
+                minLength={3}
+                maxLength={50}
+                pattern="[A-Za-z0-9_.\-]+"
+                title="Letters, numbers, dot (.), dash (-) and underscore (_), no spaces"
+                autoComplete="username"
+              />
+              <span className="hint">Letters, numbers, . - and _ (no spaces)</span>
             </div>
             <div>
               <label>Password <span className="req" aria-hidden="true">*</span></label>
-              <input type="password" value={form.password} onChange={set('password')} minLength={8} required autoComplete="new-password" />
+              <input type="password" value={form.password} onChange={set('password')} minLength={8} maxLength={100} required autoComplete="new-password" />
+              <span className="hint">At least 8 characters</span>
             </div>
           </div>
           <div className="field">

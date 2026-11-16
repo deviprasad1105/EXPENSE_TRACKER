@@ -79,6 +79,11 @@ NOT_MERCHANT = re.compile(
     r"transaction|txn|card|bank|debit|credit|customer|dear|frequency|monthly|yearly|weekly|quarterly|rs\.?)\b",
     re.I,
 )
+# "Your Netflix subscription of Rs 649 has been renewed": the name comes before the word subscription / membership / plan
+NAMED_PLAN = re.compile(
+    r"\b(?:your\s+)?([A-Za-z][A-Za-z0-9&'.\-]*(?:\s+[A-Za-z0-9&'.\-]+){0,3}?)\s+(?:subscription|membership|plan)\b",
+    re.I,
+)
 REF = re.compile(r"(?:umn|upi\s*ref(?:\s*no)?|ref(?:erence)?\s*(?:no|id)?|mandate\s*(?:id|ref)|txn\s*id)[\s.:#-]*([A-Za-z0-9@.\-]{6,40})", re.I)
 VPA = re.compile(r"\b[\w.\-]{2,}@([a-z]{2,})\b", re.I)
 
@@ -142,6 +147,10 @@ def find_merchant(text: str) -> str | None:
     for m in MERCHANT.finditer(text):
         name = re.sub(r"\s+", " ", m[1]).strip(" .-'")
         if len(name) >= 2 and not NOT_MERCHANT.match(name) and not re.fullmatch(r"[xX*\d]+", name):
+            return name.title() if name.isupper() or name.islower() else name
+    for m in NAMED_PLAN.finditer(text):
+        name = re.sub(r"\s+", " ", m[1]).strip(" .-'")
+        if len(name) >= 2 and not NOT_MERCHANT.match(name):
             return name.title() if name.isupper() or name.islower() else name
     # "Sent Rs 250 to swiggy@ybl": name the merchant after its UPI ID
     for m in VPA.finditer(text):

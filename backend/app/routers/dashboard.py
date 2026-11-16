@@ -7,7 +7,7 @@ from ..database import get_db
 from ..deps import get_current_user, resolve_target
 from ..models import User
 from ..services.insights import build
-from ..services.summary import balance, expenses_between, summarize, trend
+from ..services.summary import balance, expenses_between, summarize, tracking_since, trend
 from ..timeutil import today_local, validate_range
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -27,7 +27,7 @@ def dashboard(
     start = start or today.replace(day=1)
     end = end or today
     validate_range(start, end)
-    since = (target.user.approved_at or target.user.created_at).date()
+    since = tracking_since(db, target.user)
     period = summarize(expenses_between(db, target.user.id, start, end), start, end, since)
     today_total = next((d["amount"] for d in period["daily"] if d["date"] == today.isoformat()), None)
     if today_total is None:

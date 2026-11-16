@@ -43,7 +43,7 @@ from ..models import (
 )
 from ..routers.expenses import user_categories
 from ..services.aliases import find_alias, label_new, payee_key, suggest_alias, user_aliases
-from ..services.accounts import balances
+from ..services.accounts import balances, primary_account_id
 from ..services.splits import split_evenly
 from ..timeutil import now_local, today_local
 from .models import (
@@ -214,7 +214,12 @@ _TREATMENT_HINTS = (
      r"brokerage|bal tnf", "INVESTMENT", "Investments"),
     (r"reimburse|on behalf|money return|returned|\blent\b|\blend|borrow|money received|money given|cash received|"
      r"paid back|transfer money and received cash|ticket money", "RECEIVABLE", "Money with others"),
+    (r"\batm\b|cash withdrawal|\bwdl\b", "CASH", "Cash"),
 )
+# Imports a Purge & re-import can replace: finished and still (partly) in the app
+REPLACEABLE = (COMPLETED, COMPLETED_WITH_ERRORS, PARTIALLY_UNDONE)
+# Rows without a category of their own (a bank statement) are moved per payee: "payee:<payee key>"
+PAYEE_MOVE = "payee:"
 
 
 def suggest_category(raw: str, known: dict[str, str], sure: bool = True) -> str | None:
@@ -225,6 +230,22 @@ def suggest_category(raw: str, known: dict[str, str], sure: bool = True) -> str 
             if strong != sure:
                 return None
             return known.get(category.casefold())
+    return None
+
+
+# The same for a statement row's description, which is free text: only words that can't mean anything else
+# ("Dinner share" is not an investment)
+_DESCRIPTION_HINTS = (
+    (r"\bsip\b|mutual fund|\bmf\b|zerodha|groww|\bppf\b|fixed deposit|\bdemat\b|brokerage|\bipo\b", "INVESTMENT", "Investments"),
+    (r"\batm\b|cash withdrawal|\bwdl\b", "CASH", "Cash"),
+)
+
+
+def suggest_description_treatment(text: str) -> str | None:
+    n = (text or "").casefold()
+    for pattern, kind, name in _DESCRIPTION_HINTS:
+        if re.search(pattern, n):
+            return f"new:{kind}:{name}"
     return None
 
 
@@ -324,9 +345,10 @@ def _ref_id(ref: str | None) -> int | None:
 
 
 def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions, batch_id: int | None = None,
-          fresh: bool = False, replaces: ImportBatch | None = None) -> dict:
+          fresh: bool = False, replaces: list[ImportBatch] | None = None) -> dict:
     """Check every record. `batch_id`: the import these rows are a chunk of (its records saved so far don't count as
-    duplicates); `replaces`: the import a Purge & re-import replaces (nor do its records)."""
+    duplicates); `replaces`: the imports a Purge & re-import replaces, the chosen one first (nor do their records)."""
+    replaces = list(replaces or [])
     if len(records) > settings.import_max_records:
         _bad(f"This file has {len(records)} records; up to {settings.import_max_records:,} can be imported at once. Split the file.")
     today = today_local()
@@ -342,7 +364,7 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
     treat = {_key(k): acc.treatment(v) for k, v in opts.category_treatment.items() if v}
     split_ok = has_feature(user, FEATURE_SPLIT)
     fps = fingerprints(records)
-    exclude = [i for i in (batch_id, replaces.id if replaces else None) if i]
+    exclude = [i for i in (batch_id, *(b.id for b in replaces)) if i]
     imported_before = _imported_fingerprints(db, user.id, fps, exclude)
     existing = _existing(db, user.id, records, exclude)
     my_names = {_key(user.full_name), _key(user.username)} - {""}
@@ -372,6 +394,7 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
 
     out = []
     cat_stats: dict[str, Counter] = defaultdict(Counter)
+    payee_moves: dict[str, dict] = {}
     first_row: dict[str, int] = {}
     for r, fp in zip(records, fps):
         problems, warnings = [], [w for w in r.parse_warnings if w != TOTAL_LINE]
@@ -418,7 +441,12 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         # Where the money is: one account, or two for a transfer (also a category treated as a transfer)
         raw_cat = (r.category or "").strip()
         ck = _key(raw_cat)
-        treated = treat.get(ck) if r.kind in (KIND_EXPENSE, KIND_INCOME) else None
+        # What a "move it to an account" choice is keyed on: the file's category, or the payee when there is none
+        move_key = ck
+        if not raw_cat and r.kind in (KIND_EXPENSE, KIND_INCOME) and description:
+            pk = payee_key(description)
+            move_key = f"{PAYEE_MOVE}{pk}" if pk else ck
+        treated = treat.get(move_key) if r.kind in (KIND_EXPENSE, KIND_INCOME) else None
         account_ref = to_ref = None
         mapping_problems = []
         if r.kind == KIND_TRANSFER:
@@ -487,6 +515,17 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
                 side = "received" if r.kind == KIND_INCOME else "sent"
                 p[f"{side}_count"] += 1
                 p[f"{side}_total"] += abs(r.amount or 0)
+        # A statement row that looks like an investment, cash withdrawal or money lent is offered as a move, per payee
+        if move_key != ck and state not in (INVALID, IGNORED):
+            found = alias or find_alias(aliases, move_key[len(PAYEE_MOVE):], description)
+            hint = suggest_description_treatment(description) or (suggest_treatment(found.category) if found and found.category else None)
+            if hint or treated:
+                m = payee_moves.setdefault(move_key, {
+                    "value": move_key, "rows": 0, "expense_rows": 0, "income_rows": 0, "mapped_to": None, "known": True,
+                    "treatment": treated, "suggested": None, "maybe": None, "suggested_treatment": hint, "payee": True,
+                    "label": found.alias if found else suggest_alias(move_key[len(PAYEE_MOVE):], description)})
+                m["rows"] += 1
+                m["income_rows" if r.kind == KIND_INCOME else "expense_rows"] += 1
         # A row without a category of its own takes its alias's category, so it needs no mapping
         alias_category = alias.category if alias and alias.category and not raw_cat else None
 
@@ -555,7 +594,7 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
          "treatment": treat.get(_key(v)), "suggested": suggest_category(v, known),
          "maybe": suggest_category(v, known, sure=False), "suggested_treatment": suggest_treatment(v)}
         for v, s in sorted(cat_stats.items(), key=lambda x: (-x[1]["rows"], x[0]))
-    ]
+    ] + sorted(payee_moves.values(), key=lambda m: (-m["rows"], m["label"]))
     account_values = acc.values()
     kinds = Counter(o["effective_kind"] for o in chosen)
     blocked = any(o["status"] in BLOCKING for o in out)
@@ -564,7 +603,7 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
     for bid, n in earlier.most_common():
         b = db.get(ImportBatch, bid)
         earlier_imports.append({"id": bid, "filename": b.filename, "created_at": b.created_at, "rows": n,
-                                "status": b.status})
+                                "status": b.status, "can_replace": b.status in REPLACEABLE and not b.replaced_by_id})
     # Records older than the books move the books' start back to their financial year, so nothing migrated is lost
     earliest = min((o["date"] for o in chosen if o["date"]), default=None)
     books_moves_to = (
@@ -583,7 +622,7 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
             "income_total": str(sum((Decimal(o["amount"]) for o in chosen if o["effective_kind"] == KIND_INCOME), Decimal(0))),
             "transfer_total": str(sum((Decimal(o["amount"]) for o in chosen if o["effective_kind"] == KIND_TRANSFER), Decimal(0))),
             "to_check": sum(1 for o in out if o["to_check"]),
-            "account_warnings": _below_zero(db, user.id, accounts, chosen),
+            "account_warnings": _below_zero(db, user.id, accounts, chosen, replaces),
         },
         "categories": sorted(known.values(), key=str.casefold),
         "category_values": category_values,
@@ -606,17 +645,40 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         "blocked": blocked,
         "can_import": bool(chosen) and not blocked and not any(o["status"] in CHOICES for o in out),
         "earlier_imports": earlier_imports,
-        "replaces": _replace_info(db, replaces) if replaces else None,
+        "replaces": _replace_info(db, replaces[0]) if replaces else None,
+        "also_replaces": [_replace_info(db, b) for b in replaces[1:]],
     }
 
 
-# Accounts that can't normally go below zero (a card or a loan can)
-_NO_OVERDRAFT = {"SAVINGS", "CURRENT", "SALARY", "CASH", "WALLET"}
+# Accounts that can't normally go below zero (a card or a loan can). Money with others below zero means more came
+# back than was lent; Investments below zero, more taken out than put in: both usually a move that is really income.
+_NO_OVERDRAFT = {"SAVINGS", "CURRENT", "SALARY", "CASH", "WALLET", "RECEIVABLE", "INVESTMENT"}
 
 
-def _below_zero(db: Session, user_id: int, accounts: list[Account], chosen: list[dict]) -> list[dict]:
-    """Accounts (bank, cash, wallet) that would end below zero once the chosen rows are imported: usually rows
-    missing from the file (a wallet's top-ups, a bank's own statement), which the user is told to import too."""
+def _replaced_change(db: Session, user_id: int, replaces: list[ImportBatch]) -> dict[str, Decimal]:
+    """How the records of the imports being replaced move each account today: they are removed once the file is in."""
+    change: dict[str, Decimal] = defaultdict(Decimal)
+    primary = primary_account_id(db, user_id)
+    ref = lambda account_id: f"id:{account_id or primary}" if (account_id or primary) else None  # noqa: E731
+    for batch in replaces:
+        for rec in batch.records:
+            if rec.status != REC_IMPORTED:
+                continue
+            if rec.expense_id and (e := db.get(Expense, rec.expense_id)):
+                change[ref(e.account_id)] -= Decimal(e.amount)
+            elif rec.fund_id and (f := db.get(Fund, rec.fund_id)):
+                change[ref(f.account_id)] += Decimal(f.amount)
+            elif rec.transfer_id and (t := db.get(AccountTransfer, rec.transfer_id)):
+                change[f"id:{t.from_account_id}"] -= Decimal(t.amount)
+                change[f"id:{t.to_account_id}"] += Decimal(t.amount)
+    return change
+
+
+def _below_zero(db: Session, user_id: int, accounts: list[Account], chosen: list[dict],
+                replaces: list[ImportBatch] | None = None) -> list[dict]:
+    """Accounts (bank, cash, wallet, money with others, investments) that would end below zero once the chosen rows are
+    imported: usually rows missing from the file (a wallet's top-ups, a bank's own statement), which the user is told to
+    import too, or money moved to Money with others / Investments that is really income."""
     change: dict[str, Decimal] = defaultdict(Decimal)
     for o in chosen:
         amount = Decimal(o["amount"])
@@ -628,6 +690,14 @@ def _below_zero(db: Session, user_id: int, accounts: list[Account], chosen: list
             change[src] += amount
         elif o["effective_kind"] in (KIND_EXPENSE, KIND_SPLIT):
             change[src] -= Decimal(o["my_share"]) if o["kind"] == KIND_SPLIT and o["my_share"] is not None else amount
+    # Purge & re-import: the records being replaced leave the balances, so they aren't counted twice
+    for ref, amount in _replaced_change(db, user_id, replaces or []).items():
+        if ref:
+            change[ref] -= amount
+    # Rows with no account move the primary account (as its balance and the books count them)
+    primary = primary_account_id(db, user_id)
+    if primary and "none" in change:
+        change[f"id:{primary}"] += change.pop("none")
     by_id = {a.id: a for a in accounts}
     now = balances(db, user_id, today_local().replace(day=1)) if any(r and r.startswith("id:") for r in change) else {}
     out = []
@@ -773,9 +843,12 @@ def _create(db: Session, user: User, r: dict, ctx: dict) -> dict:
     full = " ".join((r["description"] or "").split())
     description = full[:100]
     amount = Decimal(r["amount"])
-    note = r["note"]
+    # Records have a date but no time: the file's time goes first in the note, so two identical rows told apart by
+    # their time stay told apart in the app
+    at = f"At {r['time']}" if r.get("time") else None
+    note = " – ".join(x for x in (at, r["note"]) if x) or None
     if len(full) > 100:  # the description holds 100 characters: the whole text goes in the note
-        note = " – ".join(x for x in (full, note) if x)[:500]
+        note = " – ".join(x for x in (at, full, r["note"]) if x)[:500]
     if r["kind"] == KIND_OPENING:
         account = _account(db, user, r["account_ref"], ctx)
         account.opening_balance = Decimal(account.opening_balance or 0) + amount
@@ -795,7 +868,7 @@ def _create(db: Session, user: User, r: dict, ctx: dict) -> dict:
         # The description is the name when there was no category (the rest of a long one goes in the note);
         # otherwise the description goes in the note, in full
         shown = (full if len(full) > 100 else None) if source == description[:100] else full
-        fund_note = " – ".join(x for x in (shown, r["note"]) if x)[:500] or None
+        fund_note = " – ".join(x for x in (at, shown, r["note"]) if x)[:500] or None
         fund = Fund(user_id=user.id, fund_date=d, amount=amount, source=source, note=fund_note, account_id=r["account_id"])
         label_new(db, fund, aliases=_aliases(db, user, ctx), text=description or source)
         db.add(fund)
@@ -868,11 +941,12 @@ def _problem_list(rows: list[dict], limit: int = 5) -> str:
 
 
 def start(db: Session, user: User, filename: str, file_type: str, file_hash: str | None, records: list[RecordIn],
-          opts: ImportOptions, replaces_id: int | None) -> ImportBatch:
+          opts: ImportOptions, replaces_id: int | None, also_replaces: list[int] | None = None) -> ImportBatch:
     """Start an import: the whole file is checked first, and the import starts only if every row can be imported
-    (no problem in the file, every category and account chosen). Purge & re-import: the earlier import must be one
+    (no problem in the file, every category and account chosen). Purge & re-import: the earlier imports must be ones
     that can be purged entirely."""
-    replaces = _replaceable(db, user, replaces_id) if replaces_id else None
+    ids = [replaces_id] + [i for i in dict.fromkeys(also_replaces or []) if i != replaces_id] if replaces_id else []
+    replaces = [_replaceable(db, user, i) for i in ids]
     result = check(db, user, records, opts, replaces=replaces)
     bad = [o for o in result["records"] if o["status"] in BLOCKING]
     if bad:
@@ -884,7 +958,8 @@ def start(db: Session, user: User, filename: str, file_type: str, file_hash: str
     if not any(o["can_import"] for o in result["records"]):
         _bad("There is nothing to import in this file")
     batch = ImportBatch(user_id=user.id, filename=filename.strip(), file_type=file_type[:10] or "manual",
-                        file_hash=file_hash, rows_expected=len(records), replaces_id=replaces.id if replaces else None)
+                        file_hash=file_hash, rows_expected=len(records), replaces_id=ids[0] if ids else None,
+                        also_replaces=",".join(str(i) for i in ids[1:]) or None)
     db.add(batch)
     db.commit()
     return batch
@@ -898,8 +973,7 @@ def import_chunk(db: Session, user: User, batch: ImportBatch, records: list[Reco
         _bad("This import is already finished")
     if len(records) + batch.rows_total > (batch.rows_expected or settings.import_max_records):
         _bad("More rows than the file that was checked")
-    replaces = db.get(ImportBatch, batch.replaces_id) if batch.replaces_id else None
-    checked = check(db, user, records, opts, batch_id=batch.id, replaces=replaces)["records"]
+    checked = check(db, user, records, opts, batch_id=batch.id, replaces=replaced_batches(db, batch))["records"]
     bad = [r for r in checked if r["status"] not in IMPORTABLE + (IGNORED,) or (r["status"] == READY and not r["can_import"])]
     if bad:
         _bad(f"The import stopped: {_problem_list(bad)}. Nothing from this file is kept.", status.HTTP_409_CONFLICT)
@@ -938,6 +1012,13 @@ def import_chunk(db: Session, user: User, batch: ImportBatch, records: list[Reco
             "accounts_created": ctx.get("created_accounts", [])}
 
 
+def replaced_batches(db: Session, batch: ImportBatch) -> list[ImportBatch]:
+    """The earlier imports a Purge & re-import replaces: the chosen one first, then the others."""
+    ids = ([batch.replaces_id] if batch.replaces_id else []) + [int(x) for x in (batch.also_replaces or "").split(",") if x]
+    found = (db.get(ImportBatch, i) for i in ids)
+    return [b for b in found if b is not None and b.user_id == batch.user_id]
+
+
 def _add_counts(batch: ImportBatch, counts: Counter, exp_total: Decimal, inc_total: Decimal):
     batch.rows_total += sum(counts.values())
     batch.rows_imported += counts[REC_IMPORTED]
@@ -953,9 +1034,8 @@ def finish(db: Session, batch: ImportBatch) -> ImportBatch:
     if batch.status == IN_PROGRESS and batch.rows_expected is not None and batch.rows_total != batch.rows_expected:
         _bad(f"The import is incomplete ({batch.rows_total} of {batch.rows_expected} rows): it will be taken back",
              status.HTTP_409_CONFLICT)
-    if batch.status == IN_PROGRESS and batch.replaces_id:
-        old = db.get(ImportBatch, batch.replaces_id)
-        if old is not None and old.user_id == batch.user_id:
+    if batch.status == IN_PROGRESS:
+        for old in replaced_batches(db, batch):
             old.replaced_by_id = batch.id
     if batch.status == IN_PROGRESS:
         if batch.rows_imported == 0:
@@ -1094,8 +1174,8 @@ def _replaceable(db: Session, user: User, batch_id: int) -> ImportBatch:
     batch = db.get(ImportBatch, batch_id)
     if batch is None or batch.user_id != user.id:
         _bad("Import not found", status.HTTP_404_NOT_FOUND)
-    if batch.status not in (COMPLETED, COMPLETED_WITH_ERRORS, PARTIALLY_UNDONE):
-        _bad("Only a finished import that is still in the app can be purged and re-imported")
+    if batch.status not in REPLACEABLE or batch.replaced_by_id:
+        _bad(f"“{batch.filename}”: only a finished import that is still in the app can be purged and re-imported")
     info = _replace_info(db, batch)
     if info["blocks"]:
         _bad(f"“{batch.filename}” can't be purged: " + "; ".join(f"{b['rows']} record(s): {b['reason']}" for b in info["blocks"])

@@ -113,6 +113,9 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
   records money moved from one of your accounts to another without counting it as income or spending. Each
   account shows its balance and this month's spending. Turn off "Ask which account for each expense" to send
   everything to the primary account automatically. Subscription charges are paid from the primary account.
+  Whatever has no account of its own counts in the primary account's balance, exactly as the accounting books post
+  it: expenses and money received without an account, split bills you paid, split settlements, and subscription
+  charges not logged as an expense.
 - **Transaction aliases** (*Settings → Transaction aliases*): name a payee once and every transaction to or from it
   shows that name. Records are grouped automatically by payee (the UPI ID in the description, or its words without
   reference numbers: `UPI/DR/4123…/RAMESH TEA STALL/YBL/ramesh@ybl` → `ramesh@ybl`), with how often and how much.
@@ -171,7 +174,13 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
     aside (so they don't count as duplicates); once every row of it is imported, the earlier import is removed
     entirely, including records edited since, and shows as *Replaced*. It is refused up front when any of the
     earlier import's records is in a locked accounting period or reconciled with a bank statement, so it never stops
-    halfway; if removing the earlier import is interrupted, *Finish replacing* completes it.
+    halfway; if removing the earlier import is interrupted, *Finish replacing* completes it. When the period was
+    imported in several files (e.g. a month purged and imported again on its own), the review offers *Replace “…”
+    too* for each other import the file's rows came in with, and all of them are replaced together.
+  - Rows of a bank statement (no category column) that are clearly not spending (an ATM withdrawal, a SIP / mutual
+    fund) are offered as moves to *Cash* / *Investments*, per payee. The review warns when a move would leave
+    *Money with others* or *Investments* below zero. A time given in the file is kept in the record's note
+    ("At 09:15").
   - **Purge** (the *Purge* tab, between *Import* and *Import history*): removes every expense, money received and
     transfer dated from a *From* to a *To* date, typed in by hand or imported, e.g. to import that period again from
     a corrected file. It shows what it would remove first (counts and amounts, how many were imported), and asks you

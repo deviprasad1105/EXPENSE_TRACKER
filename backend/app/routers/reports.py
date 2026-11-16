@@ -8,7 +8,7 @@ from ..database import get_db
 from ..deps import get_current_user, resolve_target
 from ..models import User
 from ..services.reports import build_excel, build_pdf
-from ..services.summary import balance, expenses_between, summarize, trend
+from ..services.summary import balance, expenses_between, summarize, tracking_since, trend
 from ..timeutil import today_local, validate_range
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -31,7 +31,7 @@ def export(
     validate_range(start, end)
 
     expenses = expenses_between(db, target.user.id, start, end)
-    summary = summarize(expenses, start, end, (target.user.approved_at or target.user.created_at).date())
+    summary = summarize(expenses, start, end, tracking_since(db, target.user))
     summary["granularity"] = granularity
     summary["trend"] = trend(db, target.user.id, start, end, granularity)
     bal = balance(db, target.user.id)

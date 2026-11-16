@@ -60,6 +60,8 @@ class ImportBatch(Base):
     rows_expected: Mapped[int | None] = mapped_column(Integer)
     # Purge & re-import: the earlier import this one replaces, and on that one the import that replaced it
     replaces_id: Mapped[int | None] = mapped_column(Integer)
+    # Purge & re-import of a period imported in several files: the other imports it replaces too ("12,15")
+    also_replaces: Mapped[str | None] = mapped_column(String(200))
     replaced_by_id: Mapped[int | None] = mapped_column(Integer)
 
     records: Mapped[list["ImportRecord"]] = relationship(

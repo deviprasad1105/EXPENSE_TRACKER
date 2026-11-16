@@ -198,6 +198,8 @@ def build(db: Session, user_id: int, today: date, month: date | None = None) -> 
     # ----- budgets -----
     budgets = []
     for b in db.scalars(select(Budget).where(Budget.user_id == user_id, Budget.is_active == true())):
+        if b.created_at and b.created_at.date() >= month_end:
+            continue  # set up after this month: a month looked back on isn't judged against it
         st = status_of(db, b, today)
         budgets.append({
             "id": b.id, "scope": b.scope, "target": b.target, "label": label(b), "monthly_limit": _f(b.monthly_limit),

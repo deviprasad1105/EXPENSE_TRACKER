@@ -6,7 +6,7 @@ admin (ROLE_ADMIN) keeps full control over everyone, org admins included.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -16,6 +16,7 @@ from ..schemas import AdminReason, BackupOut, ManagedUserOut, OrgMemberCreate
 from ..security import hash_password
 from ..timeutil import now_local
 from .admin import delete_account, lock_account, unlock_account
+from .profile import account_exists
 
 router = APIRouter(prefix="/api/org", tags=["organisation"])
 
@@ -38,7 +39,7 @@ def list_members(org_admin: User = Depends(require_org_admin), db: Session = Dep
 @router.post("/members", response_model=ManagedUserOut, status_code=201)
 def add_member(data: OrgMemberCreate, org_admin: User = Depends(require_org_admin), db: Session = Depends(get_db)):
     """Create an account in the organisation. It is approved straight away and gets the org admin's plan."""
-    if db.scalar(select(User.id).where(or_(User.username == data.username, User.email == data.email))):
+    if account_exists(db, data.username, data.email):
         raise HTTPException(status.HTTP_409_CONFLICT, "Username or email already registered")
     user = User(
         username=data.username,

@@ -741,6 +741,11 @@ function Categories() {
                 <button className="icon-btn ghost" title={`Show ${c.name}`} aria-label={`Show ${c.name}`} onClick={() => toggle(c)}>
                   <VisibilityOutlined style={{ fontSize: 16 }} />
                 </button>
+                {c.is_custom && (
+                  <button className="icon-btn ghost" title={`Remove ${c.name}`} aria-label={`Remove ${c.name}`} style={{ color: 'var(--danger)' }} onClick={() => remove(c)}>
+                    <DeleteOutlineRounded style={{ fontSize: 16 }} />
+                  </button>
+                )}
               </span>
             ))}
           </div>

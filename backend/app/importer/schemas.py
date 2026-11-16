@@ -102,14 +102,17 @@ class PreviewIn(BaseModel):
     rows: list[list[str]] = Field(max_length=25_000)
     mapping: Mapping
     options: ImportOptions = Field(default_factory=ImportOptions)
-    # Purge & re-import: the earlier import this file replaces (its records don't count as duplicates)
+    # Purge & re-import: the earlier import this file replaces (its records don't count as duplicates), and any
+    # other imports it replaces too (e.g. a month that was purged and imported again on its own)
     replaces_id: int | None = None
+    also_replaces: list[int] = Field(default_factory=list, max_length=20)
 
 
 class CheckIn(BaseModel):
     records: list[RecordIn]
     options: ImportOptions = Field(default_factory=ImportOptions)
     replaces_id: int | None = None
+    also_replaces: list[int] = Field(default_factory=list, max_length=20)
 
 
 class CheckOut(BaseModel):
@@ -141,6 +144,8 @@ class CheckOut(BaseModel):
     earlier_imports: list[dict] = []
     # Purge & re-import: the import being replaced, what purging it removes, and why it can't be (empty = it can)
     replaces: dict | None = None
+    # ... and the other imports it replaces too (same shape)
+    also_replaces: list[dict] = []
 
 
 class BatchIn(BaseModel):
@@ -151,6 +156,7 @@ class BatchIn(BaseModel):
     records: list[RecordIn] = Field(max_length=25_000)
     options: ImportOptions = Field(default_factory=ImportOptions)
     replaces_id: int | None = None
+    also_replaces: list[int] = Field(default_factory=list, max_length=20)
 
 
 class PurgeRangeIn(BaseModel):

@@ -538,6 +538,9 @@ Renaming doesn't set `updated_at`, so it neither counts as an edit for an import
 ### USER_CATEGORIES
 Categories the user added (`is_hidden` false), and ones they hid from every category list (`is_hidden` true, a default
 like Smoking or one of their own). Unique per (`user_id`, `name`). Expenses keep a hidden category; adding it again shows it.
+`is_added` (BOOLEAN, nullable) tells the two apart while hidden: true for a category the user added (it can be removed,
+also while hidden), false for a default or used one they only hid. Rows from before this column are set at startup
+(shown ones as added).
 
 ### UPI_IDS
 The user's own UPI IDs (VPAs). Unique per (`user_id`, `vpa`). `account_id` (nullable) is the account its payments
@@ -585,6 +588,7 @@ One row per upload (or per set of records typed in by hand).
 | `rows_expected` | INTEGER, nullable | Rows in the file, checked as a whole when the import started: it finishes only with all of them. |
 | `replaces_id` | INTEGER, nullable | Purge & re-import: the earlier import this one replaces. |
 | `replaced_by_id` | INTEGER, nullable | On the earlier import: the import that replaced it (set when that one finishes; the earlier one is then purged). |
+| `also_replaces` | VARCHAR(200), nullable | Purge & re-import of a period that was imported in several files: the ids of the other imports it replaces too, comma separated (e.g. `12,15`). |
 
 ### IMPORT_RECORDS
 One row per row of the file.

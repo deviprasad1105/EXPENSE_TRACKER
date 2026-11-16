@@ -274,9 +274,11 @@ export default function Dashboard() {
             ) : (
               <>
                 <div className="big-value muted">—</div>
-                <p className="muted">No monthly limit yet. Set one and get an alert at 90%.</p>
+                <p className="muted">
+                  {current ? 'No monthly limit yet. Set one and get an alert at 90%.' : `No budget was set up for ${label}.`}
+                </p>
                 <div className="grow-space" />
-                {writable && (
+                {writable && current && (
                   <Link to="/settings#budgets" className="btn secondary block">
                     Set a budget
                   </Link>
