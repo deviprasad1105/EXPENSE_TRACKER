@@ -19,6 +19,7 @@ import MenuBookOutlined from '@mui/icons-material/MenuBookOutlined'
 import NotificationsNoneOutlined from '@mui/icons-material/NotificationsNoneOutlined'
 import PersonOutlineOutlined from '@mui/icons-material/PersonOutlineOutlined'
 import HomeOutlined from '@mui/icons-material/HomeOutlined'
+import InstallMobileOutlined from '@mui/icons-material/InstallMobileOutlined'
 import ChevronRightRounded from '@mui/icons-material/ChevronRightRounded'
 import CloseRounded from '@mui/icons-material/CloseRounded'
 import ChevronLeftRounded from '@mui/icons-material/ChevronLeftRounded'
@@ -32,7 +33,7 @@ import TuneOutlined from '@mui/icons-material/TuneOutlined'
 import UploadFileOutlined from '@mui/icons-material/UploadFileOutlined'
 import VisibilityOutlined from '@mui/icons-material/VisibilityOutlined'
 import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded'
-import api, { todayISO } from '../api'
+import api, { APP_DOWNLOAD_URL, isApp, todayISO } from '../api'
 import { canUseSplits, hasFeature, useAuth } from '../auth'
 import Avatar from './Avatar'
 import Tour from './Tour'
@@ -374,6 +375,12 @@ export default function Layout() {
               <NotificationsNoneOutlined style={{ fontSize: 20 }} />
               {unread > 0 && <span className="dot">{unread > 99 ? '99+' : unread}</span>}
             </Link>
+            {/* Already in the app: no point offering to download it */}
+            {!isApp && (
+              <a href={APP_DOWNLOAD_URL} className="icon-btn" title="Download the Android app" aria-label="Download the Android app">
+                <InstallMobileOutlined style={{ fontSize: 20 }} />
+              </a>
+            )}
             <div className="menu-wrap" ref={menuRef}>
               <button className="avatar-btn" onClick={() => setMenuOpen((o) => !o)} data-tour="user-menu" aria-label="Account menu">
                 <Avatar user={user} size={38} />
