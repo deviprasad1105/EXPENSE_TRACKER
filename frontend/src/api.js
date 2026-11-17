@@ -6,6 +6,9 @@ import { Capacitor } from '@capacitor/core'
 export const isApp = Capacitor.isNativePlatform()
 export const SITE_ORIGIN = isApp ? import.meta.env.VITE_SITE_URL : window.location.origin
 
+// The Android app, kept in the repository's mobile-app/ folder (public, so anyone can download it)
+export const APP_DOWNLOAD_URL = 'https://github.com/deviprasad1105/EXPENSE_TRACKER/raw/main/mobile-app/ExpenseTracker.apk'
+
 const api = axios.create({ baseURL: `${isApp ? SITE_ORIGIN : ''}/api` })
 
 api.interceptors.request.use((config) => {
