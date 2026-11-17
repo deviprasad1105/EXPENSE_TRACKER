@@ -284,14 +284,17 @@ def test_record_limit(client, make_user, monkeypatch):
 
 
 # ---------- checking ----------
-def test_unknown_categories_must_be_mapped_and_known_ones_match_any_case(client, make_user):
+def test_unknown_categories_are_filled_in_and_known_ones_match_any_case(client, make_user):
     me = make_user("asha")
     d = upload(client, me, "old.csv", CSV.replace("Food", "food").encode()).json()
     rows = d["tables"][0]["rows"]
     prev = client.post(f"{API}/preview", json={"rows": rows, "mapping": d["guess"]}, headers=headers(me)).json()
     by = {r["description"]: r for r in prev["records"]}
     assert by["Swiggy dinner"]["status"] == "READY" and by["Swiggy dinner"]["category_final"] == "Food"
-    assert by["Petrol"]["status"] == "NEEDS_CATEGORY" and "Fuel" in by["Petrol"]["problems"][0]
+    # "Fuel" isn't in the app: the closest category is used, and the row still imports
+    petrol = by["Petrol"]
+    assert (petrol["status"], petrol["category_final"], petrol["include"]) == ("READY", "Transport", True)
+    assert "Fuel" in petrol["warnings"][-1]
     assert by["November salary"]["status"] == "READY"  # income has a source, not a spending category
     fuel = next(c for c in prev["category_values"] if c["value"] == "Fuel")
     assert (fuel["rows"], fuel["mapped_to"], fuel["known"], fuel["suggested"]) == (1, None, False, "Transport")
@@ -323,18 +326,19 @@ def test_import_creates_expenses_and_income_with_their_dates(client, make_user, 
     assert db.scalar(select(func.count(Notification.id)).where(Notification.kind == "BUDGET_ALERT")) == 0
 
 
-def test_the_same_row_twice_blocks_the_file_unless_their_times_differ(client, make_user, db):
+def test_the_same_row_twice_is_noted_and_still_imported(client, make_user, db):
     me = make_user("asha")
     content = (CSV + f"{dmy(DAY1)},Metro card,Transport,500,Expense\n").encode()  # row 6 repeats row 3, no time
     d = upload(client, me, "old.csv", content).json()
     prev, done = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}})
     row = prev["records"][4]
-    assert row["status"] == "REPEATED" and not row["can_import"] and "same as row 3 of this file" in row["problems"][0]
-    assert prev["blocked"] and not prev["can_import"] and prev["summary"]["repeated"] == 1
-    assert done["status_code"] == 400 and "Fix the file and upload it again" in done["blocked"]
-    assert db.scalar(select(func.count(Expense.id))) == 0  # nothing of the file
+    assert row["status"] == "REPEATED" and row["can_import"] and row["default_include"]
+    assert any("same as row 3 of this file" in w for w in row["warnings"])
+    assert not prev["blocked"] and prev["can_import"] and prev["summary"]["repeated"] == 1
+    assert done["rows_imported"] == 5  # two identical payments on a day are common: untick one if it isn't
 
-    # The file gives them their times: two different records
+    # The file gives them their times: two different records (another user, so nothing is in the app yet)
+    me = make_user("ravi")
     timed = ("Date,Description,Category,Amount,Type\n"
              f"{dmy(DAY1)} 09:10,Metro card,Transport,500,Expense\n"
              f"{dmy(DAY1)} 18:45,Metro card,Transport,500,Expense\n")
@@ -344,7 +348,7 @@ def test_the_same_row_twice_blocks_the_file_unless_their_times_differ(client, ma
     assert done["rows_imported"] == 2 and done["status"] == "COMPLETED"
 
 
-def test_the_same_file_again_is_blocked(client, make_user, db):
+def test_the_same_file_again_is_skipped(client, make_user, db):
     me = make_user("asha")
     d = upload(client, me, "old.csv", CSV.encode()).json()
     _, first = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}})
@@ -353,28 +357,29 @@ def test_the_same_file_again_is_blocked(client, make_user, db):
     again = upload(client, me, "old (1).csv", CSV.encode()).json()
     assert again["already_imported"]["rows"] == 4 and again["already_imported"]["filename"] == "old.csv"
     prev, done = run_import(client, me, again, options={"category_map": {"fuel": "Transport"}})
-    assert prev["summary"]["imported_before"] == 4 and prev["blocked"]
-    assert "Purge & re-import" in prev["records"][0]["problems"][0]
+    assert prev["summary"]["imported_before"] == 4 and not prev["blocked"]
+    assert any("skipped automatically" in w for w in prev["records"][0]["warnings"])
+    # Offered for Purge & re-import, to correct that import
     assert prev["earlier_imports"] == [{**prev["earlier_imports"][0], "id": first["id"], "filename": "old.csv", "rows": 4}]
-    assert done["status_code"] == 400
+    assert done["status_code"] == 400 and "nothing to import" in done["blocked"]
     db.expire_all()
     assert db.scalar(select(func.count(Expense.id))) == 3  # never twice
 
 
-def test_a_record_already_in_the_app_blocks_the_file(client, make_user, db):
+def test_a_record_already_in_the_app_is_left_out_unless_ticked(client, make_user, db):
     me = make_user("asha")
     client.post("/api/expenses", json={"expense_date": str(DAY1), "item_name": "Dinner (typed by hand)", "category": "Food",
                                        "amount": "1250.50"}, headers=headers(me))
     d = upload(client, me, "old.csv", CSV.encode()).json()
-    prev, done = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}},
-                            include=lambda r: True)  # ticking it changes nothing
+    prev, done = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}})
     dup = next(r for r in prev["records"] if r["description"] == "Swiggy dinner")
-    assert dup["status"] == "DUPLICATE" and not dup["can_import"] and "Dinner (typed by hand)" in dup["problems"][0]
-    assert prev["blocked"] and done["status_code"] == 400 and "row 2" in done["blocked"]
-    assert db.scalar(select(func.count(Expense.id))) == 1  # only the one typed by hand
+    assert dup["status"] == "DUPLICATE" and dup["can_import"] and not dup["default_include"]
+    assert "Dinner (typed by hand)" in dup["warnings"][-1] and not prev["blocked"]
+    assert (done["rows_imported"], done["rows_skipped"]) == (3, 1)
+    assert db.scalar(select(func.count(Expense.id))) == 3  # the one typed by hand + Metro card + Petrol
 
 
-def test_an_invalid_row_blocks_the_whole_file(client, make_user, db):
+def test_an_invalid_row_fails_while_the_rest_imports(client, make_user, db):
     me = make_user("asha")
     content = ("Date,Item,Category,Amount\n"
                f"{dmy(DAY1)},Tea,Food,20\n"
@@ -384,10 +389,9 @@ def test_an_invalid_row_blocks_the_whole_file(client, make_user, db):
     prev, done = run_import(client, me, d)
     assert [(r["row_no"], r["status"], r["problems"]) for r in prev["records"]] == [
         (2, "READY", []), (3, "INVALID", [f"Unrecognised date “31/02/{DAY1.year}”"]), (4, "INVALID", ["Missing amount"])]
-    assert prev["blocked"] and prev["summary"]["file_problems"] == 2
-    assert done["status_code"] == 400 and "2 row(s) have a problem in the file" in done["blocked"]
-    assert db.scalar(select(func.count(Expense.id))) == 0  # not even the good row: the file comes in whole
-    assert client.get(API, headers=headers(me)).json() == []  # no import was started
+    assert not prev["blocked"] and prev["summary"]["file_problems"] == 2
+    assert (done["rows_imported"], done["rows_failed"]) == (1, 2)
+    assert db.scalar(select(func.count(Expense.id))) == 1  # the good row
 
 
 def test_a_balance_or_total_line_is_left_out_without_blocking(client, make_user):
@@ -434,7 +438,8 @@ def test_accounts_fixed_or_from_the_file(client, make_user):
     prev = client.post(f"{API}/preview", json={"rows": d["tables"][0]["rows"], "mapping": d["guess"],
                                                "options": {"account_mode": "column"}}, headers=headers(me)).json()
     assert [(r["account_id"], r["status"]) for r in prev["records"]] == [
-        (card["id"], "READY"), (hdfc["id"], "READY"), (None, "NEEDS_ACCOUNT")]
+        (card["id"], "READY"), (hdfc["id"], "READY"), (None, "READY")]
+    assert prev["records"][2]["account_ref"] == "new:CASH:Cash"  # created by the import unless chosen otherwise
 
     # "Cash" left without an account on purpose
     _, done = run_import(client, me, d, options={"account_mode": "column", "account_map": {"cash": None}})
@@ -506,11 +511,11 @@ def test_imports_post_to_the_books_and_locked_periods_are_refused(client, make_u
     prev, done = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}})
     statuses = {r["description"]: r["status"] for r in prev["records"]}
     assert statuses == {"Swiggy dinner": "LOCKED", "Metro card": "LOCKED", "November salary": "READY", "Petrol": "READY"}
-    assert done["status_code"] == 400  # rows in the locked period block the file
+    assert (done["rows_imported"], done["rows_failed"]) == (2, 2)  # rows in the locked period aren't added
 
     client.put("/api/accounting/settings", json={"lock_date": str(DAY1 - timedelta(days=1))}, headers=headers(me))
     _, done = run_import(client, me, d, options={"category_map": {"fuel": "Transport"}})
-    assert done["rows_imported"] == 4
+    assert (done["rows_imported"], done["rows_skipped"]) == (2, 2)  # the two imported before are skipped
     vouchers = client.get("/api/accounting/vouchers", params={"hide_reversed": True}, headers=headers(me)).json()["items"]
     assert sorted(v["source_type"] for v in vouchers if v["source_type"]) == ["EXPENSE", "EXPENSE", "EXPENSE", "FUND"]
 
@@ -588,8 +593,9 @@ def test_rows_imported_before_show_as_such_even_without_a_category(client, make_
     assert done["rows_imported"] == 2
     again = upload(client, me, "bank.csv", content).json()
     prev = client.post(f"{API}/preview", json={"rows": again["tables"][0]["rows"], "mapping": again["guess"]}, headers=headers(me)).json()
-    assert [(r["status"], r["can_import"]) for r in prev["records"]] == [("IMPORTED_BEFORE", False), ("IMPORTED_BEFORE", False)]  # never imported twice
-    assert prev["blocked"] and "Purge & re-import" in prev["records"][0]["problems"][0]
+    assert [(r["status"], r["can_import"], r["include"]) for r in prev["records"]] == [
+        ("IMPORTED_BEFORE", False, False), ("IMPORTED_BEFORE", False, False)]  # always skipped
+    assert not prev["blocked"] and any("skipped automatically" in w for w in prev["records"][0]["warnings"])
 
 
 def test_big_imports_are_undone_over_several_requests(client, make_user, db, monkeypatch):
@@ -628,7 +634,8 @@ def test_a_split_someone_else_paid_is_my_share_owed_to_them(client, make_user, d
     assert d["guess"]["paid_by"] == 5
     prev, done = run_import(client, me, d, options=maps)
     lunch = next(r for r in prev["records"] if r["description"] == "Lunch")
-    assert lunch["status"] == "INVALID" and "Ravi paid" in lunch["problems"][0] and done["status_code"] == 400
+    assert lunch["status"] == "INVALID" and "Ravi paid" in lunch["problems"][0] and done["rows_failed"] == 1
+    client.post(f"{API}/{done['id']}/undo", headers=headers(me))
     d = upload(client, me, "paid by.csv", text.encode()).json()
     prev, done = run_import(client, me, d, options=maps)
     rows = {r["description"]: r for r in prev["records"]}
@@ -668,3 +675,92 @@ def test_a_compressed_upload_is_held_to_the_size_limit(client, make_user, monkey
     monkeypatch.setattr(settings, "import_max_bytes", 1000)
     res = upload(client, make_user("asha"), "big.csv.gz", gzip.compress(CSV.encode() * 50))
     assert res.status_code == 413
+
+
+def test_bank_statement_imports_without_any_correction(client, make_user):
+    """A plain statement (no category or account column): every row is ready, categories filled in."""
+    me = make_user("asha")
+    content = (
+        "Date,Narration,Withdrawal,Deposit\n"
+        f"{dmy(DAY1)},UPI/P2M/111111111111/SWIGGY/UPI/HDFC BANK,450,\n"
+        f"{dmy(DAY1)},UPI/P2M/222222222222/UBER INDIA/UPI/AXIS BANK,230,\n"
+        f"{dmy(DAY1)},UPI/P2M/333333333333/RAMESH KUMAR/UPI/SBI,100,\n"
+        f"{dmy(DAY1)},NEFT CR ACME PVT LTD SALARY,,65000\n"
+    ).encode()
+    d = upload(client, me, "bank.csv", content).json()
+    prev = client.post(f"{API}/preview", json={"rows": d["tables"][0]["rows"], "mapping": d["guess"]}, headers=headers(me)).json()
+    assert [(r["status"], r["include"], r["category_final"]) for r in prev["records"][:3]] == [
+        ("READY", True, "Food"), ("READY", True, "Transport"), ("READY", True, "General")]
+    assert prev["records"][3]["status"] == "READY"
+    _, done = run_import(client, me, d)
+    assert done["rows_imported"] == 4
+
+    # The user re-categorises one; next time that payee takes the category it was given before
+    ramesh = next(e for e in client.get("/api/expenses", headers=headers(me)).json() if "RAMESH" in (e.get("raw_name") or e["item_name"]).upper())
+    body = {k: ramesh[k] for k in ("expense_date", "item_name", "quantity", "unit_price") if k in ramesh}
+    r = client.put(f"/api/expenses/{ramesh['id']}", json={**body, "category": "Groceries"}, headers=headers(me))
+    assert r.status_code == 200, r.text
+    again = content.replace(b"333333333333/RAMESH KUMAR/UPI/SBI,100", b"444444444444/RAMESH KUMAR/UPI/SBI,120")
+    d = upload(client, me, "bank2.csv", again).json()
+    prev = client.post(f"{API}/preview", json={"rows": d["tables"][0]["rows"], "mapping": d["guess"]}, headers=headers(me)).json()
+    row = next(r for r in prev["records"] if "RAMESH" in r["description"])
+    assert row["category_final"] == "Groceries" and "as before" in row["warnings"][-1]
+
+
+def test_dateless_total_lines_are_skipped_not_listed_as_problems():
+    rows = [["Date", "Narration", "Withdrawal", "Deposit"],
+            [dmy(DAY1), "UPI-SWIGGY", "450", ""],
+            [dmy(DAY1), "SALARY", "", "65000"],
+            ["", "TRANSACTION TOTAL", "450", "65000"],
+            ["", "Closing Balance", "", "64550"],
+            ["", "", "12", "34"]]  # an unlabelled totals row: both a debit and a credit, no date
+    records, ignored = parse_records(rows, guess_mapping(rows), TODAY)
+    assert [r["description"] for r in records] == ["UPI-SWIGGY", "SALARY"]
+    assert ignored == 3
+
+
+def test_a_dated_line_ending_in_total_is_left_unticked():
+    rows = [["Date", "Narration", "Amount"], [dmy(DAY1), "DAY TOTAL", "450"]]
+    records, _ = parse_records(rows, guess_mapping(rows), TODAY)
+    assert "balance or total" in records[0]["parse_warnings"][0]
+
+
+UPI_STATEMENT = (
+    "Date,Narration,Withdrawal,Deposit\n"
+    f"{dmy(DAY1)},UPI/P2M/512345678901/SWIGGY/UPI/HDFC BANK,450,\n"
+    f"{dmy(DAY1)},UPI-RAMESH KUMAR-ramesh@ybl-SBIN0001,100,\n"
+    f"{dmy(DAY1)},UPI-RAMESH KUMAR-ramesh@ybl-SBIN0001,100,\n"
+    f"{dmy(DAY2)},NEFT CR ACME SALARY,,65000\n"
+)
+
+
+def test_reimported_upi_transactions_are_skipped_automatically(client, make_user):
+    me = make_user("asha")
+    d = upload(client, me, "jan.csv", UPI_STATEMENT.encode()).json()
+    _, done = run_import(client, me, d)
+    assert done["rows_imported"] == 4
+
+    # The same transactions in another export of the statement: other wording, a value date a day later,
+    # only one of the two identical payments to ramesh@ybl, and one new row
+    other = (
+        "Value Date,Description,Debit,Credit\n"
+        f"{dmy(DAY1 + timedelta(days=1))},UPI/P2M/512345678901/Swiggy Ltd/UPI,450,\n"
+        f"{dmy(DAY1)},UPI ramesh@ybl Ramesh,100,\n"
+        f"{dmy(DAY1)},UPI ramesh@ybl Ramesh,100,\n"
+        f"{dmy(DAY1)},UPI ramesh@ybl Ramesh,100,\n"
+        f"{dmy(DAY2)},UPI/P2M/599999999999/UBER/UPI,230,\n"
+    )
+    d2 = upload(client, me, "jan-other.csv", other.encode()).json()
+    prev = client.post(f"{API}/preview", json={"rows": d2["tables"][0]["rows"], "mapping": d2["guess"]}, headers=headers(me)).json()
+    got = [(r["status"], r["can_import"]) for r in prev["records"]]
+    assert got == [("IMPORTED_BEFORE", False), ("IMPORTED_BEFORE", False), ("IMPORTED_BEFORE", False),
+                   ("DUPLICATE", True), ("READY", True)], got  # the third ramesh payment is new: only a possible duplicate
+    assert any("same UPI reference 512345678901" in w for w in prev["records"][0]["warnings"])
+    assert any("same UPI ID ramesh@ybl" in w and "skipped automatically" in w for w in prev["records"][1]["warnings"])
+
+    # Importing still works: the rows imported before are recorded as skipped, with the reason
+    batch, done = run_import(client, me, d2)
+    assert (done["rows_imported"], done["rows_skipped"]) == (1, 4)  # the possible duplicate is left out unless ticked
+    detail = client.get(f"{API}/{done['id']}", headers=headers(me)).json()
+    reasons = [r["reason"] for r in detail["records"] if r["status"] == "SKIPPED"]
+    assert sum(1 for x in reasons if x.startswith("Already imported")) == 3

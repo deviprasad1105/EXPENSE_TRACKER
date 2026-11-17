@@ -153,7 +153,7 @@ def test_rows_imported_before_cannot_be_ticked_back_in(client, make_user, db):
         r["include"] = True  # even when ticked by hand
     res = client.post(API, json={"filename": "again.csv", "file_type": "csv", "file_hash": ex["file_hash"],
                                  "records": prev["records"]}, headers=headers(me))
-    assert res.status_code == 400 and "Fix the file" in res.json()["detail"]
+    assert res.status_code == 400 and "nothing to import" in res.json()["detail"]
     # Nor chunk by chunk into an import started for another file
     other = upload(client, me, f"Date,Type,Amount,Category,Notes\n{d(5)},Expense,15,Food,Water\n", "other.csv")
     p2 = preview(client, me, other)
@@ -161,7 +161,7 @@ def test_rows_imported_before_cannot_be_ticked_back_in(client, make_user, db):
     res = client.post(f"{API}/{batch['id']}/rows", json={"records": prev["records"] * 2, "options": {}}, headers=headers(me))
     assert res.status_code == 400 and "More rows than the file" in res.json()["detail"]
     res = client.post(f"{API}/{batch['id']}/rows", json={"records": prev["records"][:1], "options": {}}, headers=headers(me))
-    assert res.status_code == 409 and "Nothing from this file is kept" in res.json()["detail"]
+    assert res.status_code == 200 and (res.json()["imported"], res.json()["skipped"]) == (0, 1)  # skipped, not imported
     assert len(db.scalars(select(Expense)).all()) == 2
 
 

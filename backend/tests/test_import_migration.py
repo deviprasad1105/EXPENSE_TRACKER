@@ -142,10 +142,10 @@ def test_review_lists_accounts_to_create_and_suggests_categories(client, make_us
     prev = preview(client, me, ex, {"account_mode": "column"})
     accounts = {a["value"]: a for a in prev["account_values"]}
     assert {k: (a["ref"], a["suggested_kind"], a["new_name"]) for k, a in accounts.items()} == {
-        "Axis Bank": (None, "SAVINGS", "Axis Bank"), "SBI Bank": (None, "SAVINGS", "SBI Bank"),
-        "Cash": (None, "CASH", "Cash"), ".Credit Card": (None, "CREDIT_CARD", "Credit Card")}
-    statuses = {r["row_no"]: r["status"] for r in prev["records"]}
-    assert statuses[9] == "NEEDS_ACCOUNT" and statuses[2] == "NEEDS_ACCOUNT"
+        "Axis Bank": ("new:SAVINGS:Axis Bank", "SAVINGS", "Axis Bank"), "SBI Bank": ("new:SAVINGS:SBI Bank", "SAVINGS", "SBI Bank"),
+        "Cash": ("new:CASH:Cash", "CASH", "Cash"), ".Credit Card": ("new:CREDIT_CARD:Credit Card", "CREDIT_CARD", "Credit Card")}
+    # Accounts missing from the app are created by the import: no row waits for one
+    assert not any(r["status"] == "NEEDS_ACCOUNT" for r in prev["records"])
     cats = {c["value"]: c for c in prev["category_values"]}
     assert cats["Fuel"]["suggested"] == "Transport" and cats["Internet"]["suggested"] == "Bills"
     assert cats["Investment"]["suggested_treatment"] == "new:INVESTMENT:Investments"
@@ -160,7 +160,8 @@ def test_accounts_match_only_exactly_or_by_last_4_digits(client, make_user):
             [d(1), "Bus", "Transport", "30", "HDFC XX4321"], [d(1), "Book", "Shopping", "300", "hdfc-salary"]]
     res = client.post(f"{API}/preview", json={"rows": rows, "mapping": guess_mapping(rows).model_dump(),
                                              "options": {"account_mode": "column"}}, headers=headers(me)).json()
-    assert [r["account_label"] for r in res["records"]] == [None, "HDFC Salary", "HDFC Salary"]
+    # "HDFC" alone isn't matched to "HDFC Salary": it becomes a new account
+    assert [r["account_label"] for r in res["records"]] == ["HDFC (new)", "HDFC Salary", "HDFC Salary"]
 
 
 # ---------- the whole migration ----------

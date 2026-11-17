@@ -4,6 +4,7 @@ import { Trash2 } from 'lucide-react'
 import api, { errorMessage, money, todayISO } from '../api'
 import { Alert, Msg, PageHeader } from '../components/ui'
 import { ImportTabs } from './Import'
+import DateInput from '../components/DateInput'
 
 const day = (v) => new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
 
@@ -92,11 +93,11 @@ export default function ImportPurge() {
         <div className="form-grid">
           <div>
             <label htmlFor="purge-from">From</label>
-            <input id="purge-from" type="date" value={start} max={todayISO()} onChange={(e) => setStart(e.target.value)} />
+            <DateInput id="purge-from" value={start} max={todayISO()} onChange={(e) => setStart(e.target.value)} />
           </div>
           <div>
             <label htmlFor="purge-to">To</label>
-            <input id="purge-to" type="date" value={end} max={todayISO()} onChange={(e) => setEnd(e.target.value)} />
+            <DateInput id="purge-to" value={end} max={todayISO()} onChange={(e) => setEnd(e.target.value)} />
           </div>
         </div>
         {checking && <p className="muted small">Checking…</p>}

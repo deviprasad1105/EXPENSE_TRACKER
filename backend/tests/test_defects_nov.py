@@ -82,9 +82,9 @@ def test_replacement_can_replace_every_import_its_rows_came_in_with(client, make
     fixed = year.replace(",600,", ",60,") + f"{d(5)},Expense,90,Food,Wallet,Snacks\n"
     ex = upload(client, me, fixed, "fixed.csv")
 
-    # Replacing only the first import: the row that came in with the second blocks the file, which is offered
+    # Replacing only the first import: the row that came in with the second would be skipped, and that import is offered
     prev = preview(client, me, ex, OPTS, replaces_id=a["id"])
-    assert prev["blocked"] and [e["id"] for e in prev["earlier_imports"] if e["can_replace"]] == [b["id"]]
+    assert prev["summary"]["imported_before"] == 1 and [e["id"] for e in prev["earlier_imports"] if e["can_replace"]] == [b["id"]]
 
     # Replacing both: the file can be imported, then both earlier imports are purged
     t = ex["tables"][ex["table_index"]]

@@ -6,6 +6,8 @@
   without ruled tables falls back to its text, split into columns where there are gaps of two or more spaces.
   A scanned PDF (only images, no text) can't be read.
 - Word .docx: its tables, else its paragraphs split the same way as PDF text.
+- Password-protected files (PDF, and Excel / Word encrypted with a password to open) are read with the password the
+  user gives; without it (or with a wrong one) a 423 asks the page to prompt for it. The password is never stored.
 - Old Word .doc can't be read without Word or LibreOffice, which a server function doesn't have: the user is asked
   to save it as .docx or PDF.
 
@@ -38,6 +40,8 @@ _DATE_TOKEN = re.compile(
     re.I,
 )
 _MONEY_TOKEN = re.compile(r"[-+(]?\s*(?:₹|rs\.?|inr)?\s*\d[\d,]*(?:\.\d{1,2})\b|\b\d[\d,]{2,}\b", re.I)
+_SUMMARY_TEXT = re.compile(r"opening\s*bal|closing\s*bal|\btotal\b|\b(dr|cr|debit|credit)s?\.?\s*count|"
+                           r"\b(debits|credits|withdrawals|deposits)\b|brought\s*forward|carried\s*forward", re.I)
 _LINE_SPLIT = re.compile(r"\t|\s{2,}|\s*\|\s*")
 # "05/11/2026 Swiggy order 350.00" (single spaces): date first, amount last
 _LINE_PARTS = re.compile(r"^\s*(?P<date>" + _DATE_TOKEN.pattern[2:-2] + r")\s+[-–:]?\s*(?P<desc>.*?)\s*[-–:]?\s+"
@@ -55,6 +59,48 @@ class Table:
 
 def bad(message: str):
     raise HTTPException(status.HTTP_400_BAD_REQUEST, message)
+
+
+PASSWORD_HEADER = "X-Password-Required"
+
+
+def need_password(wrong: bool):
+    """423 tells the page to ask for the file's password (and send the file again with it)."""
+    raise HTTPException(
+        status.HTTP_423_LOCKED,
+        "That password isn't right. Try again." if wrong else "This file is password-protected. Enter its password to open it.",
+        headers={PASSWORD_HEADER: "wrong" if wrong else "required"},
+    )
+
+
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def _decrypt_office(content: bytes, password: str | None) -> bytes:
+    """An Excel / Word file locked with a password to open is an encrypted container: unlock it, or ask for the
+    password. Files that aren't encrypted come back unchanged."""
+    if not content.startswith(_OLE_MAGIC):
+        return content  # .xlsx / .docx without encryption are plain zip files
+    import msoffcrypto
+    from msoffcrypto.exceptions import DecryptionError, InvalidKeyError
+
+    try:
+        office = msoffcrypto.OfficeFile(io.BytesIO(content))
+        if not office.is_encrypted():
+            return content
+    except Exception:
+        return content  # not something msoffcrypto knows: let the reader report it
+    if not password:
+        need_password(False)
+    out = io.BytesIO()
+    try:
+        office.load_key(password=password, verify_password=True)
+        office.decrypt(out)
+    except (InvalidKeyError, DecryptionError):
+        need_password(True)
+    except Exception:
+        bad("This password-protected file couldn't be unlocked. Open it, remove the password, save it and upload it again.")
+    return out.getvalue()
 
 
 def file_hash(content: bytes) -> str:
@@ -126,7 +172,7 @@ def _xlsx(content: bytes) -> list[Table]:
     try:
         wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     except Exception:
-        bad("This Excel file couldn't be opened. Check it isn't password-protected or damaged.")
+        bad("This Excel file couldn't be opened. Check it isn't damaged.")
     tables = []
     for ws in wb.worksheets:
         rows = _clean(r for _, r in zip(range(MAX_LINES), ws.iter_rows(values_only=True)))
@@ -179,6 +225,8 @@ def text_rows(lines: list[str]) -> list[list[str]]:
             rows.append([m["date"], m["desc"], m["amount"]])
         elif len(cells) >= 3 and re.search(r"\bdate\b", line, re.I) and not has_money:
             rows.append(cells)  # a heading row: kept so its column names can be used
+        elif _SUMMARY_TEXT.search(line) and (has_money or re.search(r"\d", line)):
+            rows.append(cells)  # a statement's totals / balances: used to check the records, never imported
     return rows[:MAX_LINES]
 
 
@@ -194,13 +242,19 @@ def _merge_tables(tables: list[list[list[str]]]) -> list[list[list[str]]]:
     return merged
 
 
-def _pdf(content: bytes) -> list[Table]:
+def _pdf(content: bytes, password: str | None = None) -> list[Table]:
     import pdfplumber
+    from pdfminer.pdfdocument import PDFPasswordIncorrect
 
     try:
-        pdf = pdfplumber.open(io.BytesIO(content))
-    except Exception:
-        bad("This PDF couldn't be opened. Check it isn't password-protected or damaged.")
+        # Many bank statements are encrypted with only an owner password: they open with an empty one
+        pdf = pdfplumber.open(io.BytesIO(content), password=password or "")
+    except PDFPasswordIncorrect:
+        need_password(bool(password))
+    except Exception as exc:
+        if isinstance(getattr(exc, "__cause__", None), PDFPasswordIncorrect) or "PDFPasswordIncorrect" in repr(exc):
+            need_password(bool(password))
+        bad("This PDF couldn't be opened. Check it isn't damaged.")
     with pdf:
         if len(pdf.pages) > MAX_PDF_PAGES:
             bad(f"This PDF has {len(pdf.pages)} pages; up to {MAX_PDF_PAGES} can be read. Split it, or export the data as Excel or CSV.")
@@ -266,7 +320,7 @@ def gunzip(content: bytes, max_bytes: int) -> bytes:
     return out
 
 
-def extract(content: bytes, filename: str) -> list[Table]:
+def extract(content: bytes, filename: str, password: str | None = None) -> list[Table]:
     if not content:
         bad("The file is empty.")
     if len(content) > settings.import_max_bytes:
@@ -274,6 +328,8 @@ def extract(content: bytes, filename: str) -> list[Table]:
     ext = "." + file_type(filename)
     if ext == ".doc":
         bad("Old Word .doc files can't be read here. Open the file in Word and save it as .docx (or PDF), then upload that.")
+    if ext in EXCEL_EXT + (".xls", ".docx"):
+        content = _decrypt_office(content, password)
     if ext in TEXT_EXT:
         tables = _text(content)
     elif ext in EXCEL_EXT:
@@ -281,7 +337,7 @@ def extract(content: bytes, filename: str) -> list[Table]:
     elif ext == ".xls":
         tables = _xls(content)
     elif ext == ".pdf":
-        tables = _pdf(content)
+        tables = _pdf(content, password)
     else:
         tables = _docx(content)
     tables = [t for t in tables if t.rows]

@@ -4,6 +4,7 @@ import api, { errorMessage, todayISO } from '../api'
 import ReadOnlyNotice from '../components/ReadOnlyNotice'
 import { EmptyRow, Msg, PageHeader } from '../components/ui'
 import { fmtDate, inr, LedgerOptions, useBooks, useLoad } from './common'
+import DateInput from '../components/DateInput'
 
 const RULE_TARGETS = new Set(['CAPITAL', 'RESERVES', 'SALES', 'PURCHASE', 'DIRECT_INCOMES', 'DIRECT_EXPENSES', 'INDIRECT_INCOMES',
   'INDIRECT_EXPENSES', 'FIXED_ASSETS', 'LOANS_ADVANCES', 'SUNDRY_DEBTORS', 'SUNDRY_CREDITORS', 'CURRENT_LIABILITIES', 'PROVISIONS', 'SUSPENSE'])
@@ -131,7 +132,7 @@ function Business({ s, states, params, writable, onSaved, onError }) {
           <div className="form-grid" style={{ marginTop: 12 }}>
             <div>
               <label>Lock up to</label>
-              <input type="date" value={lockDate} max={todayISO()} onChange={(e) => setLockDate(e.target.value)} />
+              <DateInput value={lockDate} max={todayISO()} onChange={(e) => setLockDate(e.target.value)} />
             </div>
             <div className="form-actions">
               {s.lock_date && (

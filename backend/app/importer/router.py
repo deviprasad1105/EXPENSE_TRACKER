@@ -1,6 +1,6 @@
 """Import past records: /api/imports.
 
-1. POST /extract (the file) → its tables and a guess of the columns. Nothing is saved.
+1. POST /extract (the file, and its password if it is locked: a 423 asks for one) → its tables and a guess of the columns. Nothing is saved.
 2. POST /preview (a table + the columns) → the records, each checked; POST /check after the user edits them.
 3. POST "" starts an import with the whole file, which is checked first: any problem in the file blocks it (the
    user fixes the file and uploads it again). POST /{id}/rows then sends the records in chunks (the page sends 200;
@@ -16,23 +16,25 @@ Each user imports into their own account only.
 
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import User
+from ..models import Expense, Fund, User
 from ..timeutil import today_local
 from . import purge as range_purge
 from . import service
 from .extract import extract, file_hash, file_type, gunzip
-from .models import ImportBatch
+from .analyse import analyse
+from .models import REC_IMPORTED, ImportBatch, ImportRecord
 from .parse import Mapping, guess_mapping, parse_records
+from .reconcile import reconcile, statement_summary
 from .schemas import (
-    BatchDetail, BatchIn, BatchOut, CheckIn, CheckOut, ChunkIn, ExtractOut, ImportRecordOut, PreviewIn, PurgeRangeIn,
-    RecordIn, TableOut,
+    AnalyseIn, BatchDetail, BatchIn, BatchOut, CheckIn, CheckOut, ChunkIn, ExtractOut, ImportRecordOut, PreviewIn,
+    PurgeRangeIn, RecordIn, TableOut,
 )
 
 router = APIRouter(prefix="/api/imports", tags=["imports"])
@@ -46,13 +48,13 @@ def _batch(db: Session, user: User, batch_id: int) -> ImportBatch:
 
 
 @router.post("/extract", response_model=ExtractOut)
-async def extract_file(file: UploadFile = File(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def extract_file(file: UploadFile = File(...), password: str | None = Form(None, max_length=256), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     content = await file.read(settings.import_max_bytes + 1)
     name = (file.filename or "upload").strip()[:200]
     if name.lower().endswith(".gz"):  # compressed by the page (the server takes at most 4.5 MB per request)
         name = name[:-3] or "upload"
         content = gunzip(content, settings.import_max_bytes)
-    tables = extract(content, name)
+    tables = extract(content, name, password or None)  # 423 when the file needs a password (not stored or logged)
     limit = settings.import_max_records + 200  # room for headings and blank lines
     out = [TableOut(name=t.name, source=t.source, rows=t.rows[:limit], truncated=len(t.rows) > limit,
                     total_rows=max(len(t.rows), t.total or 0))
@@ -76,6 +78,27 @@ def guess(data: PreviewIn, user: User = Depends(get_current_user)):
     return guess_mapping(data.rows)
 
 
+@router.post("/analyse")
+def analyse_rows(data: AnalyseIn, user: User = Depends(get_current_user)):
+    """Work out the rows that need action from the rest of the file: a fix and its reasons for each (nothing saved)."""
+    return analyse(data.records, data.row_nos, today_local())
+
+
+@router.get("/coverage")
+def coverage(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """How far the user's records go: the latest record, the latest imported one, and the days since."""
+    last_expense = db.scalar(select(func.max(Expense.expense_date)).where(Expense.user_id == user.id))
+    last_fund = db.scalar(select(func.max(Fund.fund_date)).where(Fund.user_id == user.id))
+    last_imported = db.scalar(select(func.max(ImportRecord.record_date))
+                              .where(ImportRecord.user_id == user.id, ImportRecord.status == REC_IMPORTED))
+    last = max((d for d in (last_expense, last_fund) if d), default=None)
+    today = today_local()
+    return {
+        "last_record_date": last, "last_imported_date": last_imported,
+        "days_behind": (today - last).days if isinstance(last, date) else None,
+    }
+
+
 @router.post("/preview", response_model=CheckOut)
 def preview(data: PreviewIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
@@ -85,13 +108,15 @@ def preview(data: PreviewIn, user: User = Depends(get_current_user), db: Session
     records = [RecordIn(**r) for r in rows]
     replaces = _replaces(db, user, data.replaces_id, data.also_replaces)
     result = service.check(db, user, records, data.options, fresh=True, replaces=replaces)
-    return {**result, "ignored_rows": ignored}
+    summary = statement_summary(data.rows, data.mapping, data.other_tables)
+    return _with_statement({**result, "ignored_rows": ignored}, records, summary)
 
 
 @router.post("/check", response_model=CheckOut)
 def check(data: CheckIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     replaces = _replaces(db, user, data.replaces_id, data.also_replaces)
-    return service.check(db, user, data.records, data.options, replaces=replaces)
+    result = service.check(db, user, data.records, data.options, replaces=replaces)
+    return _with_statement(result, data.records, data.statement) if data.statement is not None else result
 
 
 def _replaces(db: Session, user: User, replaces_id: int | None, also: list[int]) -> list:
@@ -114,6 +139,17 @@ def purge_range(data: PurgeRangeIn, user: User = Depends(get_current_user), db: 
     """Remove every record in the range, 200 per call (backed up first): call again with `backup_id` while
     `remaining` > 0."""
     return range_purge.purge(db, user, data.start, data.end, data.backup_id)
+
+
+def _with_statement(result: dict, records: list[RecordIn], summary: dict) -> dict:
+    """The statement check, with each row it points at noted on the row itself."""
+    verdict = reconcile(records, summary)
+    by_row = {}
+    for issue in verdict["row_issues"]:
+        by_row.setdefault(issue["row_no"], []).append(issue["message"])
+    for r in result["records"]:
+        r["warnings"] = r["warnings"] + by_row.get(r["row_no"], [])
+    return {**result, "statement": summary, "statement_check": verdict}
 
 
 @router.post("", response_model=BatchOut, status_code=201)

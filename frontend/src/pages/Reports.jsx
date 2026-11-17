@@ -3,6 +3,7 @@ import { FileSpreadsheet, FileText } from 'lucide-react'
 import { download, errorMessage, todayISO } from '../api'
 import { useAuth } from '../auth'
 import { Alert, PageHeader } from '../components/ui'
+import DateInput from '../components/DateInput'
 
 const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
 const daysAgo = (n) => {
@@ -60,9 +61,9 @@ export default function Reports() {
         </div>
         <div className="filters">
           <label>From</label>
-          <input type="date" value={range.start} max={range.end} onChange={(e) => { setPreset(''); setRange({ ...range, start: e.target.value }) }} />
+          <DateInput value={range.start} max={range.end} onChange={(e) => { setPreset(''); setRange({ ...range, start: e.target.value }) }} />
           <label>To</label>
-          <input type="date" value={range.end} min={range.start} onChange={(e) => { setPreset(''); setRange({ ...range, end: e.target.value }) }} />
+          <DateInput value={range.end} min={range.start} onChange={(e) => { setPreset(''); setRange({ ...range, end: e.target.value }) }} />
           <label style={{ marginLeft: 12 }}>Totals per</label>
           <select value={granularity} onChange={(e) => setGranularity(e.target.value)}>
             <option value="daily">Day</option>

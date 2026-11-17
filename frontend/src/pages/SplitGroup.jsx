@@ -24,6 +24,7 @@ import Avatar from '../components/Avatar'
 import BillForm, { handle, personName as name } from '../components/BillForm'
 import Modal from '../components/Modal'
 import { Alert, EmptyRow, Msg, PageHeader, StatTile } from '../components/ui'
+import DateInput from '../components/DateInput'
 
 const SHARE_LABEL = { EQUAL: 'equal', PERCENT: '%', AMOUNT: 'fixed' }
 
@@ -315,7 +316,7 @@ function SettleForm({ group, me, debt, onClose, onSaved }) {
           </div>
           <div>
             <label>Date</label>
-            <input type="date" max={todayISO()} value={form.settled_on} onChange={set('settled_on')} required />
+            <DateInput max={todayISO()} value={form.settled_on} onChange={set('settled_on')} required />
           </div>
           <div className="span-all">
             <label>Note</label>

@@ -17,3 +17,5 @@ reportlab==4.2.5
 pdfplumber==0.11.4
 python-docx==1.1.2
 xlrd==2.0.1
+# Opening password-protected Excel / Word files (PDF passwords are handled by pdfplumber)
+msoffcrypto-tool==6.0.0

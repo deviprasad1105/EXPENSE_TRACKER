@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { CheckCircle2, Lock, Plus, X } from 'lucide-react'
-import api, { errorMessage, money, todayISO } from '../api'
+import api, { errorMessage, money, niceDate, todayISO } from '../api'
+import { useRecordsChanged } from '../components/QuickAdd'
 import { useAuth } from '../auth'
 import { AccountSelect, accountLabel, useAccounts } from '../components/Accounts'
 import ReadOnlyNotice from '../components/ReadOnlyNotice'
 import { EmptyRow, Msg, PageHeader } from '../components/ui'
+import DateInput from '../components/DateInput'
 
 const emptyExtra = () => ({ item_name: '', category: 'General', quantity: 1, amount: '', note: '' })
 
@@ -46,6 +48,7 @@ export default function DailyEntry() {
   useEffect(() => {
     load().catch((e) => setMsg({ type: 'error', text: errorMessage(e) }))
   }, [load])
+  useRecordsChanged(useCallback(() => load().catch(() => {}), [load]))
 
   const updateRow = (i, patch) =>
     setRows((rs) =>
@@ -105,7 +108,7 @@ export default function DailyEntry() {
     <div>
       <PageHeader title="Daily Entry" subtitle="Check your daily items, add anything extra, then confirm and save.">
         <label>Date</label>
-        <input type="date" value={day} max={todayISO()} onChange={(e) => setDay(e.target.value)} />
+        <DateInput value={day} max={todayISO()} onChange={(e) => setDay(e.target.value)} />
       </PageHeader>
       <ReadOnlyNotice />
       <Msg msg={msg} />
@@ -216,7 +219,7 @@ export default function DailyEntry() {
       <div className="card flush">
         <div className="card-head">
           <div>
-            <h3>Saved for {day}</h3>
+            <h3>Saved for {niceDate(day, { relative: true, weekday: true })}</h3>
             <p>
               {money(savedTotal)} in {saved.length} entries. To edit or delete one, go to <Link to="/expenses">Expenses</Link>.
             </p>

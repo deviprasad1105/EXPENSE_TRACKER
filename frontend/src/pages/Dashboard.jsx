@@ -27,7 +27,9 @@ import api, { errorMessage, money, todayISO } from '../api'
 import { canUseSplits, hasFeature, useAuth } from '../auth'
 import { accountLabel } from '../components/Accounts'
 import { DonutChart, MonthsChart, Sparkline, SpendingChart, STATUS, useCategorySlices } from '../components/Charts'
-import { Alert, usePageBanner } from '../components/ui'
+import { Alert, PageIcon, usePageBanner } from '../components/ui'
+import { useRecordsChanged } from '../components/QuickAdd'
+import HistoryToggleOffRounded from '@mui/icons-material/HistoryToggleOffRounded'
 
 const LEVEL = {
   OK: { label: 'On track', Icon: CheckCircleRounded, cls: 'ok' },
@@ -81,10 +83,16 @@ function Change({ pct, inverse, suffix }) {
   )
 }
 
+// Each card's icon gets its own colour, picked from its title so it stays the same
+const TONES = ['indigo', 'teal', 'amber', 'rose', 'sky', 'violet']
+const toneOf = (text) => TONES[[...String(text)].reduce((n, c) => n + c.charCodeAt(0), 0) % TONES.length]
+
 function CardHead({ icon: Icon, title, children }) {
   return (
     <div className="dcard-head">
-      <Icon style={{ fontSize: 20 }} />
+      <span className={`dcard-icon tone-${toneOf(title)}`}>
+        <Icon style={{ fontSize: 26 }} />
+      </span>
       <span>{title}</span>
       {children}
     </div>
@@ -142,6 +150,15 @@ export default function Dashboard() {
       .catch((e) => setError(errorMessage(e)))
   }, [params, month, thisMonth])
   useEffect(load, [load])
+  useRecordsChanged(load)
+
+  // How far the records go: a note when the latest one is a few days old (e.g. imported up to a past date)
+  const [coverage, setCoverage] = useState(null)
+  const own = target?.id === user.id
+  useEffect(() => {
+    if (!own) return setCoverage(null)
+    api.get('/imports/coverage').then((r) => setCoverage(r.data)).catch(() => setCoverage(null))
+  }, [own])
 
   const slices = useCategorySlices(data?.categories || [], 'this_month')
 
@@ -181,12 +198,15 @@ export default function Dashboard() {
   return (
     <div className="dash">
       <div className="page-head">
-        <div>
+        <div className="page-title">
+          <PageIcon />
+          <div>
           <h1>Overview · {current ? monthName(month) : label}</h1>
           <p>
             {mine ? `Welcome back, ${firstName}!` : `Viewing ${balance.user.full_name} (@${balance.user.username})`}{' '}
             {current ? `Day ${data.day_of_month} of ${data.days_in_month}.` : `Looking back at ${label}.`}
           </p>
+          </div>
         </div>
         <div className="filters">
           <div className="month-picker" role="group" aria-label="Month to show">
@@ -226,6 +246,21 @@ export default function Dashboard() {
       </div>
 
       {banner}
+
+      {coverage?.last_record_date && coverage.days_behind >= 2 && (
+        <div className="coverage-note">
+          <HistoryToggleOffRounded style={{ fontSize: 30 }} />
+          <div className="grow">
+            <b>Your records go up to {fmtDate(coverage.last_record_date)}</b>{' '}
+            <span className="muted">
+              ({coverage.days_behind} days ago
+              {coverage.last_imported_date ? `; imported records end on ${fmtDate(coverage.last_imported_date)}` : ''}). Spending after that
+              isn’t in the app yet, so this month may look lower than it is.
+            </span>
+          </div>
+          <Link to="/import" className="btn secondary small">Import newer records</Link>
+        </div>
+      )}
 
       {/* ---------- headline cards ---------- */}
       <div className="dash-top">
