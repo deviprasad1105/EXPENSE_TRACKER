@@ -57,6 +57,7 @@ Everyone who can log in, plus their role, approval state, reporting line and pre
 | `login_blocked_until` | DATE, nullable | After `LOGIN_MAX_FAILURES` (5) wrong passwords, sign-in is refused until this time (`LOGIN_LOCK_MINUTES`, 15). |
 | `ask_account` | SMALLINT | 1 = expense entry asks which account paid (default). 0 = everything goes to the primary account. |
 | `background_updated_at` | DATE, nullable | When the custom background picture last changed. `NULL` means the default background. |
+| `email_verified` | SMALLINT | 0 = signed up but hasn't entered the emailed code yet: can't sign in, and the admin can't approve. Accounts from before this check, and ones an admin or org admin creates, are 1. |
 
 **How it works**
 - **Registration and approval:** registration creates a `PENDING` row, and every admin gets a notification.
@@ -140,6 +141,35 @@ Forgot-password requests. Each row is one email containing a temporary password 
 
 Every request counts towards the limit, whether or not it was completed, so the reset email can't be used to spam
 someone's inbox. Without SMTP settings, emails are saved as `.eml` files in `backend/mail_outbox/`.
+
+## EMAIL_OTPS
+
+One-time 6-digit codes sent by email. `purpose` is `SIGNUP` (confirming the email of a new account), `PASSWORD`
+(changing the password in Profile) or `USERNAME` (changing the username, or asking the admin to change it).
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | INTEGER, PK | |
+| `user_id` | INTEGER, FK → `app_users.id` | Whose code it is. Indexed. |
+| `purpose` | VARCHAR2(10) | `SIGNUP`, `PASSWORD` or `USERNAME`. |
+| `code_hash` | VARCHAR2(64) | HMAC-SHA256 of the code (keyed with `JWT_SECRET`). The code itself is only in the email. |
+| `created_at` / `expires_at` | DATE | Validity comes from `APP_SETTINGS` (default 3 minutes for sign-up, 5 for password/username). |
+| `used_at` | DATE, nullable | When the code was accepted. A code works once. |
+| `failed_attempts` | INTEGER | Wrong codes entered. At `OTP_MAX_ATTEMPTS` (5) the code is disabled. |
+
+Only the newest code per user and purpose works; sending a new one expires the older one. A new code can be asked
+for once every `OTP_RESEND_SECONDS` (30). An unconfirmed sign-up whose code has expired doesn't keep its username
+or email: registering again with either replaces it. Admins are notified about a new sign-up only once its email
+is confirmed.
+
+## APP_SETTINGS
+
+App-wide settings the admin changes in the app (Admin → Settings), as key / value rows.
+
+| Key | Meaning |
+|---|---|
+| `otp_signup_minutes` | How long the sign-up email code is valid (1–60, default `OTP_SIGNUP_MINUTES` = 3). |
+| `otp_account_minutes` | How long password / username change codes are valid (1–60, default `OTP_ACCOUNT_MINUTES` = 5). |
 
 ## DAILY_ITEMS
 Each user's own list of things they buy every day (cigarette, chocolate, food…). The Daily Entry page uses it

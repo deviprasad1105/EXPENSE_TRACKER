@@ -9,8 +9,20 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import ROLE_ADMIN, STATUS_PENDING, Notification, User, UserAvatar, UserBackground, UsernameChangeRequest
+from ..models import (
+    OTP_PASSWORD,
+    OTP_USERNAME,
+    ROLE_ADMIN,
+    STATUS_PENDING,
+    Notification,
+    User,
+    UserAvatar,
+    UserBackground,
+    UsernameChangeRequest,
+)
 from ..schemas import (
+    OtpRequestIn,
+    OtpSentOut,
     PasswordChange,
     PreferencesUpdate,
     ProfileOut,
@@ -23,6 +35,7 @@ from ..schemas import (
     UserOut,
 )
 from ..security import create_access_token, hash_password, verify_password
+from ..services import otp
 from ..timeutil import now_local
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
@@ -101,11 +114,24 @@ def update_preferences(data: PreferencesUpdate, user: User = Depends(get_current
     return user
 
 
+@router.post("/otp", response_model=OtpSentOut)
+def send_change_code(data: OtpRequestIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Email the code a password change or a username change (or request) needs."""
+    wait = otp.resend_wait_seconds(db, user.id, data.purpose)
+    if wait:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, f"Wait {wait} second(s) before asking for another code.")
+    expires, sent = otp.issue(db, user, data.purpose)
+    otp.require_sent(sent)
+    return OtpSentOut(message=f"We emailed a code to {user.email}.", expires_at=expires, expires_in_seconds=otp.seconds_left(expires))
+
+
 @router.post("/password", response_model=TokenOut)
 def change_password(data: PasswordChange, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Signs out every other device. The response carries a new token for this one."""
+    """Needs the current password and the emailed code. Signs out every other device; the response carries a new
+    token for this one."""
     if not verify_password(data.current_password, user.password_hash):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect")
+    otp.consume(db, user, OTP_PASSWORD, data.otp)
     user.password_hash = hash_password(data.new_password)
     user.token_version += 1
     db.commit()
@@ -128,6 +154,7 @@ def change_username(data: UsernameChange, user: User = Depends(get_current_user)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "That is already your username")
     if username_taken(db, data.new_username, user.id):
         raise HTTPException(status.HTTP_409_CONFLICT, "That username is already taken")
+    otp.consume(db, user, OTP_USERNAME, data.otp)
     user.username = data.new_username
     user.username_changed_at = now_local()
     try:
@@ -161,6 +188,7 @@ def request_username_change(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "That is already your username")
     if username_taken(db, data.new_username, user.id):
         raise HTTPException(status.HTTP_409_CONFLICT, "That username is already taken")
+    otp.consume(db, user, OTP_USERNAME, data.otp)
     req = UsernameChangeRequest(
         user_id=user.id, current_username=user.username, requested_username=data.new_username, reason=data.reason
     )

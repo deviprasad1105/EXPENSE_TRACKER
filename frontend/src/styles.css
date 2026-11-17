@@ -996,3 +996,16 @@ label { font-size: 13px; font-weight: 500; color: var(--text-2); }
 .date-paper .MuiDialogActions-root .MuiButton-root:hover { background: var(--primary-soft); }
 .date-popper { z-index: 1500; }
 .import-table .date-input.MuiFormControl-root { width: 160px; }
+
+/* Sidebar logo: a link to the Overview page */
+.brand-link { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; color: inherit; text-decoration: none; border-radius: 10px; }
+.brand-link:hover { opacity: 0.85; }
+.brand-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
+
+/* One-time email code input */
+.otp-field { display: flex; flex-direction: column; gap: 6px; }
+.otp-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.otp-row input { flex: 1; min-width: 140px; letter-spacing: 0.3em; font-variant-numeric: tabular-nums; }
+.otp-row .btn { white-space: nowrap; }
+.otp-field .hint { display: inline-flex; align-items: center; gap: 4px; }
+.otp-error { color: var(--danger); }

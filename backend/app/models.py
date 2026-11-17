@@ -77,6 +77,9 @@ class User(Base):
     # Ask which bank account paid for each expense; when off, everything goes to the primary account
     ask_account: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     background_updated_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Self-registered accounts must confirm their email with a one-time code before an admin can approve them.
+    # Accounts that existed before this check, and ones made by an admin or org admin, count as verified.
+    email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     manager: Mapped["User | None"] = relationship(
         remote_side="User.id", back_populates="reports", foreign_keys="User.manager_id"
@@ -410,6 +413,38 @@ class PasswordReset(Base):
     requested_ip: Mapped[str | None] = mapped_column(String(45))
 
     user: Mapped[User] = relationship(foreign_keys=[user_id])
+
+
+OTP_SIGNUP = "SIGNUP"
+OTP_PASSWORD = "PASSWORD"
+OTP_USERNAME = "USERNAME"
+
+
+class EmailOtp(Base):
+    """A one-time code emailed to a user: confirming their email at sign-up, or a password / username change."""
+
+    __tablename__ = "email_otps"
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    purpose: Mapped[str] = mapped_column(String(10), nullable=False)
+    # HMAC-SHA256 of the code; the code itself is only in the email
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime)
+    failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class AppSetting(Base):
+    """App-wide settings the admin changes in the app (key / value), e.g. how long one-time codes stay valid."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[str] = mapped_column(String(200), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=now_local)
+    updated_by: Mapped[str | None] = mapped_column(String(50))
 
 
 class DataBackup(Base):

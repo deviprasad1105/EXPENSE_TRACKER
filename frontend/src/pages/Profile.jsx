@@ -3,6 +3,7 @@ import { Camera, Clock, KeyRound, Lock, Send, Trash2, UserRound } from 'lucide-r
 import api, { errorMessage } from '../api'
 import { useAuth } from '../auth'
 import Avatar from '../components/Avatar'
+import OtpField from '../components/OtpField'
 import { Alert, Msg, PageHeader } from '../components/ui'
 
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '')
@@ -31,8 +32,9 @@ export default function Profile() {
   const [profile, setProfile] = useState(null)
   const [requests, setRequests] = useState([])
   const [details, setDetails] = useState({ full_name: user.full_name, email: user.email })
-  const [uname, setUname] = useState({ new_username: '', password: '', reason: '' })
-  const [pw, setPw] = useState({ current_password: '', new_password: '', confirm: '' })
+  const [uname, setUname] = useState({ new_username: '', password: '', reason: '', otp: '' })
+  const [pw, setPw] = useState({ current_password: '', new_password: '', confirm: '', otp: '' })
+  const sendCode = (purpose) => async () => (await api.post('/profile/otp', { purpose })).data
   const [msgs, setMsgs] = useState({})
   const fileRef = useRef(null)
 
@@ -85,17 +87,17 @@ export default function Profile() {
     e.preventDefault()
     if (!window.confirm(`Change your username to "${uname.new_username}"?\n\nYou won’t be able to change it again for 15 days without asking an admin.`)) return
     const ok = await run('username', async () => {
-      const res = await api.post('/profile/username', { new_username: uname.new_username, password: uname.password })
+      const res = await api.post('/profile/username', { new_username: uname.new_username, password: uname.password, otp: uname.otp })
       updateUser(res.data)
     }, 'Username changed. Use the new one next time you sign in.')
-    if (ok) setUname({ new_username: '', password: '', reason: '' })
+    if (ok) setUname({ new_username: '', password: '', reason: '', otp: '' })
     load()
   }
 
   const requestUsername = async (e) => {
     e.preventDefault()
-    const ok = await run('username', () => api.post('/profile/username-requests', { new_username: uname.new_username, reason: uname.reason || null }), 'Request sent to the admin')
-    if (ok) setUname({ new_username: '', password: '', reason: '' })
+    const ok = await run('username', () => api.post('/profile/username-requests', { new_username: uname.new_username, reason: uname.reason || null, otp: uname.otp }), 'Request sent to the admin')
+    if (ok) setUname({ new_username: '', password: '', reason: '', otp: '' })
     load()
   }
 
@@ -108,11 +110,11 @@ export default function Profile() {
     e.preventDefault()
     if (pw.new_password !== pw.confirm) return say('password', 'error', 'New passwords do not match')
     const ok = await run('password', async () => {
-      const res = await api.post('/profile/password', { current_password: pw.current_password, new_password: pw.new_password })
+      const res = await api.post('/profile/password', { current_password: pw.current_password, new_password: pw.new_password, otp: pw.otp })
       // Every other device is signed out; this one keeps working with the new token
       localStorage.setItem('token', res.data.access_token)
     }, 'Password changed. Other devices have been signed out.')
-    if (ok) setPw({ current_password: '', new_password: '', confirm: '' })
+    if (ok) setPw({ current_password: '', new_password: '', confirm: '', otp: '' })
   }
 
   if (!profile) return <div className="muted">Loading…</div>
@@ -183,7 +185,7 @@ export default function Profile() {
           <div>
             <h3>Username</h3>
             <p>
-              Current username: <b>@{user.username}</b>. After a change you have to wait 15 days to change it again, or ask an admin.
+              Current username: <b>@{user.username}</b>. A change needs a code we email you. After a change you have to wait 15 days to change it again, or ask an admin.
             </p>
           </div>
           {profile.can_change_username ? <KeyRound size={20} className="muted" /> : <Lock size={20} className="muted" />}
@@ -199,6 +201,9 @@ export default function Profile() {
             <div>
               <label>Confirm with your password</label>
               <input type="password" value={uname.password} onChange={(e) => setUname({ ...uname, password: e.target.value })} required autoComplete="current-password" />
+            </div>
+            <div className="span-all">
+              <OtpField value={uname.otp} onChange={(otp) => setUname((u) => ({ ...u, otp }))} send={sendCode('USERNAME')} />
             </div>
             <div className="span-all form-actions">
               <button className="btn">Change username</button>
@@ -228,6 +233,9 @@ export default function Profile() {
                 <div>
                   <label>Reason (optional)</label>
                   <input value={uname.reason} onChange={(e) => setUname({ ...uname, reason: e.target.value })} />
+                </div>
+                <div className="span-all">
+                  <OtpField value={uname.otp} onChange={(otp) => setUname((u) => ({ ...u, otp }))} send={sendCode('USERNAME')} />
                 </div>
                 <div className="span-all form-actions">
                   <button className="btn">
@@ -273,7 +281,7 @@ export default function Profile() {
         <div className="card-head">
           <div>
             <h3>Password</h3>
-            <p>Use at least 8 characters. Changing it signs you out on every other device.</p>
+            <p>Use at least 8 characters. We email you a code to confirm the change. Changing it signs you out on every other device.</p>
           </div>
           <Lock size={20} className="muted" />
         </div>
@@ -290,6 +298,9 @@ export default function Profile() {
           <div>
             <label>Confirm new password</label>
             <input type="password" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} minLength={8} required autoComplete="new-password" />
+          </div>
+          <div className="span-all">
+            <OtpField value={pw.otp} onChange={(otp) => setPw((p) => ({ ...p, otp }))} send={sendCode('PASSWORD')} />
           </div>
         </div>
         <div className="form-actions">

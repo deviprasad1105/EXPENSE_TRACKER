@@ -11,6 +11,7 @@ export default function Login() {
   const navigate = useNavigate()
   const [form, setForm] = useState({ username: '', password: '' })
   const [error, setError] = useState('')
+  const [needsCode, setNeedsCode] = useState(false)
   const [busy, setBusy] = useState(false)
 
   if (user) return <Navigate to="/" replace />
@@ -19,11 +20,13 @@ export default function Login() {
     e.preventDefault()
     setBusy(true)
     setError('')
+    setNeedsCode(false)
     try {
       await login(form.username, form.password)
       navigate('/')
     } catch (err) {
       setError(errorMessage(err))
+      setNeedsCode(err?.response?.status === 403 && /confirm your email/i.test(errorMessage(err)))
     } finally {
       setBusy(false)
     }
@@ -36,7 +39,17 @@ export default function Login() {
           <h2>Welcome back</h2>
           <p className="muted">Sign in to your account to continue.</p>
         </div>
-        {error && <Alert type="error">{error}</Alert>}
+        {error && (
+          <Alert type="error">
+            {error}
+            {needsCode && (
+              <>
+                {' '}
+                <Link to={`/verify-email?username=${encodeURIComponent(form.username.trim())}`}>Enter the code</Link>
+              </>
+            )}
+          </Alert>
+        )}
         <div className="field">
           <label htmlFor="username">Username <span className="req" aria-hidden="true">*</span></label>
           <input id="username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required autoFocus autoComplete="username" />

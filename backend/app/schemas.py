@@ -1,6 +1,8 @@
 from datetime import date, datetime
 from decimal import Decimal
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
@@ -59,6 +61,7 @@ class UserOut(ORM):
     in_split_group: bool = False
     ask_account: bool = True
     background_updated_at: datetime | None = None
+    email_verified: bool = True
 
 
 class ManagedUserOut(UserOut):
@@ -105,9 +108,39 @@ class AdminUserUpdate(BaseModel):
     feature_upi: bool | None = None
 
 
+OTP_FIELD = Field(default="", max_length=10, description="The code emailed by POST /api/profile/otp")
+
+
 class PasswordChange(BaseModel):
     current_password: str
     new_password: str = Field(min_length=8, max_length=100)
+    otp: str = OTP_FIELD
+
+
+class OtpRequestIn(BaseModel):
+    purpose: Literal["PASSWORD", "USERNAME"]
+
+
+class OtpSentOut(BaseModel):
+    message: str
+    expires_at: datetime | None = None
+    # Seconds the code stays valid from now, so the app can count down without depending on time zones
+    expires_in_seconds: int | None = None
+    email_sent: bool = True
+
+
+class VerifyEmailIn(BaseModel):
+    username: str = Field(min_length=1, max_length=50)
+    code: str = Field(min_length=1, max_length=10)
+
+
+class ResendSignupOtpIn(BaseModel):
+    username: str = Field(min_length=1, max_length=50)
+
+
+class OtpSettings(BaseModel):
+    signup_minutes: int = Field(ge=1, le=60)
+    account_minutes: int = Field(ge=1, le=60)
 
 
 class ForgotPasswordIn(BaseModel):
@@ -135,11 +168,13 @@ class PreferencesUpdate(BaseModel):
 class UsernameChange(BaseModel):
     new_username: str = Field(min_length=3, max_length=50, pattern=USERNAME_PATTERN)
     password: str
+    otp: str = OTP_FIELD
 
 
 class UsernameRequestIn(BaseModel):
     new_username: str = Field(min_length=3, max_length=50, pattern=USERNAME_PATTERN)
     reason: str | None = Field(default=None, max_length=500)
+    otp: str = OTP_FIELD
 
 
 class UsernameRequestOut(ORM):

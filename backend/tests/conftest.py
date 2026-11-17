@@ -1,11 +1,14 @@
 """Tests run against an in-memory SQLite database, so they need neither Postgres nor a running server."""
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.config import settings
 from app.database import Base, get_db
 from app.main import app
 from app.models import ROLE_ADMIN, STATUS_APPROVED, User
@@ -13,6 +16,31 @@ from app.routers import auth
 from app.security import create_access_token, hash_password
 
 PASSWORD = "correct-horse-1"
+
+
+@pytest.fixture(autouse=True)
+def no_real_email(monkeypatch, tmp_path):
+    """backend/.env may hold real SMTP settings: tests must never send email, only write it to a temp outbox."""
+    monkeypatch.setattr(settings, "smtp_host", "")
+    monkeypatch.setattr(settings, "mail_outbox_dir", str(tmp_path / "mail_outbox"))
+
+
+class Outbox(list):
+    def last_code(self) -> str:
+        return re.search(r"\b(\d{6})\b", self[-1][2]).group(1)
+
+
+@pytest.fixture
+def outbox(monkeypatch):
+    """Emails sent with one-time codes, as (to, subject, body)."""
+    sent = Outbox()
+
+    def fake_send(to, subject, body):
+        sent.append((to, subject, body))
+        return True
+
+    monkeypatch.setattr("app.services.otp.send_email", fake_send)
+    return sent
 
 
 @pytest.fixture
