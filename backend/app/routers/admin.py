@@ -16,6 +16,7 @@ from ..models import (
     STATUS_PENDING,
     STATUS_REJECTED,
     Account,
+    AccountDeletionRequest,
     AccountTransfer,
     Budget,
     DailyItem,
@@ -42,6 +43,7 @@ from ..models import (
     UsernameChangeRequest,
 )
 from ..schemas import (
+    AccountDeletionOut,
     AdminReason,
     AdminUserUpdate,
     BackupOut,
@@ -52,6 +54,7 @@ from ..schemas import (
 )
 from ..security import hash_password
 from ..services import otp
+from ..services.mailer import send_email
 from ..services.backup import (
     KIND_USER,
     KIND_USER_DATA,
@@ -281,6 +284,13 @@ def delete_account(db: Session, user: User, actor: User, reason: str | None, kee
     ):
         db.execute(delete(model).where(col == user.id))
     db.execute(delete(DataShare).where(or_(DataShare.owner_id == user.id, DataShare.viewer_id == user.id)))
+    # Deletion requests stay as a record; a pending one is fulfilled by this delete, whoever started it
+    db.flush()  # gives the backup its id
+    for req in db.scalars(select(AccountDeletionRequest).where(AccountDeletionRequest.user_id == user.id)):
+        req.user_id = None
+        if req.status == STATUS_PENDING:
+            req.status, req.decided_at = STATUS_APPROVED, now_local()
+            req.decided_by, req.decided_by_username, req.backup_id = actor.id, actor.username, backup.id
     db.flush()
     db.delete(user)
     db.commit()
@@ -438,6 +448,64 @@ def reject_username_request(
             user_id=req.user_id,
             kind="USERNAME_REQUEST",
             message=f"Your request to change your username to '{req.requested_username}' was rejected.{reason}",
+        )
+    )
+    db.commit()
+    return req
+
+
+# ---------- account deletion requests ----------
+@router.get("/deletion-requests", response_model=list[AccountDeletionOut])
+def list_deletion_requests(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    return db.scalars(select(AccountDeletionRequest).order_by(AccountDeletionRequest.created_at.desc())).all()
+
+
+def _pending_deletion(db: Session, request_id: int) -> AccountDeletionRequest:
+    req = db.get(AccountDeletionRequest, request_id)
+    if not req or req.status != STATUS_PENDING or req.user_id is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Pending request not found")
+    return req
+
+
+@router.post("/deletion-requests/{request_id}/approve", response_model=AccountDeletionOut)
+def approve_deletion_request(
+    request_id: int, data: UsernameDecision, admin: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    """Delete the account as the user asked: the same as deleting it from the Users tab (backed up first; in split
+    groups they stay as a guest). They get an email, since they can no longer sign in to see a notification."""
+    req = _pending_deletion(db, request_id)
+    user = db.get(User, req.user_id)
+    if user.id == admin.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Another administrator has to approve your own request")
+    email, name = user.email, user.full_name
+    why = f"Requested by the user: {req.reason}" if req.reason else "Requested by the user"
+    delete_account(db, user, admin, why[:500], keep_splits_as_guest=True)
+    db.refresh(req)
+    req.admin_comment = data.comment
+    db.commit()
+    note = f"\n\nNote from the administrator: {data.comment}" if data.comment else ""
+    send_email(
+        email,
+        "Your Expense Tracker account has been deleted",
+        f"Hi {name},\n\nAs you asked, your Expense Tracker account @{req.username} and all its data have been deleted.{note}\n\n"
+        "If you didn't ask for this, reply to this email or contact an administrator as soon as possible.\n",
+    )
+    return req
+
+
+@router.post("/deletion-requests/{request_id}/reject", response_model=AccountDeletionOut)
+def reject_deletion_request(
+    request_id: int, data: UsernameDecision, admin: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    req = _pending_deletion(db, request_id)
+    req.status, req.decided_at, req.admin_comment = STATUS_REJECTED, now_local(), data.comment
+    req.decided_by, req.decided_by_username = admin.id, admin.username
+    reason = f" Reason: {data.comment}" if data.comment else ""
+    db.add(
+        Notification(
+            user_id=req.user_id,
+            kind="DELETION_DECISION",
+            message=f"Your request to delete your account was not approved by {admin.username}.{reason}",
         )
     )
     db.commit()

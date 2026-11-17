@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ArchiveRestore, AtSign, Check, DatabaseBackup, Download, Eraser, Eye, Lock, MailWarning, Search, Settings2, Trash2, Unlock, Users, X } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
+import { ArchiveRestore, AtSign, Check, DatabaseBackup, Download, Eraser, Eye, Lock, MailWarning, Search, Settings2, Trash2, Unlock, UserX, Users, X } from 'lucide-react'
 import api, { download, errorMessage } from '../api'
 import { useAuth } from '../auth'
 import Avatar from '../components/Avatar'
@@ -12,9 +13,12 @@ const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium
 
 export default function Admin() {
   const { user: me, refresh, setViewUserId } = useAuth()
-  const [tab, setTab] = useState('users')
+  const [params] = useSearchParams()
+  // ?tab=deletions opens a tab directly (the "Review" link of a deletion request notification)
+  const [tab, setTab] = useState(params.get('tab') || 'users')
   const [users, setUsers] = useState([])
   const [requests, setRequests] = useState([])
+  const [deletions, setDeletions] = useState([])
   const [backups, setBackups] = useState([])
   const [filter, setFilter] = useState('')
   const [search, setSearch] = useState('')
@@ -22,15 +26,17 @@ export default function Admin() {
   const [otpCfg, setOtpCfg] = useState(null)
 
   const load = useCallback(async () => {
-    const [u, r, b, o] = await Promise.all([
+    const [u, r, b, d, o] = await Promise.all([
       api.get('/admin/users'),
       api.get('/admin/username-requests'),
       api.get('/admin/backups'),
+      api.get('/admin/deletion-requests'),
       api.get('/admin/settings/otp'),
     ])
     setUsers(u.data)
     setRequests(r.data)
     setBackups(b.data)
+    setDeletions(d.data)
     setOtpCfg(o.data)
   }, [])
   useEffect(() => {
@@ -96,6 +102,20 @@ export default function Admin() {
     )
   }
 
+  const decideDeletion = (r, approve) => {
+    const comment = window.prompt(
+      approve
+        ? `Delete @${r.username} (${r.full_name}) and ALL their data, as they asked?\n\nIt is the same as deleting them from the Users tab: a full backup is saved first (restore it from the Backups tab), and in split bill groups they stay as a guest. They get an email.\n\nOptional note for the user:`
+        : 'Reason for not deleting the account (shown to the user, optional):',
+      '',
+    )
+    if (comment === null) return
+    act(
+      () => api.post(`/admin/deletion-requests/${r.id}/${approve ? 'approve' : 'reject'}`, { comment: comment || null }),
+      approve ? `@${r.username} deleted, as they asked. Backup saved.` : 'Request rejected. The user has been told.',
+    )
+  }
+
   const saveOtp = (e) => {
     e.preventDefault()
     act(() => api.put('/admin/settings/otp', { signup_minutes: Number(otpCfg.signup_minutes), account_minutes: Number(otpCfg.account_minutes) }), 'Code validity saved')
@@ -105,6 +125,7 @@ export default function Admin() {
   const orgAdmins = users.filter((u) => u.role === 'ORG_ADMIN')
   const pendingUsers = users.filter((u) => u.status === 'PENDING').length
   const pendingReqs = requests.filter((r) => r.status === 'PENDING').length
+  const pendingDeletions = deletions.filter((r) => r.status === 'PENDING').length
   const q = search.trim().toLowerCase()
   const shown = users.filter(
     (u) => (!filter || u.status === filter) && (!q || `${u.full_name} ${u.username} ${u.email}`.toLowerCase().includes(q)),
@@ -112,13 +133,16 @@ export default function Admin() {
 
   return (
     <div>
-      <PageHeader title="Administration" subtitle="Approve and lock accounts, choose each user’s role and plan, set reporting lines and organisations, handle username requests and restore deleted data. Locking an organisation admin locks everyone in their organisation.">
+      <PageHeader title="Administration" subtitle="Approve and lock accounts, choose each user’s role and plan, set reporting lines and organisations, handle username and account deletion requests, and restore deleted data. Locking an organisation admin locks everyone in their organisation.">
         <div className="segmented">
           <button className={tab === 'users' ? 'on' : ''} onClick={() => setTab('users')}>
             <Users size={14} /> Users {pendingUsers > 0 && <span className="pill">{pendingUsers}</span>}
           </button>
           <button className={tab === 'requests' ? 'on' : ''} onClick={() => setTab('requests')}>
             <AtSign size={14} /> Username requests {pendingReqs > 0 && <span className="pill">{pendingReqs}</span>}
+          </button>
+          <button className={tab === 'deletions' ? 'on' : ''} onClick={() => setTab('deletions')}>
+            <UserX size={14} /> Deletion requests {pendingDeletions > 0 && <span className="pill">{pendingDeletions}</span>}
           </button>
           <button className={tab === 'backups' ? 'on' : ''} onClick={() => setTab('backups')}>
             <DatabaseBackup size={14} /> Backups
@@ -480,6 +504,68 @@ export default function Admin() {
                   </tr>
                 ))}
                 {!requests.length && <EmptyRow cols={6}>No username requests.</EmptyRow>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === 'deletions' && (
+        <div className="card flush">
+          <div className="card-head">
+            <div>
+              <h3>Account deletion requests</h3>
+              <p>
+                Users ask for their account to be deleted from their Profile page. Approving deletes it like the Users tab does: a full backup is
+                saved first, and they stay as a guest in split bill groups. You can’t approve your own request; another admin has to.
+              </p>
+            </div>
+          </div>
+          <div className="table-wrap" style={{ marginTop: 12 }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Reason</th>
+                  <th>Status</th>
+                  <th>Requested</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {deletions.map((r) => (
+                  <tr key={r.id}>
+                    <td>
+                      <div className="strong">{r.full_name}</div>
+                      <div className="small muted">@{r.username}</div>
+                    </td>
+                    <td className="muted">{r.reason}</td>
+                    <td>
+                      <span className={`badge ${STATUS_CLS[r.status]}`}>{r.status === 'APPROVED' ? 'deleted' : r.status.toLowerCase()}</span>
+                      {r.decided_by_username && (
+                        <div className="small muted">
+                          by @{r.decided_by_username}, {fmt(r.decided_at)}
+                          {r.backup_id ? ` · backup #${r.backup_id}` : ''}
+                        </div>
+                      )}
+                      {r.admin_comment && <div className="small muted">{r.admin_comment}</div>}
+                    </td>
+                    <td className="muted" style={{ whiteSpace: 'nowrap' }}>{fmt(r.created_at)}</td>
+                    <td>
+                      {r.status === 'PENDING' && (
+                        <div className="actions">
+                          <button className="btn danger small" onClick={() => decideDeletion(r, true)} disabled={r.user_id === me.id} title={r.user_id === me.id ? 'Another admin has to approve your own request' : undefined}>
+                            <Trash2 size={14} /> Approve &amp; delete
+                          </button>
+                          <button className="btn secondary small" onClick={() => decideDeletion(r, false)}>
+                            <X size={14} /> Reject
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {!deletions.length && <EmptyRow cols={5}>No account deletion requests.</EmptyRow>}
               </tbody>
             </table>
           </div>
