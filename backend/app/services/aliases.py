@@ -26,6 +26,11 @@ NOISE = {
     "payment", "pay", "sent", "received", "by", "via", "p2a", "p2m", "p2p", "mb", "ib", "trf", "transfer", "debit", "credit",
     "debited", "credited", "vpa", "rs", "inr", "a", "c", "ac", "the", "for", "on", "at", "collect", "request", "upiintent", "mmt",
 }
+# Month names in dates change every month in recurring narrations ("SALARY JAN 2025", "SALARY FEB 2025"): not part of the payee
+MONTHS = {
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec", "january", "february",
+    "march", "april", "june", "july", "august", "september", "october", "november", "december",
+}
 KEY_MAX = 120
 # A bank narration of a UPI payment: UPI/DR/<ref>/<name>/<bank>/<upi id>/…  (the name is the 4th part)
 UPI_PATH_RE = re.compile(r"upi/(?:p2[am]|dr|cr)/\d+/([^/\n]+)", re.I)
@@ -43,8 +48,13 @@ def payee_key(text: str | None) -> str | None:
     if path:
         text = path.group(1)
     words = re.sub(r"[^a-z0-9&]+", " ", text.lower()).split()
+    digit = [any(ch.isdigit() for ch in w) for w in words]
+    # A month next to a number is a date ("SALARY JAN 2025"); "May Fair Restaurant" keeps its May
+    dated = {i for i, w in enumerate(words) if w in MONTHS and ((i and digit[i - 1]) or (i + 1 < len(words) and digit[i + 1]))}
+    # "ACH D- …" / "NACH C …": the letter after a mandate code says debit or credit, not who
+    code = {i for i, w in enumerate(words) if len(w) == 1 and i and words[i - 1] in ("ach", "nach", "ecs")}
     # Reference numbers, dates, card digits: anything with a digit in it
-    words = [w for w in words if w not in NOISE and not any(ch.isdigit() for ch in w)]
+    words = [w for i, w in enumerate(words) if w not in NOISE and i not in dated | code and not digit[i]]
     return " ".join(words)[:KEY_MAX] or None
 
 
@@ -224,4 +234,6 @@ def suggest_alias(key: str, sample: str | None) -> str:
     text = re.split(r"\b(?:ref|rrn|utr)\b", text, maxsplit=1, flags=re.I)[0]
     text = " ".join(w for w in re.split(r"[\s/#:-]+", text) if not any(ch.isdigit() for ch in w))
     words = [w for w in re.split(r"[^A-Za-z&]+", text) if w and w.lower() not in NOISE]
+    if "@" not in key:  # only the words of the payee key: no month of a date, no "D" of "ACH D-"
+        words = [w for w in words if w.lower() in set(key.split())] or words
     return " ".join(w.capitalize() for w in words)[:100] or key[:100]

@@ -61,6 +61,9 @@ def _data_fixups(engine: Engine) -> None:
         conn.execute(text("UPDATE app_users SET manager_id = NULL WHERE role = 'ADMIN' AND manager_id IS NOT NULL"))
         # Users are no longer told when access is taken away; hide such notices sent by older versions
         conn.execute(text("DELETE FROM notifications WHERE message LIKE '% removed from your plan by %'"))
+        # Categories from before 'is_added': a shown one was added by the user, a hidden one was only hidden
+        conn.execute(text("UPDATE user_categories SET is_added = :yes WHERE is_added IS NULL AND is_hidden = :no").bindparams(yes=True, no=False))
+        conn.execute(text("UPDATE user_categories SET is_added = :no WHERE is_added IS NULL").bindparams(no=False))
 
 
 def sync_schema(engine: Engine) -> None:

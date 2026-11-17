@@ -30,14 +30,23 @@ class CategoryOut(BaseModel):
     records: int
 
 
+DEFAULTS = {d.casefold() for d in DEFAULT_CATEGORIES}
+
+
+def _added(row: UserCategory | None) -> bool:
+    """A category the user added themselves (also while hidden), as opposed to a default or used one they only hid."""
+    if not row or row.name.casefold() in DEFAULTS:
+        return False
+    return row.is_added if row.is_added is not None else not row.is_hidden
+
+
 def _listing(db: Session, user_id: int) -> list[CategoryOut]:
     own = {c.name.casefold(): c for c in db.scalars(select(UserCategory).where(UserCategory.user_id == user_id))}
     counts = dict(db.execute(select(Expense.category, func.count(Expense.id)).where(Expense.user_id == user_id).group_by(Expense.category)).all())
-    defaults = {d.casefold() for d in DEFAULT_CATEGORIES}
     return [
         CategoryOut(
-            name=name, is_default=name.casefold() in defaults,
-            is_custom=name.casefold() in own and name.casefold() not in defaults and not own[name.casefold()].is_hidden,
+            name=name, is_default=name.casefold() in DEFAULTS,
+            is_custom=_added(own.get(name.casefold())),
             is_hidden=bool(own.get(name.casefold()) and own[name.casefold()].is_hidden), records=counts.get(name, 0),
         )
         for name in user_categories(db, user_id, include_hidden=True)
@@ -65,7 +74,7 @@ def add_category(data: CategoryIn, user_id: int | None = None, viewer: User = De
     if row:
         row.is_hidden = False  # adding a hidden one shows it again
     else:
-        db.add(UserCategory(user_id=target.user.id, name=name))
+        db.add(UserCategory(user_id=target.user.id, name=name, is_added=True))
     db.commit()
     return _listing(db, target.user.id)
 
@@ -82,17 +91,17 @@ def hide_category(name: str, data: CategoryUpdate, user_id: int | None = None, v
     if row:
         row.is_hidden = data.is_hidden
     elif data.is_hidden:
-        db.add(UserCategory(user_id=target.user.id, name=known, is_hidden=True))
+        db.add(UserCategory(user_id=target.user.id, name=known, is_hidden=True, is_added=False))
     db.commit()
     return _listing(db, target.user.id)
 
 
 @router.delete("/{name}", response_model=list[CategoryOut])
 def remove_category(name: str, user_id: int | None = None, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Remove a category you added. One that expenses still use stays in the list while they do: hide it instead."""
+    """Remove a category you added, shown or hidden. One that expenses still use stays in the list while they do."""
     target = resolve_target(db, viewer, user_id, write=True)
     row = _row(db, target.user.id, name)
-    if not row or row.is_hidden:
+    if not _added(row):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Only categories you added can be removed")
     db.delete(row)
     db.commit()

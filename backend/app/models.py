@@ -296,6 +296,9 @@ class UserCategory(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Added by the user (True) or only a hidden default / used category (False); kept while hidden so it can be removed.
+    # NULL on rows from before this column: set at startup (migrate._data_fixups) from is_hidden.
+    is_added: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
 
 

@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import or_, select, update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -16,6 +16,7 @@ from ..schemas import AccessibleUser, ForgotPasswordIn, RegisterIn, ResetPasswor
 from ..security import create_access_token, hash_password, verify_password
 from ..services.mailer import send_email
 from ..timeutil import now_local
+from .profile import account_exists
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -32,8 +33,7 @@ def _client_ip(request: Request) -> str:
 def register(data: RegisterIn, request: Request, db: Session = Depends(get_db)):
     if not public_form_limiter.hit(f"register:{_client_ip(request)}"):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests. Wait a minute and try again.")
-    exists = db.scalar(select(User.id).where(or_(User.username == data.username, User.email == data.email)))
-    if exists:
+    if account_exists(db, data.username, data.email):
         raise HTTPException(status.HTTP_409_CONFLICT, "Username or email already registered")
 
     manager_id = None

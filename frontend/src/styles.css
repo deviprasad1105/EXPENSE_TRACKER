@@ -506,6 +506,12 @@ label { font-size: 13px; font-weight: 500; color: var(--text-2); }
   .t-side + .t-side { border-left: 0; border-top: 1px solid var(--border); }
   .voucher-lines { min-width: 0; }
 }
+/* Settings rows (e.g. the background picture with its preview and buttons) stack on a phone instead of overflowing */
+@media (max-width: 600px) {
+  .setting-row { flex-wrap: wrap; gap: 12px; }
+  .setting-row > * { min-width: 0; }
+  .bg-preview { width: 96px; height: 60px; }
+}
 
 /* required-field marker */
 .req {

@@ -94,13 +94,23 @@ function BelowZero({ warnings }) {
   if (!warnings?.length) return null
   return (
     <Alert type="warn">
-      {warnings.map((w) => (
+      {warnings.map((w) =>
+        w.kind === 'RECEIVABLE' || w.kind === 'INVESTMENT' ? (
+          <div key={w.account}>
+            “{w.account}” would end at {money(w.balance)}:{' '}
+            {w.kind === 'RECEIVABLE'
+              ? 'more would come back to you than you gave or lent. The money you gave is probably missing from this file, or some of the money received moved there is really income.'
+              : 'more would be taken out than was put in. Some of what is moved out is probably returns or gains (income), or the money you invested is missing from this file.'}{' '}
+            Check the moves under “Money that isn’t spending or income”.
+          </div>
+        ) : (
         <div key={w.account}>
           “{w.account}” would end at {money(w.balance)}. A {KIND_NAME[w.kind] || 'account'} can’t go below zero, so some of its
           {w.kind === 'WALLET' ? ' top-ups' : ' money in'} are probably missing from this file. Import that {KIND_NAME[w.kind] || 'account'}’s own
           statement (PDF, Excel or CSV) as well to complete it.
         </div>
-      ))}
+        ),
+      )}
     </Alert>
   )
 }
@@ -109,6 +119,7 @@ export const KIND_LABEL = { EXPENSE: 'Expense', INCOME: 'Income', SPLIT: 'Split 
 const TREAT_NEW = [
   ['new:INVESTMENT:Investments', 'Investments (new account)'],
   ['new:RECEIVABLE:Money with others', 'Money with others (new account)'],
+  ['new:CASH:Cash', 'Cash (new account)'],
 ]
 const col = (i) => (i >= 26 ? String.fromCharCode(64 + Math.floor(i / 26)) : '') + String.fromCharCode(65 + (i % 26))
 
@@ -384,6 +395,8 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
   // Alias names / categories typed in "Payees in this file", not saved yet: { payee key: { alias, category } }
   const [drafts, setDrafts] = useState({})
   const [renameOld, setRenameOld] = useState(true)
+  // Purge & re-import: other imports this file replaces too (rows of it that came in with another file)
+  const [also, setAlso] = useState([])
   const version = useRef(0)
   const timer = useRef(null)
 
@@ -398,7 +411,7 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
       setChecking(true)
       try {
         const res = source.rows
-          ? await api.post('/imports/preview', { rows: source.rows, mapping: source.mapping, options, replaces_id: replaceId })
+          ? await api.post('/imports/preview', { rows: source.rows, mapping: source.mapping, options, replaces_id: replaceId, also_replaces: also })
           : await api.post('/imports/check', { records: [], options })
         apply(res.data)
         if (!source.rows) addRow([])
@@ -417,7 +430,7 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
             moves: Object.keys(rem.category_treatment || {}).length,
             accounts: Object.keys(rem.account_map || {}).length,
           })
-          const again = await api.post('/imports/check', { records: res.data.records.map(clean), options: next, replaces_id: replaceId })
+          const again = await api.post('/imports/check', { records: res.data.records.map(clean), options: next, replaces_id: replaceId, also_replaces: also })
           apply(again.data)
         }
       } catch (err) {
@@ -430,11 +443,23 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
     run()
   }, [])
 
-  const check = async (recs, opts) => {
+  // Purge & re-import of a period imported in several files: replace the other imports too, or not
+  const addAlso = (id) => {
+    const next = [...new Set([...also, id])]
+    setAlso(next)
+    check(records, options, next)
+  }
+  const dropAlso = (id) => {
+    const next = also.filter((x) => x !== id)
+    setAlso(next)
+    check(records, options, next)
+  }
+
+  const check = async (recs, opts, alsoIds = also) => {
     const v = ++version.current
     setChecking(true)
     try {
-      const res = await api.post('/imports/check', { records: recs.map(clean), options: opts, replaces_id: replaceId })
+      const res = await api.post('/imports/check', { records: recs.map(clean), options: opts, replaces_id: replaceId, also_replaces: alsoIds })
       if (v === version.current) apply(res.data)
       return res.data
     } catch (err) {
@@ -533,9 +558,9 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
     }
     const picked = recs.filter((r) => r.can_import)
     const ignored = recs.filter((r) => r.status === 'IGNORED').length
-    const old = info.replaces
-    const replacing = old
-      ? `\n\nThen “${old.filename}” is removed: ${old.removes} record(s)${old.edited ? `, including ${old.edited} edited since its import` : ''}.`
+    const olds = info.replaces ? [info.replaces, ...(info.also_replaces || [])] : []
+    const replacing = olds.length
+      ? `\n\nThen ${olds.map((o) => `“${o.filename}” is removed: ${o.removes} record(s)${o.edited ? `, including ${o.edited} edited since its import` : ''}`).join('; ')}.`
       : ''
     if (!window.confirm(`Import all ${picked.length} record(s) of ${source.filename}?${ignored ? `\n\n${ignored} balance / total line(s) aren’t transactions and are left out.` : ''}${replacing}\n\nIf anything stops the import, what was saved is taken back: the file comes in whole or not at all.`)) return
     setProgress({ done: 0, total: recs.length, label: 'Importing…' })
@@ -543,7 +568,7 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
     try {
       batch = (await api.post('/imports', {
         filename: source.filename, file_type: source.file_type, file_hash: source.file_hash,
-        records: recs.map(clean), options, replaces_id: replaceId,
+        records: recs.map(clean), options, replaces_id: replaceId, also_replaces: also,
       })).data
       const created = []
       for (let i = 0; i < recs.length; i += CHUNK) {
@@ -554,12 +579,17 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
       const done = (await api.post(`/imports/${batch.id}/finish`)).data
       batch = null // in: nothing to take back from here on
       let replaced = null
-      if (old) {
+      if (olds.length) {
+        const names = olds.map((o) => `“${o.filename}”`).join(', ')
+        let removed = 0
         try {
-          replaced = await purgeAll(old.id, (n) => setProgress({ done: old.removes - n, total: old.removes, label: `Removing “${old.filename}”…` }))
-          replaced = { ...replaced, filename: old.filename }
+          for (const old of olds) {
+            const res = await purgeAll(old.id, (n) => setProgress({ done: old.removes - n, total: old.removes, label: `Removing “${old.filename}”…` }))
+            removed += res.removed
+          }
+          replaced = { removed, filename: names }
         } catch (err) {
-          replaced = { error: errorMessage(err), filename: old.filename }
+          replaced = { error: errorMessage(err), filename: names }
         }
       }
       onReplace(null)
@@ -661,6 +691,12 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
             This file replaces “{info.replaces.filename}”, imported on {new Date(info.replaces.created_at).toLocaleDateString('en-IN')}:
             its {info.replaces.removes} record(s){info.replaces.edited ? `, including ${info.replaces.edited} edited since` : ''} are removed once this file is in.
             {info.replaces.blocks.length > 0 && ` It can’t be purged: ${info.replaces.blocks.map((b) => `${b.rows} record(s): ${b.reason}`).join('; ')}. Unlock the period or unmatch the bank statement lines first.`}
+            {(info.also_replaces || []).map((o) => (
+              <div key={o.id}>
+                It also replaces “{o.filename}”, imported on {new Date(o.created_at).toLocaleDateString('en-IN')}: its {o.removes} record(s) are removed too.{' '}
+                <button className="btn ghost small" onClick={() => dropAlso(o.id)}>Don’t replace it</button>
+              </div>
+            ))}
           </Alert>
         )}
         {info.blocked && (
@@ -680,6 +716,11 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
               {!replaceId && (info.earlier_imports || []).map((b) => (
                 <button key={b.id} className="btn small" onClick={() => onReplace(b.id)}>
                   Purge &amp; re-import “{b.filename}” with this file
+                </button>
+              ))}
+              {replaceId && (info.earlier_imports || []).filter((b) => b.can_replace).map((b) => (
+                <button key={b.id} className="btn small" onClick={() => addAlso(b.id)}>
+                  Replace “{b.filename}” too ({b.rows} row(s) of this file came in with it)
                 </button>
               ))}
             </div>
@@ -1179,13 +1220,15 @@ function TreatmentMap({ info, options, setOption }) {
         <button className="btn ghost small" onClick={() => setShowAll(!showAll)}>{showAll ? 'Only suggested' : 'All categories'}</button>
       </div>
       <p className="hint" style={{ marginTop: 4 }}>
-        Investments, money paid for someone and paid back, returns to family… Moving them to an account keeps your bank balances right without counting them as spending or income.
+        Investments, cash withdrawals, money paid for someone and paid back, returns to family… Moving them to an account keeps your bank balances right without counting them as spending or income. Rows without a category (a bank statement) are listed by payee.
       </p>
       {list.length ? (
         <div className="form-grid">
           {list.map((c) => (
             <div key={c.value}>
-              <label>“{c.value}” · {c.rows} row(s){c.suggested_treatment && !chosen(c) ? ' · suggested: move it' : ''}</label>
+              <label>
+                {c.payee ? `Payee “${c.label}”` : `“${c.value}”`} · {c.rows} row(s){c.suggested_treatment && !chosen(c) ? ' · suggested: move it' : ''}
+              </label>
               <select value={chosen(c)} onChange={(e) => set(c, e.target.value)}>
                 <option value="">Spending / income (as in the file)</option>
                 {TREAT_NEW.filter(([v]) => !info.accounts.some((a) => `new:${a.kind}:${a.name}` === v)).map(([v, l]) => (
@@ -1219,11 +1262,11 @@ function Done({ result, onAgain }) {
         Spending {money(result.expense_total)} · Money received {money(result.income_total)}
       </p>
       {result.replaced && !result.replaced.error && (
-        <Alert type="ok">Replaced “{result.replaced.filename}”: its {result.replaced.removed} record(s) were removed.</Alert>
+        <Alert type="ok">Replaced {result.replaced.filename}: {result.replaced.removed} record(s) were removed.</Alert>
       )}
       {result.replaced?.error && (
         <Alert type="error">
-          The new file is in, but removing “{result.replaced.filename}” stopped ({result.replaced.error}). Open Import history and press
+          The new file is in, but removing {result.replaced.filename} stopped ({result.replaced.error}). Open Import history and press
           “Finish replacing” on it, so nothing stays twice.
         </Alert>
       )}

@@ -20,9 +20,46 @@ api.interceptors.response.use(
   },
 )
 
+// Plain-language wording for the server's field checks (FastAPI / pydantic validation errors)
+const FIELD_RULES = {
+  username: 'can only use letters, numbers, dot (.), dash (-) and underscore (_), with no spaces',
+  new_username: 'can only use letters, numbers, dot (.), dash (-) and underscore (_), with no spaces',
+}
+
+function fieldLabel(name) {
+  const text = String(name ?? 'value').replace(/_/g, ' ')
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+export function validationText(d) {
+  const field = d.loc?.slice(-1)[0]
+  const label = fieldLabel(field)
+  const ctx = d.ctx || {}
+  switch (d.type) {
+    case 'missing':
+      return `${label} is required`
+    case 'string_too_short':
+      return `${label} needs at least ${ctx.min_length} character${ctx.min_length === 1 ? '' : 's'}`
+    case 'string_too_long':
+      return `${label} can have at most ${ctx.max_length} characters`
+    case 'string_pattern_mismatch':
+      return `${label} ${FIELD_RULES[field] || 'has characters that aren’t allowed'}`
+    case 'value_error':
+      return `${label}: ${String(d.msg).replace(/^value error,\s*/i, '').replace(/^value is not a valid email address:\s*/i, '')}`
+    case 'greater_than':
+      return `${label} must be more than ${ctx.gt}`
+    case 'greater_than_equal':
+      return `${label} must be at least ${ctx.ge}`
+    case 'less_than_equal':
+      return `${label} can be at most ${ctx.le}`
+    default:
+      return `${label}: ${d.msg}`
+  }
+}
+
 export function errorMessage(err) {
   const detail = err?.response?.data?.detail
-  if (Array.isArray(detail)) return detail.map((d) => `${d.loc?.slice(-1)[0]}: ${d.msg}`).join(', ')
+  if (Array.isArray(detail)) return detail.map(validationText).join('. ')
   return detail || err?.message || 'Something went wrong'
 }
 

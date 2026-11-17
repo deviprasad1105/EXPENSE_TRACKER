@@ -43,6 +43,19 @@ def username_taken(db: Session, username: str, exclude_id: int) -> bool:
     return db.scalar(stmt) is not None
 
 
+def email_taken(db: Session, email: str, exclude_id: int | None = None) -> bool:
+    """Emails are compared without letter case: Ann@X.com and ann@x.com are the same address."""
+    stmt = select(User.id).where(func.lower(User.email) == email.strip().lower())
+    if exclude_id is not None:
+        stmt = stmt.where(User.id != exclude_id)
+    return db.scalar(stmt) is not None
+
+
+def account_exists(db: Session, username: str, email: str) -> bool:
+    """A new account clashes with an existing username or email in any letter case."""
+    return username_taken(db, username, -1) or email_taken(db, email)
+
+
 def _pending_request(db: Session, user_id: int) -> UsernameChangeRequest | None:
     return db.scalar(
         select(UsernameChangeRequest).where(
@@ -69,7 +82,7 @@ def update_profile(data: ProfileUpdate, user: User = Depends(get_current_user), 
     if data.full_name:
         user.full_name = data.full_name
     if data.email and data.email != user.email:
-        if db.scalar(select(User.id).where(User.email == data.email, User.id != user.id)):
+        if email_taken(db, data.email, user.id):
             raise HTTPException(status.HTTP_409_CONFLICT, "That email is already used by another account")
         user.email = data.email
     db.commit()

@@ -24,6 +24,14 @@ def expenses_between(db: Session, user_id: int, start: date, end: date) -> list[
     return list(db.scalars(stmt))
 
 
+def tracking_since(db: Session, user) -> date:
+    """The first day a missing entry counts as missed: the day the account was opened, or the first expense when
+    older records were imported (then the days between imported records without one count too)."""
+    opened = (user.approved_at or user.created_at).date()
+    first = db.scalar(select(func.min(Expense.expense_date)).where(Expense.user_id == user.id))
+    return min(opened, first) if first else opened
+
+
 def summarize(expenses: list[Expense], start: date, end: date, since: date | None = None) -> dict:
     """Totals for the period. Days before `since` (e.g. when the account was created) never count as missed."""
     by_day: dict[date, Decimal] = defaultdict(Decimal)

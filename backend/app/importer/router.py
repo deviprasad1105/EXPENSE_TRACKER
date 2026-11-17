@@ -83,15 +83,23 @@ def preview(data: PreviewIn, user: User = Depends(get_current_user), db: Session
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     records = [RecordIn(**r) for r in rows]
-    replaces = _batch(db, user, data.replaces_id) if data.replaces_id else None
+    replaces = _replaces(db, user, data.replaces_id, data.also_replaces)
     result = service.check(db, user, records, data.options, fresh=True, replaces=replaces)
     return {**result, "ignored_rows": ignored}
 
 
 @router.post("/check", response_model=CheckOut)
 def check(data: CheckIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    replaces = _batch(db, user, data.replaces_id) if data.replaces_id else None
+    replaces = _replaces(db, user, data.replaces_id, data.also_replaces)
     return service.check(db, user, data.records, data.options, replaces=replaces)
+
+
+def _replaces(db: Session, user: User, replaces_id: int | None, also: list[int]) -> list:
+    """The imports a Purge & re-import replaces: the chosen one first, then the others (only with a chosen one)."""
+    if not replaces_id:
+        return []
+    ids = [replaces_id] + [i for i in dict.fromkeys(also) if i != replaces_id]
+    return [_batch(db, user, i) for i in ids]
 
 
 # ---------- purge a date range (Import Records → Purge) ----------
@@ -111,7 +119,7 @@ def purge_range(data: PurgeRangeIn, user: User = Depends(get_current_user), db: 
 @router.post("", response_model=BatchOut, status_code=201)
 def start(data: BatchIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return service.start(db, user, data.filename, data.file_type, data.file_hash, data.records, data.options,
-                         data.replaces_id)
+                         data.replaces_id, data.also_replaces)
 
 
 @router.post("/{batch_id}/rows")
