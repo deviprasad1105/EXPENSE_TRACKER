@@ -393,6 +393,30 @@ class UsernameChangeRequest(Base):
     user: Mapped[User] = relationship(foreign_keys=[user_id])
 
 
+class AccountDeletionRequest(Base):
+    """A user asks the admins to delete their account. Approving deletes it (backed up first, like any admin delete).
+
+    The row outlives the account as a record of the decision, so `user_id` is cleared when the account is deleted and
+    the username / name are kept here."""
+
+    __tablename__ = "account_deletion_requests"
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("app_users.id", ondelete="SET NULL"), index=True)
+    username: Mapped[str] = mapped_column(String(50), nullable=False)
+    full_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default=STATUS_PENDING)
+    admin_comment: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime)
+    decided_by: Mapped[int | None] = mapped_column(ForeignKey("app_users.id", ondelete="SET NULL"))
+    # The admin's username, kept even if that admin is deleted later
+    decided_by_username: Mapped[str | None] = mapped_column(String(50))
+    # The account backup made on approval, so the admin can restore it from the Backups tab
+    backup_id: Mapped[int | None] = mapped_column(Integer)
+
+
 class PasswordReset(Base):
     """A forgot-password request: a temporary password + one-time link sent by email."""
 

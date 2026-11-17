@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AtSign, BellOff, BellRing, Gauge, CalendarX2, CheckCheck, Info, Repeat, Share2, ShieldAlert, SplitSquareHorizontal, UserCheck, Users } from 'lucide-react'
+import { AtSign, BellOff, BellRing, Gauge, CalendarX2, CheckCheck, Info, Repeat, Share2, ShieldAlert, SplitSquareHorizontal, UserCheck, UserX, Users } from 'lucide-react'
 import api from '../api'
 import { PageHeader } from '../components/ui'
 
@@ -9,6 +9,8 @@ const KIND = {
   TEAM_MISSED: { icon: Users },
   APPROVAL: { icon: UserCheck, action: ['/admin', 'Review'] },
   USERNAME_REQUEST: { icon: AtSign },
+  DELETION_REQUEST: { icon: UserX, action: ['/admin?tab=deletions', 'Review'] },
+  DELETION_DECISION: { icon: UserX, action: ['/profile', 'Open profile'] },
   SHARE: { icon: Share2, action: ['/sharing', 'Open'] },
   SPLIT: { icon: SplitSquareHorizontal, action: ['/splits', 'Open'] },
   SUBSCRIPTION_DUE: { icon: BellRing, action: ['/subscriptions', 'Manage'] },

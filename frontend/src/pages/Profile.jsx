@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Camera, Clock, KeyRound, Lock, Send, Trash2, UserRound } from 'lucide-react'
+import { Camera, Clock, KeyRound, Lock, Send, Trash2, UserRound, UserX } from 'lucide-react'
 import api, { errorMessage } from '../api'
 import { useAuth } from '../auth'
 import Avatar from '../components/Avatar'
@@ -33,6 +33,7 @@ export default function Profile() {
   const [details, setDetails] = useState({ full_name: user.full_name, email: user.email })
   const [uname, setUname] = useState({ new_username: '', password: '', reason: '' })
   const [pw, setPw] = useState({ current_password: '', new_password: '', confirm: '' })
+  const [del, setDel] = useState({ password: '', reason: '' })
   const [msgs, setMsgs] = useState({})
   const fileRef = useRef(null)
 
@@ -115,8 +116,27 @@ export default function Profile() {
     if (ok) setPw({ current_password: '', new_password: '', confirm: '' })
   }
 
+  const requestDeletion = async (e) => {
+    e.preventDefault()
+    if (
+      !window.confirm(
+        'Ask an administrator to delete your account?\n\nOnce they approve it, your account and ALL your data (expenses, funds, accounts, subscriptions, books…) are deleted and you can no longer sign in. You will get an email when it is done.\n\nYou can cancel the request until then.',
+      )
+    )
+      return
+    const ok = await run('delete', () => api.post('/profile/deletion-request', { password: del.password, reason: del.reason || null }), 'Request sent. An administrator will review it.')
+    if (ok) setDel({ password: '', reason: '' })
+    load()
+  }
+
+  const cancelDeletion = async (r) => {
+    await run('delete', () => api.delete(`/profile/deletion-request/${r.id}`), 'Request cancelled. Your account stays.')
+    load()
+  }
+
   if (!profile) return <div className="muted">Loading…</div>
   const pending = profile.pending_username_request
+  const deletion = profile.pending_deletion_request
 
   return (
     <div style={{ maxWidth: 860 }}>
@@ -296,6 +316,44 @@ export default function Profile() {
           <button className="btn">Update password</button>
         </div>
       </form>
+
+      <div className="card">
+        <div className="card-head">
+          <div>
+            <h3>Delete account</h3>
+            <p>Ask an administrator to delete your account and all your data. Until they approve it, everything keeps working and you can cancel.</p>
+          </div>
+          <UserX size={20} className="muted" />
+        </div>
+        <Msg msg={msgs.delete} />
+        {deletion ? (
+          <div className="row-between">
+            <span>
+              <Clock size={16} className="muted" style={{ verticalAlign: -3 }} /> You asked for your account to be deleted on <b>{fmt(deletion.created_at)}</b>. It is
+              waiting for an administrator.
+            </span>
+            <button className="btn secondary small" onClick={() => cancelDeletion(deletion)}>
+              Cancel request
+            </button>
+          </div>
+        ) : (
+          <form className="form-grid" onSubmit={requestDeletion}>
+            <div>
+              <label>Reason (optional)</label>
+              <input value={del.reason} onChange={(e) => setDel({ ...del, reason: e.target.value })} maxLength={500} placeholder="Shown to the administrator" />
+            </div>
+            <div>
+              <label>Confirm with your password</label>
+              <input type="password" value={del.password} onChange={(e) => setDel({ ...del, password: e.target.value })} required autoComplete="current-password" />
+            </div>
+            <div className="span-all form-actions">
+              <button className="btn danger">
+                <Trash2 size={16} /> Ask to delete my account
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
     </div>
   )
 }

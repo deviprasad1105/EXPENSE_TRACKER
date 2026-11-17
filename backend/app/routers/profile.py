@@ -9,8 +9,12 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import ROLE_ADMIN, STATUS_PENDING, Notification, User, UserAvatar, UserBackground, UsernameChangeRequest
+from ..models import (
+    ROLE_ADMIN, STATUS_PENDING, AccountDeletionRequest, Notification, User, UserAvatar, UserBackground, UsernameChangeRequest,
+)
 from ..schemas import (
+    AccountDeletionIn,
+    AccountDeletionOut,
     PasswordChange,
     PreferencesUpdate,
     ProfileOut,
@@ -68,12 +72,14 @@ def _pending_request(db: Session, user_id: int) -> UsernameChangeRequest | None:
 def get_profile(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     locked = username_locked_until(user)
     pending = _pending_request(db, user.id)
+    deletion = _pending_deletion(db, user.id)
     return ProfileOut(
         user=UserOut.model_validate(user),
         manager=UserBrief.model_validate(user.manager) if user.manager else None,
         can_change_username=locked is None,
         username_locked_until=locked,
         pending_username_request=UsernameRequestOut.model_validate(pending) if pending else None,
+        pending_deletion_request=AccountDeletionOut.model_validate(deletion) if deletion else None,
     )
 
 
@@ -180,6 +186,49 @@ def request_username_change(
 @router.delete("/username-requests/{request_id}", status_code=204)
 def cancel_username_request(request_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     req = db.get(UsernameChangeRequest, request_id)
+    if not req or req.user_id != user.id or req.status != STATUS_PENDING:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Pending request not found")
+    db.delete(req)
+    db.commit()
+
+
+# ---------- account deletion requests ----------
+def _pending_deletion(db: Session, user_id: int) -> AccountDeletionRequest | None:
+    return db.scalar(
+        select(AccountDeletionRequest).where(
+            AccountDeletionRequest.user_id == user_id, AccountDeletionRequest.status == STATUS_PENDING
+        )
+    )
+
+
+@router.post("/deletion-request", response_model=AccountDeletionOut, status_code=201)
+def request_account_deletion(data: AccountDeletionIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Ask the admins to delete this account. Any admin can approve it; until then the account works as usual."""
+    if not verify_password(data.password, user.password_hash):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Your password is not correct")
+    if _pending_deletion(db, user.id):
+        raise HTTPException(status.HTTP_409_CONFLICT, "You have already asked for your account to be deleted")
+    admins = list(db.scalars(select(User.id).where(User.role == ROLE_ADMIN, User.id != user.id)))
+    if not admins:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "There is no other administrator to approve this request")
+    req = AccountDeletionRequest(user_id=user.id, username=user.username, full_name=user.full_name, reason=data.reason)
+    db.add(req)
+    for admin_id in admins:
+        db.add(
+            Notification(
+                user_id=admin_id,
+                kind="DELETION_REQUEST",
+                message=f"{user.full_name} (@{user.username}) asked for their account to be deleted. "
+                "Review it under Administration → Deletion requests.",
+            )
+        )
+    db.commit()
+    return req
+
+
+@router.delete("/deletion-request/{request_id}", status_code=204)
+def cancel_account_deletion(request_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    req = db.get(AccountDeletionRequest, request_id)
     if not req or req.user_id != user.id or req.status != STATUS_PENDING:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Pending request not found")
     db.delete(req)

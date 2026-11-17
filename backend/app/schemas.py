@@ -177,12 +177,32 @@ class UsernameDecision(BaseModel):
     comment: str | None = Field(default=None, max_length=500)
 
 
+class AccountDeletionIn(BaseModel):
+    password: str = Field(min_length=1, max_length=100)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class AccountDeletionOut(ORM):
+    id: int
+    user_id: int | None
+    username: str
+    full_name: str
+    reason: str | None
+    status: str
+    admin_comment: str | None
+    created_at: datetime
+    decided_at: datetime | None
+    decided_by_username: str | None
+    backup_id: int | None
+
+
 class ProfileOut(BaseModel):
     user: UserOut
     manager: UserBrief | None
     can_change_username: bool
     username_locked_until: datetime | None
     pending_username_request: UsernameRequestOut | None
+    pending_deletion_request: AccountDeletionOut | None = None
 
 
 # ---------- daily items ----------
