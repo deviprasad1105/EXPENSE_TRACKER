@@ -26,6 +26,7 @@ from ..models import (
     DataShare,
     Expense,
     SplitGroup,
+    SplitMember,
     Fund,
     Notification,
     Subscription,
@@ -241,6 +242,13 @@ def restore_backup(db: Session, backup: DataBackup, admin: User) -> dict:
         member = db.get(User, member_id)
         if member and member.org_admin_id is None and users_rows:
             member.org_admin_id = users_rows[0]["id"]
+
+    # ...and their places in split groups, which became guests when the account was deleted (if still a guest)
+    for member_id in doc.get("split_members", []):
+        member = db.get(SplitMember, member_id)
+        if member and member.user_id is None and users_rows:
+            member.user_id = users_rows[0]["id"]
+            member.guest_name = None
 
     backup.restored_at = now_local()
     backup.restored_by = admin.username

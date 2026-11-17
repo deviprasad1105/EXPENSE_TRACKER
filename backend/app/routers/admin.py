@@ -2,7 +2,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
-from sqlalchemy import delete, exists, or_, select
+from sqlalchemy import delete, exists, or_, select, update
 from sqlalchemy.orm import Session, defer
 
 from ..accounting.lifecycle import delete_books
@@ -177,19 +177,54 @@ def _delete_user_data(db: Session, user_id: int):
     db.execute(delete(Account).where(Account.user_id == user_id))
 
 
+def _leave_split_groups(db: Session, user: User) -> None:
+    """Take a user who is being deleted out of split bill groups without changing anyone's balance.
+
+    Bills, shares and settlements point at the member row, not the user, so the row stays and becomes a guest with
+    their name: every amount and balance is exactly as before. Groups they own pass to another app user in the group
+    (an active group admin first); a group with nobody else on the app is deleted, as only they could see it. Bills
+    and payments they recorded are credited to the group's owner."""
+    name = f"{user.full_name or user.username} (deleted account)"[:100]
+    for member in db.scalars(select(SplitMember).where(SplitMember.user_id == user.id)):
+        member.user_id = None
+        member.guest_name = name
+        member.is_admin = False
+    db.execute(update(SplitMember).where(SplitMember.added_by == user.id).values(added_by=None))
+    db.flush()
+
+    for group in db.scalars(select(SplitGroup).where(SplitGroup.owner_id == user.id)).all():
+        users = [m for m in group.members if m.user_id is not None]
+        if not users:
+            db.delete(group)
+            continue
+        heir = min(users, key=lambda m: (not m.active, not m.is_admin, m.joined_at, m.id))
+        group.owner_id = heir.user_id
+        heir.is_admin = True
+    db.flush()
+
+    for model in (SplitBill, SplitSettlement):
+        for row in db.scalars(select(model).where(model.created_by == user.id)):
+            row.created_by = row.group.owner_id
+    db.flush()
+
+
 @router.delete("/users/{user_id}", response_model=BackupOut)
 def delete_user(
     user_id: int, reason: str | None = None, admin: User = Depends(require_admin), db: Session = Depends(get_db)
 ):
-    """Delete an account and all its data. A full backup is saved first and can be restored later."""
+    """Delete an account and all its data, even someone in split bill groups (they stay in those groups as a guest).
+    A full backup is saved first and can be restored later."""
     user = _get_user(db, user_id)
     if user.id == admin.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot delete yourself")
-    return delete_account(db, user, admin, reason)
+    return delete_account(db, user, admin, reason, keep_splits_as_guest=True)
 
 
-def delete_account(db: Session, user: User, actor: User, reason: str | None) -> DataBackup:
-    """Back up, then delete `user` and all their data. Shared by the admin and org admin routes."""
+def delete_account(db: Session, user: User, actor: User, reason: str | None, keep_splits_as_guest: bool = False) -> DataBackup:
+    """Back up, then delete `user` and all their data. Shared by the admin and org admin routes.
+
+    Someone in split bill groups is refused unless `keep_splits_as_guest` (the admin route): an org admin's member can
+    share groups with people outside the organisation, whose bills the org admin has no say over."""
     in_splits = db.scalar(
         select(
             exists().where(SplitMember.user_id == user.id)
@@ -198,27 +233,31 @@ def delete_account(db: Session, user: User, actor: User, reason: str | None) -> 
             | exists().where(SplitSettlement.created_by == user.id)
         )
     )
-    if in_splits:
-        # Deleting them would change other people's balances
+    if in_splits and not keep_splits_as_guest:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            f"@{user.username} is part of split bill groups (now or in the past). They can be deleted once those groups are settled and deleted",
+            f"@{user.username} is part of split bill groups (now or in the past). They can be deleted once those groups "
+            "are settled and deleted, or by an administrator",
         )
     tables = snapshot_user(db, user)
     reports = [u.id for u in user.reports]
     org_members = [u.id for u in user.org_members]
+    # Their places in split groups, so restoring the account turns those guests back into them
+    split_members = list(db.scalars(select(SplitMember.id).where(SplitMember.user_id == user.id)))
     expenses = len(tables["expenses"])
     backup = create_backup(
         db, KIND_USER, user, actor, tables,
         summary=f"Account @{user.username} ({user.full_name}) with {expenses} expenses, "
         f"{len(tables['funds'])} funds and {len(tables['daily_items'])} daily items",
-        reason=reason, extra={"reports": reports, "org_members": org_members},
+        reason=reason, extra={"reports": reports, "org_members": org_members, "split_members": split_members},
     )
     for member in user.reports:
         member.manager_id = None
     for member in user.org_members:
         member.org_admin_id = None
     _delete_user_data(db, user.id)
+    if in_splits:
+        _leave_split_groups(db, user)
     for model, col in (
         (UserAvatar, UserAvatar.user_id), (UserBackground, UserBackground.user_id), (Notification, Notification.user_id),
         (UsernameChangeRequest, UsernameChangeRequest.user_id), (PasswordReset, PasswordReset.user_id),

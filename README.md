@@ -354,7 +354,7 @@ Most changes are web changes: deploy them to Vercel as usual, then rebuild the A
 | Owner | own data | yes (3-day lock applies) |
 | **Manager at any level above** (A manages B, B manages C, so B sees C and A sees B and C; A's own manager sees all three) | the team's data | **no**, read-only |
 | User the owner shared with (*Team & Sharing*) | the owner's data | **no**, read-only |
-| Admin | everyone | yes, including locked entries; approves users and username requests, sets managers, deletes users |
+| Admin | everyone | yes, including locked entries; approves users and username requests, sets managers, deletes users (even in split groups: they stay there as a guest) |
 
 - Switch whose data you see with the **eye selector** at the top. A badge shows when the data is read-only.
 - The manager is set at registration ("Manager's username") or by the admin under *Administration → Users*.
