@@ -4,6 +4,7 @@ import api, { errorMessage, todayISO } from '../api'
 import Modal from '../components/Modal'
 import { Msg } from '../components/ui'
 import { inr, isCashBank, LedgerOptions, paise, TYPE_HINT, TYPE_LABEL } from './common'
+import DateInput from '../components/DateInput'
 
 const GST_RATES = ['0', '0.25', '3', '5', '12', '18', '28']
 const SALES_GROUPS = new Set(['SALES', 'DIRECT_INCOMES', 'INDIRECT_INCOMES'])
@@ -139,7 +140,7 @@ export default function VoucherForm({ books, params, onClose, onSaved }) {
         <div className="form-grid">
           <div>
             <label>Date</label>
-            <input type="date" value={date} max={todayISO()} onChange={(e) => setDate(e.target.value)} required />
+            <DateInput value={date} max={todayISO()} onChange={(e) => setDate(e.target.value)} required />
             {dateLocked && <span className="hint" style={{ color: 'var(--danger)' }}>Locked up to {lockDate}: pick a later date</span>}
           </div>
           {(type === 'SALES' || type === 'PURCHASE') && (

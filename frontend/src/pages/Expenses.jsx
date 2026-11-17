@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { ArrowDownLeft, ArrowUpRight, Check, Lock, Pencil, Search, Trash2, X } from 'lucide-react'
-import api, { errorMessage, money, todayISO } from '../api'
+import api, { errorMessage, money, niceDate, todayISO } from '../api'
+import { useRecordsChanged } from '../components/QuickAdd'
 import { useAuth } from '../auth'
 import { accountLabel } from '../components/Accounts'
 import ReadOnlyNotice from '../components/ReadOnlyNotice'
 import { EmptyRow, Msg, PageHeader } from '../components/ui'
+import DateInput from '../components/DateInput'
 
 const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
 const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '')
@@ -91,6 +93,7 @@ export default function Expenses() {
   useEffect(() => {
     load().catch((e) => setMsg({ type: 'error', text: errorMessage(e) }))
   }, [load])
+  useRecordsChanged(useCallback(() => load().catch(() => {}), [load]))
 
   // One list, newest first: sent (debit) and received (credit)
   const rows = useMemo(() => {
@@ -145,7 +148,7 @@ export default function Expenses() {
     }
   }
 
-  const periodText = filters.start || filters.end ? `${filters.start || 'the start'} to ${filters.end || 'today'}` : 'all time'
+  const periodText = filters.start || filters.end ? `${filters.start ? niceDate(filters.start) : 'the start'} to ${filters.end ? niceDate(filters.end) : 'today'}` : 'all time'
 
   return (
     <div>
@@ -205,9 +208,9 @@ export default function Expenses() {
               Custom dates
             </option>
           </select>
-          <input type="date" value={filters.start} max={filters.end || todayISO()} onChange={set('start')} aria-label="From" />
+          <DateInput value={filters.start} max={filters.end || todayISO()} onChange={set('start')} aria-label="From" />
           <span className="muted">to</span>
-          <input type="date" value={filters.end} min={filters.start || undefined} max={todayISO()} onChange={set('end')} aria-label="To" />
+          <DateInput value={filters.end} min={filters.start || undefined} max={todayISO()} onChange={set('end')} aria-label="To" />
           <select value={filters.category} onChange={set('category')} aria-label="Category" disabled={filters.type === 'received'}>
             <option value="">All categories</option>
             {categories.map((c) => (
@@ -244,7 +247,7 @@ export default function Expenses() {
 
         {/* ---------- transactions ---------- */}
         <div className="table-wrap">
-          <table className="table">
+          <table className="table stack">
             <thead>
               <tr>
                 <th>Date</th>
@@ -266,7 +269,7 @@ export default function Expenses() {
                   return (
                     <tr key={row.key} className="editing">
                       <td>
-                        <input type="date" value={editing.expense_date} max={todayISO()} onChange={ed('expense_date')} />
+                        <DateInput value={editing.expense_date} max={todayISO()} onChange={ed('expense_date')} />
                       </td>
                       <td>
                         <TypeBadge kind="sent" />
@@ -304,11 +307,11 @@ export default function Expenses() {
                   )
                 return (
                   <tr key={row.key}>
-                    <td style={{ whiteSpace: 'nowrap' }}>{row.date}</td>
-                    <td>
+                    <td data-label="Date" style={{ whiteSpace: 'nowrap' }}>{niceDate(row.date, { relative: true })}</td>
+                    <td data-label="Type">
                       <TypeBadge kind={row.kind} />
                     </td>
-                    <td className="strong" style={{ wordBreak: 'break-word' }}>
+                    <td data-label="Description" className="strong stack-title" style={{ wordBreak: 'break-word' }}>
                       <span title={r.raw_name && r.raw_name !== row.name ? `Original: ${r.raw_name}` : undefined}>{row.name}</span>{' '}
                       {r.quantity > 1 && <span className="muted small">× {r.quantity}</span>} {r.is_extra && <span className="badge">extra</span>}
                       {r.origin === 'UPI' && <span className="badge info">UPI</span>}
@@ -323,11 +326,11 @@ export default function Expenses() {
                         </div>
                       )}
                     </td>
-                    <td>{row.kind === 'sent' ? row.group : <span className="muted">—</span>}</td>
-                    <td className="muted">{acct}</td>
-                    <td className="num strong net-neg">{row.kind === 'sent' ? money(r.amount) : ''}</td>
-                    <td className="num strong net-pos">{row.kind === 'received' ? money(r.amount) : ''}</td>
-                    <td>
+                    <td data-label="Category">{row.kind === 'sent' ? row.group : <span className="muted">—</span>}</td>
+                    <td data-label="Account" className="muted">{acct}</td>
+                    <td data-label="Sent" className={`num strong net-neg ${row.kind === 'sent' ? '' : 'stack-hide'}`}>{row.kind === 'sent' ? money(r.amount) : ''}</td>
+                    <td data-label="Received" className={`num strong net-pos ${row.kind === 'received' ? '' : 'stack-hide'}`}>{row.kind === 'received' ? money(r.amount) : ''}</td>
+                    <td data-label="Status">
                       {row.kind === 'received' ? (
                         <span className="muted small">—</span>
                       ) : r.locked ? (
@@ -335,7 +338,7 @@ export default function Expenses() {
                           <Lock size={12} /> Locked
                         </span>
                       ) : (
-                        <span className="badge ok">Editable until {r.lock_at.slice(0, 10)}</span>
+                        <span className="badge ok">Editable until {niceDate(r.lock_at.slice(0, 10))}</span>
                       )}
                     </td>
                     {writable && (

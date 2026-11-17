@@ -336,7 +336,9 @@ def test_statement_rows_take_alias_name_and_category(client, db, make_user):
     tea = by["UPI/P2M/111111111111"]
     # The aliased payee needs no category mapping; the other one still does
     assert (tea["status"], tea["category_final"], tea["alias_name"]) == ("READY", "Food", "Tea")
-    assert by["UPI/P2M/333333333333"]["status"] == "NEEDS_CATEGORY"
+    # A payee with no alias still imports: its category is filled in (nothing to go by → General)
+    vvm = by["UPI/P2M/333333333333"]
+    assert (vvm["status"], vvm["category_final"], vvm["include"]) == ("READY", "General", True)
     payees = {p["payee_key"]: p for p in prev["payees"]}
     assert payees["sunil tea"]["alias"] == "Tea" and payees["sunil tea"]["sent_count"] == 2
     assert payees["vvm and sons"]["alias"] is None and payees["vvm and sons"]["suggestion"] == "Vvm And Sons"

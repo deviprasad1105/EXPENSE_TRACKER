@@ -5,6 +5,7 @@ import { hasFeature, useAuth } from '../auth'
 import Modal from '../components/Modal'
 import ReadOnlyNotice from '../components/ReadOnlyNotice'
 import { Alert, EmptyRow, Msg, PageHeader, StatTile } from '../components/ui'
+import DateInput from '../components/DateInput'
 
 const FREQUENCIES = [
   ['WEEKLY', 'Weekly'],
@@ -414,11 +415,11 @@ function SubscriptionForm({ initial, canLog, onClose, onSave }) {
           )}
           <div>
             <label>First charge (start)</label>
-            <input type="date" value={f.start_date} onChange={set('start_date')} required />
+            <DateInput value={f.start_date} onChange={set('start_date')} required />
           </div>
           <div>
             <label>Ends on (optional)</label>
-            <input type="date" value={f.end_date} min={f.start_date} onChange={set('end_date')} />
+            <DateInput value={f.end_date} min={f.start_date} onChange={set('end_date')} />
           </div>
           <div>
             <label>Paid with</label>

@@ -1,16 +1,18 @@
 """Check, import and undo past records.
 
-A file is imported whole or not at all. Every row is checked before anything is saved: a date, an amount, a type,
-the accounting lock, and duplicates:
-- rows imported before (same type, date, amount and description, and the same occurrence of it in its file);
-- records already in the app on the same date for the same amount (typed in by hand, or from another file);
-- rows repeated in the file (same date, amount, account and description) without different times.
-Any of these blocks the whole file: the user fixes the file and uploads it again, so a file never comes in half,
-and nothing comes in twice. What the user chooses on the review page (a category, an account) isn't a problem in the
-file. Balance and total lines aren't transactions: they are listed and left out. An import that stops before it
-finishes (a network error) is taken back. To correct a file already imported, Purge & re-import replaces that
-import: the corrected file is checked without the earlier import's records, imported, then the earlier import is
-removed entirely (also records edited since).
+Every row is checked before anything is saved: a date, an amount, a type, a category for spending, an account when
+the file's account column is used, and the accounting lock. Duplicates are looked for in two places:
+- rows imported before (same type, date, amount and description, and the same occurrence of it in its file), so
+  uploading the same file again adds nothing; also the same UPI transaction in another layout of the statement:
+  the same UPI reference number (within 3 days: a value date may differ from the transaction date), or the same
+  UPI ID on the same date for the same amount (one for one). These rows are always skipped;
+- records already in the app on the same date for the same amount (typed in by hand, or from another file), which
+  the user reviews: they are left out unless ticked.
+- rows repeated in the file (same date, amount, account and description) without different times are noted
+  (two identical payments on a day are common), and imported unless unticked.
+Balance and total lines aren't transactions: they are listed and left out. To correct a file already
+imported, Purge & re-import replaces that import: the corrected file is checked without the earlier import's
+records, imported, then the earlier import is removed entirely (also records edited since).
 
 Imported records are ordinary expenses and money received: they show on every page and post to the books. Their
 original date is kept; the edit window starts on the day of the import; no budget alert is sent for them.
@@ -20,17 +22,21 @@ the others, who then owe it. A split someone else paid ("Paid by" column) become
 A transfer row ("Axis Bank->SBI Bank", or a "To account" column) becomes a transfer between the two accounts; an
 opening-balance row ("Balance cf", "Opening balance") is added to the account's opening balance.
 Accounts named in the file are matched by name or last 4 digits, or created by the import.
+Little has to be corrected by hand: a spending row without a category gets one (the category its payee had before,
+else one guessed from the description, else "General"); a category or account the app doesn't have yet is created
+(a category close to an existing one uses it). Each such guess is shown on the row and can be changed.
 A category can be marked as not spending or income (investments, money paid for others and paid back): its rows
 become transfers to or from an account such as "Investments" or "Money with others".
 """
 
 import hashlib
+from datetime import timedelta
 import re
 from collections import Counter, defaultdict
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..accounting.chart import fy_of, fy_start
@@ -64,14 +70,18 @@ DUPLICATE = "DUPLICATE"
 IMPORTED_BEFORE = "IMPORTED_BEFORE"
 REPEATED = "REPEATED"  # the same as an earlier row of the file, with no different time to tell them apart
 IGNORED = "IGNORED"  # a balance or total line: not a transaction
-# Problems in the file: any of them blocks the whole file (fix the file, upload it again)
-BLOCKING = (INVALID, LOCKED, DUPLICATE, IMPORTED_BEFORE, REPEATED)
+# Rows that can't be imported (they are recorded as failed; the rest of the file still imports)
+BLOCKING = (INVALID, LOCKED)
 # Choices made on the review page
 CHOICES = (NEEDS_CATEGORY, NEEDS_ACCOUNT)
-IMPORTABLE = (READY,)
+# A row imported before is skipped automatically (never imported twice); possible duplicates (already in the
+# app) are left unticked, rows repeated in the file only noted; the rest of the file still imports
+IMPORTABLE = (READY, DUPLICATE, REPEATED)
 TOTAL_LINE = "Looks like a balance or total line, not a transaction"
+UPI_DATE_SLACK = 3  # days: a statement's value date can be a day or two after the transaction date
 SPLIT_GROUP_NAME = "Imported split bills"
 OTHERS = "Others"
+FALLBACK_CATEGORY = "General"
 _IN_CHUNK = 900  # Oracle allows at most 1000 values in an IN list
 UNDO_CHUNK = 200  # records undone per request
 
@@ -130,6 +140,90 @@ def _imported_fingerprints(db: Session, user_id: int, fps, exclude: list[int]) -
             stmt = stmt.where(ImportRecord.batch_id.not_in(exclude))
         found.update(dict(db.execute(stmt).all()))
     return found
+
+
+_UPI_REF = re.compile(r"(?<!\d)(\d{12})(?!\d)")
+
+
+def upi_ref(description: str | None) -> str | None:
+    """The 12-digit UPI reference (RRN) in a bank's narration ("UPI/P2M/512345678901/SWIGGY/…")."""
+    if not description or "upi" not in description.lower():
+        return None
+    m = _UPI_REF.search(description)
+    return m.group(1) if m else None
+
+
+# A UPI ID inside a narration, where hyphens and slashes separate the parts ("UPI-RAMESH-ramesh@ybl-SBIN0001")
+_UPI_ID = re.compile(r"(?:^|[\s/\-:|,(])([a-z0-9][a-z0-9._]{1,63}@[a-z][a-z0-9]{1,30})(?![\w@])", re.I)
+
+
+def upi_id(description: str | None) -> str | None:
+    m = _UPI_ID.search(description or "")
+    return m.group(1).lower() if m else None
+
+
+class _ImportedUpi:
+    """UPI transactions imported before (from any earlier upload), to recognise them in a file again."""
+
+    def __init__(self, db: Session, user_id: int, records: list[RecordIn], exclude: list[int]):
+        self.refs: dict[str, tuple] = {}
+        self.ids: dict[tuple, list] = defaultdict(list)
+        dates = [r.date for r in records if r.date]
+        if not dates or not any(upi_ref(r.description) or upi_id(r.description) for r in records):
+            return
+        lo, hi = min(dates) - timedelta(days=UPI_DATE_SLACK), max(dates) + timedelta(days=UPI_DATE_SLACK)
+        stmt = (select(ImportRecord.record_date, ImportRecord.amount, ImportRecord.description, ImportBatch.filename,
+                       ImportBatch.created_at)
+                .join(ImportBatch, ImportBatch.id == ImportRecord.batch_id)
+                .where(ImportRecord.user_id == user_id, ImportRecord.status.in_((REC_IMPORTED, REC_KEPT)),
+                       ImportRecord.record_date >= lo, ImportRecord.record_date <= hi))
+        if exclude:
+            stmt = stmt.where(ImportRecord.batch_id.not_in(exclude))
+        for d, amount, desc, filename, at in db.execute(stmt):
+            where = (d, filename, at)
+            if ref := upi_ref(desc):
+                self.refs[ref] = where
+            elif vpa := upi_id(desc):
+                self.ids[(d, vpa, Decimal(amount or 0).quantize(CENT))].append(where)
+
+    def match(self, r: RecordIn, seq: int | None) -> str | None:
+        """Why this row is a UPI transaction imported before, or None. Identical payments (same UPI ID, date and
+        amount) match one for one: the row's place among them in the file (`seq`) against how many were imported."""
+        if not r.date:
+            return None
+        ref = upi_ref(r.description)
+        if ref:
+            hit = self.refs.get(ref)
+            if hit and abs((r.date - hit[0]).days) <= UPI_DATE_SLACK:
+                return f"same UPI reference {ref}, imported from {hit[1]} on {hit[2]:%d %b %Y}"
+            return None  # a reference is unique: no match by UPI ID for it
+        if seq:
+            hits = self.ids.get(upi_key(r) or ())
+            if hits and seq <= len(hits):
+                d, filename, at = hits[seq - 1]
+                return f"same UPI ID {upi_id(r.description)}, date and amount, imported from {filename} on {at:%d %b %Y}"
+        return None
+
+
+def upi_key(r: RecordIn) -> tuple | None:
+    vpa = upi_id(r.description)
+    if not (vpa and r.date and r.amount is not None) or upi_ref(r.description):
+        return None
+    return (r.date, vpa, Decimal(r.amount).quantize(CENT))
+
+
+def upi_seqs(records: list[RecordIn]) -> list[int | None]:
+    """Each row's place among the identical UPI payments of the file. Kept when given (a chunk of a bigger file)."""
+    seen: Counter = Counter()
+    out = []
+    for r in records:
+        key = upi_key(r)
+        if key is None:
+            out.append(None)
+            continue
+        seen[key] += 1
+        out.append(r.upi_seq or seen[key])
+    return out
 
 
 def _existing(db: Session, user_id: int, records: list[RecordIn], exclude: list[int]):
@@ -249,6 +343,30 @@ def suggest_description_treatment(text: str) -> str | None:
     return None
 
 
+def _learned_categories(db: Session, user_id: int) -> dict[str, str]:
+    """Payee → the category the user gave it most often in the expenses they already have."""
+    rows = db.execute(
+        select(Expense.payee_key, Expense.category, func.count())
+        .where(Expense.user_id == user_id, Expense.payee_key.is_not(None))
+        .group_by(Expense.payee_key, Expense.category)
+    ).all()
+    best: dict[str, tuple[int, str]] = {}
+    for key, category, n in rows:
+        if category and (key not in best or n > best[key][0]):
+            best[key] = (n, category)
+    return {k: c for k, (_, c) in best.items()}
+
+
+def guess_category(description: str, key: str | None, learned: dict[str, str], known: dict[str, str]) -> tuple[str, str]:
+    """A category for a spending row the file gives none: (category, why)."""
+    if key and key in learned:
+        return learned[key], "as before for this payee"
+    for text in (key, description):
+        if guess := suggest_category(text or "", known):
+            return guess, "guessed from the description"
+    return known.get(FALLBACK_CATEGORY.casefold(), FALLBACK_CATEGORY), "nothing to go by"
+
+
 def suggest_treatment(raw: str) -> str | None:
     n = (raw or "").casefold()
     for pattern, kind, name in _TREATMENT_HINTS:
@@ -293,6 +411,8 @@ class _Accounts:
                 return f"id:{hits[0].id}"
         if k and k in self.create:
             return f"new:{self.create[k]}:{clean_account_name(raw)}"
+        if k:  # not one of the user's accounts: the import creates it (Undo removes it again)
+            return f"new:{suggest_kind(raw)}:{clean_account_name(raw)}"
         return None
 
     def treatment(self, ref: str | None) -> str | None:
@@ -367,6 +487,8 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
     exclude = [i for i in (batch_id, *(b.id for b in replaces)) if i]
     imported_before = _imported_fingerprints(db, user.id, fps, exclude)
     existing = _existing(db, user.id, records, exclude)
+    imported_upi = _ImportedUpi(db, user.id, records, exclude)
+    seqs = upi_seqs(records)
     my_names = {_key(user.full_name), _key(user.username)} - {""}
     aliases = user_aliases(db, user.id)
     payees: dict[str, dict] = {}
@@ -377,14 +499,17 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
             return None
         return " ".join(r.paid_by.split())[:100]
 
+    default_ref = f"id:{primary}" if primary else "none"
+
     def row_account(r: RecordIn) -> str | None:
         if opts.account_mode == "column":
-            return acc.resolve(r.account)
+            # A row with a blank account cell goes to the primary account, unless the user chose for blank cells
+            return acc.resolve(r.account) or default_ref
         if opts.account_mode == "fixed":
             return f"id:{opts.account_id}"
         if opts.account_mode == "none":
             return "none"
-        return f"id:{primary}" if primary else "none"
+        return default_ref
 
     amounts: dict[str, list] = defaultdict(list)
     for r in records:
@@ -392,11 +517,12 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
             amounts[_key(r.category)].append(r.amount)
     typical = {k: sorted(v)[len(v) // 2] for k, v in amounts.items() if len(v) >= 4}
 
+    learned = _learned_categories(db, user.id)
     out = []
     cat_stats: dict[str, Counter] = defaultdict(Counter)
     payee_moves: dict[str, dict] = {}
     first_row: dict[str, int] = {}
-    for r, fp in zip(records, fps):
+    for r, fp, seq in zip(records, fps, seqs):
         problems, warnings = [], [w for w in r.parse_warnings if w != TOTAL_LINE]
         base = fingerprint_base(r)
         # The same row twice: a duplicate in the file, unless the file gives them different times
@@ -486,19 +612,17 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         elif lock and r.date <= lock:
             state = LOCKED
             problems.append(f"Your books are locked up to {lock:%d %b %Y}: records on or before it can't be added")
-        elif fp in imported_before:
+        elif fp in imported_before or (why := imported_upi.match(r, seq)):
+            # Never imported twice: skipped automatically, while the rest of the file imports
             state = IMPORTED_BEFORE
-            earlier = db.get(ImportBatch, imported_before[fp])
-            problems.append(
-                f"Already imported from “{earlier.filename}” on {earlier.created_at:%d %b %Y}. To correct that import, use "
-                "Purge & re-import on it in Import history" if earlier else "Already imported from an earlier upload")
+            warnings.append("Already imported" + (f" ({why})" if fp not in imported_before and why else " from an earlier upload")
+                            + ": skipped automatically")
         elif repeated_of is not None:
             state = REPEATED
-            problems.append(
-                f"The same as row {repeated_of} of this file (same date, amount, account and description"
+            warnings.append(
+                f"Possibly the same as row {repeated_of} of this file (same date, amount, account and description"
                 + (", and the same time)" if r.time else ", and no time)")
-                + ". If both are real, give them their times in the file (or tell them apart in the description); "
-                  "otherwise remove one. Then upload the file again")
+                + "): imported too, untick it if it is the same payment")
 
         # The payee (UPI ID or name in the description) and the alias that will name it
         key = alias = None
@@ -541,8 +665,16 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
                 category = cat_map[ck][:50]
             elif ck and ck in known:
                 category = known[ck]
-            elif state == READY:
-                mapping_problems.append((NEEDS_CATEGORY, f"Choose a category for “{raw_cat}”" if raw_cat else "Choose a category for rows without one"))
+            elif raw_cat:  # a category the app doesn't have: the closest one, else it is created
+                category = (suggest_category(raw_cat, known) or " ".join(raw_cat.split()))[:50]
+                if state in (READY, IMPORTED_BEFORE):
+                    warnings.append(f"Category “{raw_cat}” isn't in the app: "
+                                    + (f"{category} used" if _key(category) in known else "created as a new category"))
+            else:
+                category, why = guess_category(description, key, learned, known)
+                category = category[:50]
+                if state in (READY, IMPORTED_BEFORE):
+                    warnings.append(f"Category {category}: {why} (change it if it's wrong)")
         elif r.kind == KIND_INCOME and not treated:
             # Money received is named by its source: the file's category, else (a bank statement) its description
             category = ((cat_map.get(ck) or raw_cat) if raw_cat else (description or cat_map.get(ck) or "Income"))[:100]
@@ -551,7 +683,7 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         if mapping_problems and state == READY:
             state = mapping_problems[0][0]
             problems += [m for _, m in mapping_problems]
-        if state == READY:
+        if state in (READY, REPEATED):
             dup = None
             if r.kind == KIND_TRANSFER or treated:
                 if _ref_id(account_ref) and _ref_id(to_ref):
@@ -561,24 +693,24 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
                 dup = existing.get((KIND_INCOME if r.kind == KIND_INCOME else KIND_EXPENSE, r.date, amount))
             if dup:
                 state = DUPLICATE
-                problems.append(
-                    f"Already in the app: “{dup.pop(0)}” for ₹{abs(r.amount):,.2f} on {r.date:%d %b %Y}. Remove this row from "
-                    "the file (or delete that record in the app), then upload the file again")
-        if payer_of(r) and state == READY:
+                warnings.append(f"Possible duplicate: “{dup.pop(0)}” for ₹{abs(r.amount):,.2f} on {r.date:%d %b %Y} is already in the app")
+        if payer_of(r) and state in (READY, DUPLICATE, REPEATED, IMPORTED_BEFORE):
             warnings.append(f"Paid by {payer_of(r)}: you owe them your share")
-        if treated and state == READY:
+        if treated and state in (READY, DUPLICATE, REPEATED, IMPORTED_BEFORE):
             warnings.append(f"Not spending or income: moved {'to' if r.kind == KIND_EXPENSE else 'from'} {acc.label(treated)}")
 
         to_check = bool(r.kind in (KIND_EXPENSE, KIND_SPLIT) and not treated and r.amount and ck in typical
-                        and r.amount >= max(_LARGE_ROW, typical[ck] * _LARGE_FACTOR) and state not in BLOCKING + (IGNORED,))
+                        and r.amount >= max(_LARGE_ROW, typical[ck] * _LARGE_FACTOR) and state not in BLOCKING + (IGNORED, IMPORTED_BEFORE))
         if to_check:
             warnings.append(f"Much bigger than the other “{raw_cat}” rows (usually about ₹{typical[ck]:,.0f}): "
                             "check that this is the right category")
         can = state in IMPORTABLE and can_map
+        # Only a balance / total line is left unticked; other notes (e.g. quantity read as 1) still import
+        default = can and state in (READY, REPEATED)
         out.append({
             **r.model_dump(), "paid_by": payer_of(r), "status": state, "problems": problems, "warnings": warnings, "can_import": can,
-            "default_include": can, "category_final": category, "fingerprint": fp,
-            "include": can,  # a file is imported whole: no row is left out by choice
+            "default_include": default, "category_final": category, "fingerprint": fp,
+            "include": default if fresh else r.include, "upi_seq": seq,
             "effective_kind": KIND_TRANSFER if treated else r.kind,
             "account_ref": account_ref, "to_account_ref": to_ref,
             "account_id": _ref_id(account_ref), "to_account_id": _ref_id(to_ref),
@@ -597,8 +729,9 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
     ] + sorted(payee_moves.values(), key=lambda m: (-m["rows"], m["label"]))
     account_values = acc.values()
     kinds = Counter(o["effective_kind"] for o in chosen)
-    blocked = any(o["status"] in BLOCKING for o in out)
-    earlier = Counter(imported_before[o["fingerprint"]] for o in out if o["status"] == IMPORTED_BEFORE)
+    blocked = False  # nothing blocks the file: rows that can't be imported are reported, the rest import
+    earlier = Counter(imported_before[o["fingerprint"]] for o in out
+                      if o["status"] == IMPORTED_BEFORE and o["fingerprint"] in imported_before)
     earlier_imports = []
     for bid, n in earlier.most_common():
         b = db.get(ImportBatch, bid)
@@ -643,7 +776,7 @@ def check(db: Session, user: User, records: list[RecordIn], opts: ImportOptions,
         "before_books": sum(1 for o in chosen if books_moves_to and o["date"] and o["date"] < books.books_start),
         "max_records": settings.import_max_records,
         "blocked": blocked,
-        "can_import": bool(chosen) and not blocked and not any(o["status"] in CHOICES for o in out),
+        "can_import": bool(chosen),
         "earlier_imports": earlier_imports,
         "replaces": _replace_info(db, replaces[0]) if replaces else None,
         "also_replaces": [_replace_info(db, b) for b in replaces[1:]],
@@ -741,7 +874,9 @@ def _remembered(db: Session, user_id: int, accounts: list[Account], category_val
             out["category_treatment"][v.lower()] = saved[(CHOICE_TREATMENT, k)]
     for a in account_values:
         ref = saved.get((CHOICE_ACCOUNT, _akey(a["value"])))
-        if ref and ok_ref(ref) and not ref.startswith("new:") and a["ref"] is None:
+        # Not matched to an account yet (or only to one the import would create): the earlier choice wins
+        unmatched = a["ref"] is None or (a["ref"].startswith("new:") and not a["mapped"])
+        if ref and ok_ref(ref) and not ref.startswith("new:") and unmatched:
             out["account_map"][a["value"].lower()] = None if ref == "none" else int(ref[3:])
     return {k: v for k, v in out.items() if v}
 
@@ -942,19 +1077,11 @@ def _problem_list(rows: list[dict], limit: int = 5) -> str:
 
 def start(db: Session, user: User, filename: str, file_type: str, file_hash: str | None, records: list[RecordIn],
           opts: ImportOptions, replaces_id: int | None, also_replaces: list[int] | None = None) -> ImportBatch:
-    """Start an import: the whole file is checked first, and the import starts only if every row can be imported
-    (no problem in the file, every category and account chosen). Purge & re-import: the earlier imports must be ones
-    that can be purged entirely."""
+    """Start an import: the whole file is checked first; rows that can't be imported are reported (the rest still
+    import). Purge & re-import: the earlier imports must be ones that can be purged entirely."""
     ids = [replaces_id] + [i for i in dict.fromkeys(also_replaces or []) if i != replaces_id] if replaces_id else []
     replaces = [_replaceable(db, user, i) for i in ids]
     result = check(db, user, records, opts, replaces=replaces)
-    bad = [o for o in result["records"] if o["status"] in BLOCKING]
-    if bad:
-        _bad(f"This file can't be imported: {len(bad)} row(s) have a problem in the file ({_problem_list(bad)}). "
-             "Fix the file and upload it again.")
-    open_ = [o for o in result["records"] if o["status"] in CHOICES]
-    if open_:
-        _bad(f"Choose a category or account for every row first ({_problem_list(open_)})")
     if not any(o["can_import"] for o in result["records"]):
         _bad("There is nothing to import in this file")
     batch = ImportBatch(user_id=user.id, filename=filename.strip(), file_type=file_type[:10] or "manual",
@@ -966,17 +1093,13 @@ def start(db: Session, user: User, filename: str, file_type: str, file_hash: str
 
 
 def import_chunk(db: Session, user: User, batch: ImportBatch, records: list[RecordIn], opts: ImportOptions) -> dict:
-    """Import one chunk of the file (all of it or none of it). The file was checked as a whole when the import
-    started; each chunk is checked again, and a chunk with any row that can't be imported is refused (the page then
-    takes back what the import saved so far, so the file never comes in half)."""
+    """Import one chunk of rows (all of it or none of it). Rows that can't be imported are recorded with the reason;
+    rows imported before are skipped."""
     if batch.status != IN_PROGRESS:
         _bad("This import is already finished")
     if len(records) + batch.rows_total > (batch.rows_expected or settings.import_max_records):
         _bad("More rows than the file that was checked")
     checked = check(db, user, records, opts, batch_id=batch.id, replaces=replaced_batches(db, batch))["records"]
-    bad = [r for r in checked if r["status"] not in IMPORTABLE + (IGNORED,) or (r["status"] == READY and not r["can_import"])]
-    if bad:
-        _bad(f"The import stopped: {_problem_list(bad)}. Nothing from this file is kept.", status.HTTP_409_CONFLICT)
     ctx = {"group_id": opts.split_group_id}
     counts = Counter()
     exp_total = inc_total = Decimal(0)
@@ -985,14 +1108,24 @@ def import_chunk(db: Session, user: User, batch: ImportBatch, records: list[Reco
             if r["status"] == IGNORED:
                 db.add(_record(batch, r, REC_SKIPPED, f"{TOTAL_LINE}: left out"))
                 counts[REC_SKIPPED] += 1
-                continue
-            links = _create(db, user, r, ctx)
-            db.add(_record(batch, r, REC_IMPORTED, "; ".join(r["warnings"]) or None, **links))
-            counts[REC_IMPORTED] += 1
-            if r["effective_kind"] == KIND_INCOME:
-                inc_total += Decimal(r["amount"])
-            elif r["effective_kind"] in (KIND_EXPENSE, KIND_SPLIT):
-                exp_total += Decimal(r["amount"])
+            elif r["can_import"] and r["include"]:
+                links = _create(db, user, r, ctx)
+                db.add(_record(batch, r, REC_IMPORTED, "; ".join(r["warnings"]) or None, **links))
+                counts[REC_IMPORTED] += 1
+                if r["effective_kind"] == KIND_INCOME:
+                    inc_total += Decimal(r["amount"])
+                elif r["effective_kind"] in (KIND_EXPENSE, KIND_SPLIT):
+                    exp_total += Decimal(r["amount"])
+            elif r["can_import"]:
+                db.add(_record(batch, r, REC_SKIPPED, "; ".join(r["warnings"]) or "Left out by you"))
+                counts[REC_SKIPPED] += 1
+            elif r["status"] == IMPORTED_BEFORE:
+                db.add(_record(batch, r, REC_SKIPPED, next((w for w in r["warnings"] if w.startswith("Already imported")),
+                                                           "Already imported")))
+                counts[REC_SKIPPED] += 1
+            else:
+                db.add(_record(batch, r, REC_FAILED, "; ".join(r["problems"])))
+                counts[REC_FAILED] += 1
         _add_counts(batch, counts, exp_total, inc_total)
         _remember(db, user, opts)
         if ctx.get("created_account_ids"):
@@ -1004,10 +1137,15 @@ def import_chunk(db: Session, user: User, batch: ImportBatch, records: list[Reco
     except HTTPException:
         db.rollback()
         raise
-    except Exception as exc:  # e.g. the books were locked between the check and now: nothing of this chunk is saved
+    except Exception as exc:  # e.g. the books were locked between the check and now
         db.rollback()
         message = getattr(exc, "message", None) or "These rows couldn't be saved"
-        _bad(f"The import stopped: {message}. Nothing from this file is kept.", status.HTTP_409_CONFLICT)
+        batch = db.get(ImportBatch, batch.id)
+        counts = Counter({REC_FAILED: len(checked)})
+        for r in checked:
+            db.add(_record(batch, r, REC_FAILED, message))
+        _add_counts(batch, counts, Decimal(0), Decimal(0))
+        db.commit()
     return {"imported": counts[REC_IMPORTED], "skipped": counts[REC_SKIPPED], "failed": counts[REC_FAILED],
             "accounts_created": ctx.get("created_accounts", [])}
 

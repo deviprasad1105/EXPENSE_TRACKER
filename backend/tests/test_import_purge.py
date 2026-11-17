@@ -82,10 +82,10 @@ def test_purge_and_reimport_replaces_the_earlier_import_entirely(client, make_us
     assert (detail["purge_removes"], detail["purge_edited"], detail["purge_blocks"]) == (3, 1, [])
     assert detail["undo_removes"] == 2  # Undo would keep the edited one: a purge doesn't
 
-    # The corrected file, uploaded on its own, is blocked: its rows were imported before
+    # The corrected file, uploaded on its own: its rows imported before would be skipped; that import is offered
     fixed = upload(client, me, V2, "money (fixed).csv")
     plain = preview(client, me, fixed, OPTS)
-    assert plain["blocked"] and plain["earlier_imports"][0]["id"] == first["id"]
+    assert plain["summary"]["imported_before"] and plain["earlier_imports"][0]["id"] == first["id"]
     # As a replacement of that import, nothing of it counts against the new file
     prev = preview(client, me, fixed, OPTS, replaces_id=first["id"])
     assert not prev["blocked"] and prev["can_import"]

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ArrowDownCircle, ArrowUpCircle, Plus, Trash2, Wallet } from 'lucide-react'
-import api, { errorMessage, money, todayISO } from '../api'
+import api, { errorMessage, money, niceDate, todayISO } from '../api'
+import { useRecordsChanged } from '../components/QuickAdd'
 import { useAuth } from '../auth'
 import { AccountSelect, accountLabel, useAccounts } from '../components/Accounts'
 import ReadOnlyNotice from '../components/ReadOnlyNotice'
 import { EmptyRow, Msg, PageHeader, StatTile } from '../components/ui'
+import DateInput from '../components/DateInput'
 
 export default function Funds() {
   const { params, target, user } = useAuth()
@@ -27,6 +29,7 @@ export default function Funds() {
   useEffect(() => {
     load().catch((e) => setMsg({ type: 'error', text: errorMessage(e) }))
   }, [load])
+  useRecordsChanged(useCallback(() => load().catch(() => {}), [load]))
 
   const submit = async (e) => {
     e.preventDefault()
@@ -74,7 +77,7 @@ export default function Funds() {
           <div className="form-grid">
             <div>
               <label>Date</label>
-              <input type="date" value={form.fund_date} onChange={set('fund_date')} required />
+              <DateInput value={form.fund_date} onChange={set('fund_date')} required />
             </div>
             <div>
               <label>Amount</label>
@@ -102,7 +105,7 @@ export default function Funds() {
           <h3>History</h3>
         </div>
         <div className="table-wrap" style={{ marginTop: 12 }}>
-          <table className="table">
+          <table className="table stack">
             <thead>
               <tr>
                 <th>Date</th>
@@ -116,14 +119,14 @@ export default function Funds() {
             <tbody>
               {list.map((f) => (
                 <tr key={f.id}>
-                  <td>{f.fund_date}</td>
-                  <td className="strong" title={f.raw_name && f.raw_name !== f.source ? `Original: ${f.raw_name}` : undefined}>
+                  <td data-label="Date">{niceDate(f.fund_date, { relative: true })}</td>
+                  <td data-label="Source" className="strong stack-title" title={f.raw_name && f.raw_name !== f.source ? `Original: ${f.raw_name}` : undefined}>
                     {f.source} {f.origin === 'UPI' && <span className="badge info">UPI</span>}
                     {f.alias_id && <span className="badge">alias</span>}
                   </td>
-                  <td className="muted">{f.account_id && byId[f.account_id] ? accountLabel(byId[f.account_id]) : '—'}</td>
-                  <td className="num strong" style={{ color: 'var(--success)' }}>+{money(f.amount)}</td>
-                  <td className="muted">{f.note}</td>
+                  <td data-label="Account" className="muted">{f.account_id && byId[f.account_id] ? accountLabel(byId[f.account_id]) : '—'}</td>
+                  <td data-label="Amount" className="num strong" style={{ color: 'var(--success)' }}>+{money(f.amount)}</td>
+                  <td data-label="Note" className={`muted ${f.note ? '' : 'stack-hide'}`}>{f.note}</td>
                   {target?.writable && (
                     <td>
                       <div className="actions">

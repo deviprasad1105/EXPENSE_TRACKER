@@ -20,6 +20,9 @@ import NotificationsNoneOutlined from '@mui/icons-material/NotificationsNoneOutl
 import PersonOutlineOutlined from '@mui/icons-material/PersonOutlineOutlined'
 import HomeOutlined from '@mui/icons-material/HomeOutlined'
 import ChevronRightRounded from '@mui/icons-material/ChevronRightRounded'
+import CloseRounded from '@mui/icons-material/CloseRounded'
+import ChevronLeftRounded from '@mui/icons-material/ChevronLeftRounded'
+import MenuRounded from '@mui/icons-material/MenuRounded'
 import PhonelinkRingOutlined from '@mui/icons-material/PhonelinkRingOutlined'
 import ReceiptLongOutlined from '@mui/icons-material/ReceiptLongOutlined'
 import SettingsOutlined from '@mui/icons-material/SettingsOutlined'
@@ -34,7 +37,10 @@ import { canUseSplits, hasFeature, useAuth } from '../auth'
 import Avatar from './Avatar'
 import Tour from './Tour'
 import Logo from './Logo'
-import { PageBannerContext } from './ui'
+import QuickAdd from './QuickAdd'
+import AddRounded from '@mui/icons-material/AddRounded'
+import MoreHorizRounded from '@mui/icons-material/MoreHorizRounded'
+import { PageBannerContext, PageIconContext } from './ui'
 
 const ACCESS = {
   OWNER: { label: 'Your data', cls: 'ok' },
@@ -45,6 +51,16 @@ const ACCESS = {
 }
 const ROLE_LABEL = { ADMIN: 'Administrator', ORG_ADMIN: 'Organisation admin', USER: 'User' }
 const REMIND_AFTER_HOUR = 18
+// At this width and below (tablets, phones) the sidebar is a drawer opened from the top bar
+const DRAWER_QUERY = '(max-width: 1024px)'
+
+function storedCollapsed() {
+  try {
+    return localStorage.getItem('sidebar-collapsed') === '1'
+  } catch {
+    return false
+  }
+}
 
 export default function Layout() {
   const { user, logout, accessible, target, setViewUserId, updateUser } = useAuth()
@@ -54,6 +70,27 @@ export default function Layout() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [tourOpen, setTourOpen] = useState(false)
   const [background, setBackground] = useState(null)
+  // Desktop: the sidebar can be narrowed to its icons (remembered). Tablet / phone: a drawer, closed by default.
+  const [collapsed, setCollapsed] = useState(storedCollapsed)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [quickAdd, setQuickAdd] = useState(false)
+  // "You haven't added any expenses for today" can be put away for the rest of the day
+  const [nudgeHidden, setNudgeHidden] = useState(() => {
+    try {
+      return localStorage.getItem('nudge-hidden') === todayISO()
+    } catch {
+      return false
+    }
+  })
+  const hideNudge = () => {
+    setNudgeHidden(true)
+    try {
+      localStorage.setItem('nudge-hidden', todayISO())
+    } catch {
+      /* not remembered */
+    }
+  }
+  const [isDrawer, setIsDrawer] = useState(() => window.matchMedia(DRAWER_QUERY).matches)
   const menuRef = useRef(null)
   const location = useLocation()
   const navigate = useNavigate()
@@ -96,7 +133,52 @@ export default function Layout() {
     document.addEventListener('mousedown', close)
     return () => document.removeEventListener('mousedown', close)
   }, [])
-  useEffect(() => setMenuOpen(false), [location.pathname])
+  useEffect(() => {
+    setMenuOpen(false)
+    setDrawerOpen(false)
+  }, [location.pathname])
+
+  useEffect(() => {
+    const mq = window.matchMedia(DRAWER_QUERY)
+    const change = () => {
+      setIsDrawer(mq.matches)
+      if (!mq.matches) setDrawerOpen(false)
+    }
+    mq.addEventListener('change', change)
+    return () => mq.removeEventListener('change', change)
+  }, [])
+
+  // The open drawer: Escape closes it and the page behind doesn't scroll
+  useEffect(() => {
+    if (!drawerOpen) return
+    const onKey = (e) => e.key === 'Escape' && setDrawerOpen(false)
+    document.addEventListener('keydown', onKey)
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = ''
+    }
+  }, [drawerOpen])
+
+  const toggleCollapsed = () => {
+    const next = !collapsed
+    setCollapsed(next)
+    try {
+      localStorage.setItem('sidebar-collapsed', next ? '1' : '0')
+    } catch {
+      /* private mode: not remembered */
+    }
+  }
+  const narrow = collapsed && !isDrawer
+  // The collapsed menu names each icon in a tooltip beside it (outside the scrolling list, so it isn't clipped)
+  const [tip, setTip] = useState(null)
+  const showTip = (label) => (e) => {
+    if (!narrow) return
+    const r = e.currentTarget.getBoundingClientRect()
+    setTip({ label, top: r.top + r.height / 2, left: r.right + 12 })
+  }
+  const hideTip = () => setTip(null)
+  useEffect(hideTip, [narrow, location.pathname])
 
   useEffect(() => {
     let cancelled = false
@@ -191,25 +273,53 @@ export default function Layout() {
       ],
     },
   ]
+  // The page being shown (its menu entry): its icon is shown large beside the page title
+  const path = location.pathname.replace(/\/+$/, '') || '/'
+  const pageIcon = sections
+    .flatMap((s) => s.items)
+    .filter(([to]) => to === path || (to !== '/' && path.startsWith(`${to}/`)))
+    .sort((a, b) => b[0].length - a[0].length)[0]?.[2]
   const access = ACCESS[target?.access] || ACCESS.OWNER
+  const canAdd = expense && !!target?.writable
+  // The bottom bar on phones: up to four main pages (with Add in the middle)
+  const bottomItems = sections.flatMap((s) => s.items)
+    .filter(([to]) => ['/', '/expenses', '/funds', '/reports', '/splits', '/notifications'].includes(to))
+    .slice(0, 4)
   // Only worth showing when there is someone else's data to switch to (team, organisation, shares; everyone for admin)
   const canSwitch = accessible.some((a) => a.id !== user.id)
 
   return (
-    <div className={`layout ${background ? 'has-bg' : ''}`} style={background ? { backgroundImage: `url(${background})` } : undefined}>
-      <aside className="sidebar">
+    <div
+      className={`layout ${background ? 'has-bg' : ''} ${narrow ? 'sidebar-collapsed' : ''} ${drawerOpen ? 'drawer-open' : ''}`}
+      style={background ? { backgroundImage: `url(${background})` } : undefined}
+    >
+      {drawerOpen && <div className="drawer-back" onClick={() => setDrawerOpen(false)} aria-hidden="true" />}
+      <aside className="sidebar" id="app-sidebar" aria-label="Main menu" {...(isDrawer && !drawerOpen ? { inert: '' } : {})}>
         <div className="brand">
           <Logo size={34} />
-          Expense Tracker
+          <span className="brand-name">Expense Tracker</span>
+          {isDrawer && (
+            <button className="icon-btn drawer-close" onClick={() => setDrawerOpen(false)} aria-label="Close menu">
+              <CloseRounded style={{ fontSize: 20 }} />
+            </button>
+          )}
         </div>
+        {!isDrawer && (
+          <button className="edge-toggle" onClick={toggleCollapsed} aria-label={collapsed ? 'Expand the menu' : 'Collapse the menu'}
+                  aria-expanded={!collapsed} aria-controls="app-sidebar" onMouseEnter={showTip(collapsed ? 'Expand menu' : null)} onMouseLeave={hideTip}>
+            <ChevronLeftRounded style={{ fontSize: 18 }} />
+          </button>
+        )}
         <nav className="nav">
           {sections.filter((s) => s.items.length).map((s) => (
             <div key={s.title} style={{ display: 'contents' }}>
-              <div className="nav-section">{s.title}</div>
+              <div className="nav-section"><span className="nav-label">{s.title}</span></div>
               {s.items.map(([to, label, Icon, tour, count]) => (
-                <NavLink key={to} to={to} end={to === '/'} data-tour={tour} className={({ isActive }) => (isActive ? 'active' : '')}>
+                <NavLink key={to} to={to} end={to === '/'} data-tour={tour} className={({ isActive }) => (isActive ? 'active' : '')}
+                         aria-label={narrow ? label : undefined} onMouseEnter={showTip(label)} onMouseLeave={hideTip}
+                         onFocus={showTip(label)} onBlur={hideTip}>
                   <Icon style={{ fontSize: 20 }} />
-                  {label}
+                  <span className="nav-label">{label}</span>
                   {count > 0 && <span className="pill">{count}</span>}
                 </NavLink>
               ))}
@@ -219,20 +329,28 @@ export default function Layout() {
         <div className="sidebar-foot">
           <div className="user-chip">
             <Avatar user={user} size={36} />
-            <div className="who">
+            <div className="who nav-label">
               <b>{user.full_name}</b>
               <span>@{user.username}</span>
             </div>
-            <button className="icon-btn" title="Log out" onClick={logout}>
+            <button className="icon-btn nav-label" title="Log out" onClick={logout}>
               <LogoutOutlined style={{ fontSize: 18 }} />
             </button>
           </div>
         </div>
       </aside>
+      {tip?.label && narrow && (
+        <div className="nav-tip" role="tooltip" style={{ top: tip.top, left: tip.left }}>{tip.label}</div>
+      )}
 
       <main className="main">
         <header className="topbar">
           <div className="topbar-left">
+          {isDrawer && (
+            <button className="icon-btn menu-toggle" onClick={() => setDrawerOpen(true)} aria-label="Open menu" aria-controls="app-sidebar" aria-expanded={drawerOpen}>
+              <MenuRounded style={{ fontSize: 22 }} />
+            </button>
+          )}
           <Breadcrumbs sections={sections} />
           {canSwitch && (expense || subscription) && !location.pathname.startsWith('/splits') && (
           <div className="viewing" data-tour="view-switch">
@@ -290,20 +408,48 @@ export default function Layout() {
           {/* The page shows this notice right after its header */}
           <PageBannerContext.Provider
             value={
-              todayMissing && location.pathname !== '/daily' ? (
+              todayMissing && !nudgeHidden && location.pathname !== '/daily' ? (
                 <div className="alert warn banner">
                   <WarningAmberRounded style={{ fontSize: 20 }} />
                   <span className="grow">You haven’t added any expenses for today.</span>
-                  <Link to="/daily">Add them now →</Link>
+                  {canAdd && <button className="link-btn strong" onClick={() => setQuickAdd(true)}>Add one now</button>}
+                  <Link to="/daily">Daily entry →</Link>
+                  <button className="icon-btn nudge-close" onClick={hideNudge} title="Hide for today" aria-label="Hide for today">×</button>
                 </div>
               ) : null
             }
           >
-            <Outlet />
+            <PageIconContext.Provider value={pageIcon || null}>
+              <Outlet />
+            </PageIconContext.Provider>
           </PageBannerContext.Provider>
         </div>
       </main>
-      {tourOpen && <Tour onClose={closeTour} />}
+      {canAdd && (
+        <button className="fab" data-tour="quick-add" onClick={() => setQuickAdd(true)} aria-label="Quick add an expense or money received" title="Quick add">
+          <AddRounded style={{ fontSize: 30 }} />
+          <span>Add</span>
+        </button>
+      )}
+      {/* Phones: the main places one tap away, and Add in the middle */}
+      <nav className="bottom-nav" aria-label="Main">
+        {bottomItems.map(([to, label, Icon]) => (
+          <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => (isActive ? 'active' : '')}>
+            <Icon style={{ fontSize: 24 }} />
+            <span>{label}</span>
+          </NavLink>
+        )).reduce((acc, el, i) => (i === 2 && canAdd ? [...acc, (
+          <button key="add" className="bottom-add" onClick={() => setQuickAdd(true)} aria-label="Quick add">
+            <AddRounded style={{ fontSize: 30 }} />
+          </button>
+        ), el] : [...acc, el]), [])}
+        <button className={drawerOpen ? 'active' : ''} onClick={() => setDrawerOpen(true)} aria-label="More pages">
+          <MoreHorizRounded style={{ fontSize: 24 }} />
+          <span>More</span>
+        </button>
+      </nav>
+      {quickAdd && <QuickAdd onClose={() => setQuickAdd(false)} />}
+      {tourOpen && <Tour onClose={closeTour} canSwitch={canSwitch} />}
     </div>
   )
 }

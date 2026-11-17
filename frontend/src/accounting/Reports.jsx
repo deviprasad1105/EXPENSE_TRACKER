@@ -4,6 +4,7 @@ import api, { todayISO } from '../api'
 import { Msg, PageHeader } from '../components/ui'
 import { ExportButtons, FySelect, LedgerOptions, TYPE_LABEL, useBooks, useLoad } from './common'
 import { BalanceSheetView, CashFlowView, JournalView, LedgerView, ProfitLossView, TradingView, TrialBalanceView } from './ReportViews'
+import DateInput from '../components/DateInput'
 
 export const REPORTS = [
   ['journal', 'Journal'],
@@ -87,18 +88,18 @@ export default function AccountingReports() {
         <div className="toolbar">
           {tab === 'balance-sheet' ? (
             <label className="filters">
-              As at <input type="date" value={asOf} max={todayISO()} onChange={(e) => setAsOf(e.target.value)} />
+              As at <DateInput value={asOf} max={todayISO()} onChange={(e) => setAsOf(e.target.value)} />
             </label>
           ) : (
             <>
               {s && <FySelect years={s.years} value={fy ?? s.current_fy} onChange={setFy} />}
               {RANGED.has(tab) && (
                 <label className="filters">
-                  From <input type="date" value={range.start} min={year?.start} max={year?.end} onChange={(e) => setRange({ ...range, start: e.target.value })} />
+                  From <DateInput value={range.start} min={year?.start} max={year?.end} onChange={(e) => setRange({ ...range, start: e.target.value })} />
                 </label>
               )}
               <label className="filters">
-                {RANGED.has(tab) ? 'to' : 'Up to'} <input type="date" value={range.end} min={year?.start} max={year?.end} onChange={(e) => setRange({ ...range, end: e.target.value })} />
+                {RANGED.has(tab) ? 'to' : 'Up to'} <DateInput value={range.end} min={year?.start} max={year?.end} onChange={(e) => setRange({ ...range, end: e.target.value })} />
               </label>
             </>
           )}

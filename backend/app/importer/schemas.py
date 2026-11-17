@@ -73,6 +73,11 @@ class RecordIn(BaseModel):
     # Given by /preview or /check for the whole file and sent back with each chunk, so identical rows split over
     # chunks keep their numbering (#1, #2…)
     fingerprint: str | None = Field(default=None, max_length=64)
+    # Which payment this is to its UPI ID on its date for its amount (1, 2…) in the whole file: given by /preview
+    # and sent back with each chunk, so rows imported before are matched one for one across chunks
+    upi_seq: int | None = Field(default=None, ge=1)
+    # The statement's running balance on this row (not imported: used to check the file was read right)
+    balance: Decimal | None = None
 
 
 class RecordOut(RecordIn):
@@ -101,6 +106,8 @@ class RecordOut(RecordIn):
 class PreviewIn(BaseModel):
     rows: list[list[str]] = Field(max_length=25_000)
     mapping: Mapping
+    # The file's other tables (a PDF's summary block is often one): read for the statement's totals only
+    other_tables: list[list[list[str]]] = Field(default_factory=list, max_length=50)
     options: ImportOptions = Field(default_factory=ImportOptions)
     # Purge & re-import: the earlier import this file replaces (its records don't count as duplicates), and any
     # other imports it replaces too (e.g. a month that was purged and imported again on its own)
@@ -108,11 +115,19 @@ class PreviewIn(BaseModel):
     also_replaces: list[int] = Field(default_factory=list, max_length=20)
 
 
+class AnalyseIn(BaseModel):
+    records: list[RecordIn]
+    # The rows to work out (the others are the context: neighbouring dates and balances)
+    row_nos: list[int] = Field(max_length=5000)
+
+
 class CheckIn(BaseModel):
     records: list[RecordIn]
     options: ImportOptions = Field(default_factory=ImportOptions)
     replaces_id: int | None = None
     also_replaces: list[int] = Field(default_factory=list, max_length=20)
+    # The statement's own figures, as /preview read them: the records are checked against them again
+    statement: dict[str, str] | None = None
 
 
 class CheckOut(BaseModel):
@@ -146,6 +161,9 @@ class CheckOut(BaseModel):
     replaces: dict | None = None
     # ... and the other imports it replaces too (same shape)
     also_replaces: list[dict] = []
+    # The statement's own figures (opening / closing balance, totals, counts) and how the records compare with them
+    statement: dict[str, str] | None = None
+    statement_check: dict | None = None
 
 
 class BatchIn(BaseModel):

@@ -45,6 +45,8 @@ class Mapping(BaseModel):
     split_with: int | None = Field(default=None, ge=0)
     # Who paid a shared bill (blank / "me" = the user)
     paid_by: int | None = Field(default=None, ge=0)
+    # A statement's running balance: not imported, used to check every row was read right (see reconcile.py)
+    balance: int | None = Field(default=None, ge=0)
     date_order: str = Field(default="DMY", pattern="^(DMY|MDY|YMD)$")
     # What a plain amount is when nothing else says: EXPENSE, INCOME, or SIGN (negative = expense)
     default_type: str = Field(default=KIND_EXPENSE, pattern="^(EXPENSE|INCOME|SIGN)$")
@@ -199,6 +201,8 @@ SYNONYMS = {
                "inflow", "income amount", "in"],
     "amount": ["amount", "amt", "total", "cost", "price", "value", "inr", "rs", "rupees", "sum", "expense",
                "transaction amount"],
+    "balance": ["balance", "closing balance", "running balance", "available balance", "balance amount", "balance amt",
+                "bal", "balance inr", "balance rs"],
     "my_share": ["my share", "your share", "own share", "my part", "share"],
     "paid_by": ["paid by", "payer", "who paid", "paid by whom", "paid by person"],
     "split_with": ["split with", "shared with", "paid for", "split between", "friends", "participants", "people"],
@@ -216,7 +220,7 @@ SYNONYMS = {
                     "title", "name", "transaction details", "transaction description", "purpose", "expense name",
                     "for", "what"],
 }
-ORDER = ("time", "date", "debit", "credit", "my_share", "paid_by", "split_with", "amount", "type", "category", "to_account", "account",
+ORDER = ("time", "date", "debit", "credit", "balance", "my_share", "paid_by", "split_with", "amount", "type", "category", "to_account", "account",
          "quantity", "note", "description")
 
 
@@ -341,7 +345,10 @@ _TRANSFER_WORDS = {"transfer", "contra", "self", "internal", "move", "moved"}
 _OPENING_LINE = re.compile(r"\bopening\s+bal|\bbal(ance)?\s*(b/?f|c/?f|bf|cf|brought forward|carried forward)\b|"
                            r"\b(b/?f|c/?f|brought forward|carried forward)\b.*\bbal(ance)?\b", re.I)
 # Not a transaction: totals and closing balances
-_TOTAL_LINE = re.compile(r"^(grand )?total\b|\bsub ?total\b|\bclosing\s+bal|^balance$", re.I)
+_TOTAL_LINE = re.compile(r"^(grand )?total\b|\bsub ?total\b|\btotals?\s*:?$|\bclosing\s+bal|^balance$", re.I)
+# A statement's summary line ("TRANSACTION TOTAL", "Closing balance", "Statement summary"): without a date it is
+# skipped like a heading, not listed as a record with a problem
+_SUMMARY_LINE = re.compile(r"\btotals?\b|\bbalance\b|\bsummary\b|carried forward|brought forward|\bc/?f\b|\bb/?f\b", re.I)
 _ARROW = re.compile(r"\s*(?:->|→|=>|➔|>)\s*")
 
 
@@ -373,7 +380,7 @@ def parse_names(text: str) -> list[str]:
 
 def parse_records(rows: list[list[str]], m: Mapping, today: date) -> tuple[list[dict], int]:
     """Records from the rows under the heading row, and how many rows were ignored (blank or without a date or
-    any amount: page headings, separators). Every record keeps its row number and the reasons it can't be imported."""
+    any amount: page headings, separators; dateless total / balance lines). Every record keeps its row number and the reasons it can't be imported."""
     if m.date is None:
         raise ValueError("Choose the column that holds the date")
     if m.amount is None and m.debit is None and m.credit is None:
@@ -392,6 +399,15 @@ def parse_records(rows: list[list[str]], m: Mapping, today: date) -> tuple[list[
         money_cells = [cell(row, c) for c in (m.amount, m.debit, m.credit) if c is not None]
         if not raw_date and not any(money_cells):
             ignored += 1
+            continue
+        labels_above = index > start and sum(1 for c in rows[index - 1] if _summary_label(c)) >= 2
+        if (not raw_date or parse_date(raw_date, m.date_order) is None) and (
+            labels_above  # the values row of a summary block ("Opening Balance | Dr Count | Debits…" above it)
+            or _SUMMARY_LINE.search(" ".join(row))
+            or any(_summary_label(c) for c in row)  # "Debits", "Dr Count", "Total Withdrawals"…
+            or (m.debit is not None and m.credit is not None and cell(row, m.debit) and cell(row, m.credit))
+        ):
+            ignored += 1  # a dateless total / balance line (it often has both a debit and a credit total)
             continue
         errors, warnings = [], []
         description = cell(row, desc_col)
@@ -504,8 +520,14 @@ def parse_records(rows: list[list[str]], m: Mapping, today: date) -> tuple[list[
         elif _TOTAL_LINE.search(description) or (not description and _TOTAL_LINE.search(" ".join(row))):
             warnings.append("Looks like a balance or total line, not a transaction")
 
+        balance = None
+        if m.balance is not None and cell(row, m.balance):
+            value, side, err = parse_money(cell(row, m.balance))
+            if not err and value is not None:
+                balance = -abs(value) if side == "DR" else value
         records.append({
             "row_no": index + 1,
+            "balance": str(balance) if balance is not None else None,
             "kind": kind,
             "date": d.isoformat() if d else None,
             "time": clock,
@@ -532,6 +554,12 @@ _ME = {"", "me", "i", "self", "myself", "mine", "you", "own", "my self"}
 def is_me(name: str | None) -> bool:
     """A "Paid by" value meaning the user (blank, "me", "self"…)."""
     return _norm(name) in _ME
+
+
+def _summary_label(cell) -> bool:
+    from .reconcile import _label  # (reconcile imports this module)
+
+    return _label(cell) is not None
 
 
 def _check_openings(records: list[dict]) -> None:

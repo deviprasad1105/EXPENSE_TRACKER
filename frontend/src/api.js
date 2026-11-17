@@ -92,6 +92,19 @@ export async function download(url, params, fallbackName) {
 export const money = (v) =>
   Number(v || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 })
 
+/** "10 Oct 2026" from "2026-10-10" ("Today" / "Yesterday" when `relative`). */
+export function niceDate(iso, { relative = false, weekday = false } = {}) {
+  if (!iso) return ''
+  const d = new Date(`${String(iso).slice(0, 10)}T00:00`)
+  if (Number.isNaN(d.getTime())) return iso
+  if (relative) {
+    const days = Math.round((new Date(`${todayISO()}T00:00`) - d) / 86400000)
+    if (days === 0) return 'Today'
+    if (days === 1) return 'Yesterday'
+  }
+  return d.toLocaleDateString('en-IN', { ...(weekday ? { weekday: 'short' } : {}), day: 'numeric', month: 'short', year: 'numeric' })
+}
+
 export const todayISO = () => {
   const d = new Date()
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10)

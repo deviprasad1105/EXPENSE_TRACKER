@@ -5,6 +5,7 @@ import Modal from '../components/Modal'
 import ReadOnlyNotice from '../components/ReadOnlyNotice'
 import { EmptyRow, Msg, PageHeader } from '../components/ui'
 import { Amt, ExportButtons, fmtDate, isCashBank, LedgerOptions, TYPE_LABEL, useBooks, useLoad } from './common'
+import DateInput from '../components/DateInput'
 
 const FIELDS = [
   ['date_col', 'Date', true],
@@ -167,7 +168,7 @@ export default function BankReconciliation() {
             </div>
             <div className="filters">
               <label className="filters">
-                As at <input type="date" value={asOf} max={todayISO()} onChange={(e) => setAsOf(e.target.value)} />
+                As at <DateInput value={asOf} max={todayISO()} onChange={(e) => setAsOf(e.target.value)} />
               </label>
               <ExportButtons url="/accounting/reports/bank-reconciliation" params={{ ...params, ledger_id: ledgerId, as_of: asOf }} name="bank_reconciliation" onError={(text) => setMsg({ type: 'error', text })} />
             </div>

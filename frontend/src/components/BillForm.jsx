@@ -4,6 +4,7 @@ import api, { errorMessage, money, todayISO } from '../api'
 import { useAuth } from '../auth'
 import Modal from './Modal'
 import { Msg } from './ui'
+import DateInput from './DateInput'
 
 /** A group member (app user or guest) by name, "You" for the signed-in user. */
 export const personName = (p, me) => (p.user_id === me.id ? 'You' : p.full_name)
@@ -119,7 +120,7 @@ export default function BillForm({ group, bill, onClose, onSaved }) {
           </div>
           <div>
             <label>Date</label>
-            <input type="date" max={todayISO()} value={form.bill_date} onChange={set('bill_date')} required />
+            <DateInput max={todayISO()} value={form.bill_date} onChange={set('bill_date')} required />
           </div>
           <div>
             <label>Paid by</label>

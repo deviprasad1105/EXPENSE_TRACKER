@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowRight, Download, FileUp, History, Keyboard, Plus, RefreshCw, Sparkles, Tag, Trash2, Upload } from 'lucide-react'
+import {
+  ArrowLeft, ArrowRight, Check, CircleCheckBig, Columns3, FileCheck2, FileUp, History, Keyboard, ListChecks, Lock, Plus, RefreshCw,
+  SkipForward, Sparkles, Trash2, UploadCloud, UsersRound, WandSparkles,
+} from 'lucide-react'
 import api, { errorMessage, money, todayISO } from '../api'
 import { useAuth } from '../auth'
 import { ACCOUNT_KINDS } from '../components/Accounts'
 import { Alert, EmptyRow, Msg, PageHeader } from '../components/ui'
+import DateInput from '../components/DateInput'
 
 export const ACCEPT = '.xlsx,.xls,.csv,.txt,.pdf,.docx,.doc'
 const PAGE = 50
@@ -36,34 +40,32 @@ const ROLES = [
   ['to_account', 'To account (transfers)'],
   ['my_share', 'My share (split bills)'],
   ['paid_by', 'Paid by (split bills; blank = you)'],
+  ['balance', 'Balance (checks the statement; not imported)'],
   ['split_with', 'Split with (names)'],
   ['quantity', 'Quantity'],
   ['note', 'Note'],
 ]
 export const STATUS = {
   READY: ['ok', 'Ready'],
-  INVALID: ['bad', 'Problem in the file'],
+  INVALID: ['bad', 'Problem'],
   LOCKED: ['bad', 'Locked period'],
-  NEEDS_CATEGORY: ['warn', 'Choose a category'],
-  NEEDS_ACCOUNT: ['warn', 'Choose an account'],
-  DUPLICATE: ['bad', 'Already in the app'],
-  IMPORTED_BEFORE: ['bad', 'Already imported'],
-  REPEATED: ['bad', 'Repeated in the file'],
+  NEEDS_CATEGORY: ['warn', 'Needs a category'],
+  NEEDS_ACCOUNT: ['warn', 'Needs an account'],
+  DUPLICATE: ['warn', 'Possible duplicate'],
+  IMPORTED_BEFORE: ['info', 'Already imported · skipped'],
+  REPEATED: ['warn', 'Repeated in the file'],
   IGNORED: ['info', 'Not a transaction'],
 }
-// Problems in the file: any of them blocks the whole file
-const BLOCKING = ['INVALID', 'LOCKED', 'DUPLICATE', 'IMPORTED_BEFORE', 'REPEATED']
-// [key, label, test, shown even when empty]
 const FILTERS = [
-  ['all', 'All', () => true, true],
-  ['ready', 'Ready', (r) => r.status === 'READY' && r.can_import, true],
-  ['problems', 'Problems in the file', (r) => BLOCKING.includes(r.status)],
-  ['choose', 'To choose', (r) => r.status === 'NEEDS_CATEGORY' || r.status === 'NEEDS_ACCOUNT'],
-  ['check', 'To check', (r) => r.to_check],
-  ['transfers', 'Transfers', (r) => r.effective_kind === 'TRANSFER' || r.kind === 'OPENING', true],
-  ['ignored', 'Not transactions', (r) => r.status === 'IGNORED'],
+  ['all', 'All', () => true],
+  ['ready', 'Ready', (r) => r.status === 'READY'],
+  ['attention', 'Needs attention', (r) => !r.can_import && r.status !== 'IMPORTED_BEFORE' && r.status !== 'IGNORED'],
+  ['imported', 'Already imported', (r) => r.status === 'IMPORTED_BEFORE'],
+  ['duplicates', 'Possible duplicates', (r) => r.status === 'DUPLICATE' || r.status === 'REPEATED'],
+  ['transfers', 'Transfers', (r) => r.effective_kind === 'TRANSFER' || r.kind === 'OPENING'],
+  ['out', 'Left out', (r) => r.can_import && !r.include],
+  ['statement', 'Statement mismatch', (r) => (r.warnings || []).some((w) => w.includes('misread or is missing') || w.includes('closing balance') || w.includes('No amount or type'))],
 ]
-
 /** Remove an import entirely, a few hundred records per request (Purge & re-import, or taking back a stopped import). */
 export async function purgeAll(batchId, onProgress) {
   let removed = 0
@@ -75,18 +77,6 @@ export async function purgeAll(batchId, onProgress) {
   }
 }
 
-// The rows with problems, as a CSV to fix the file with
-function problemsCsv(filename, rows) {
-  const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
-  const lines = [['Row', 'Date', 'Description', 'Amount', 'Problem'].map(q).join(',')]
-  for (const r of rows) lines.push([r.row_no, r.date, r.description, r.amount, (r.problems || []).join('; ')].map(q).join(','))
-  const url = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${filename.replace(/\.[^.]+$/, '')} - problems.csv`
-  a.click()
-  URL.revokeObjectURL(url)
-}
 const KIND_NAME = { WALLET: 'wallet', CASH: 'cash account', SAVINGS: 'bank account', CURRENT: 'bank account', SALARY: 'bank account' }
 
 // Accounts (bank, cash, wallet) that would end below zero: some of their rows are probably missing from the file
@@ -114,12 +104,12 @@ function BelowZero({ warnings }) {
     </Alert>
   )
 }
+
 export const KIND_LABEL = { EXPENSE: 'Expense', INCOME: 'Income', SPLIT: 'Split bill', TRANSFER: 'Transfer', OPENING: 'Opening balance' }
 // What a category can be moved to instead of counting as spending / income
 const TREAT_NEW = [
   ['new:INVESTMENT:Investments', 'Investments (new account)'],
   ['new:RECEIVABLE:Money with others', 'Money with others (new account)'],
-  ['new:CASH:Cash', 'Cash (new account)'],
 ]
 const col = (i) => (i >= 26 ? String.fromCharCode(64 + Math.floor(i / 26)) : '') + String.fromCharCode(65 + (i % 26))
 
@@ -128,7 +118,7 @@ export function ImportTabs({ active }) {
   return (
     <div className="segmented">
       <button className={active === 'new' ? 'on' : ''} onClick={() => navigate('/import')}>
-        <FileUp size={14} /> Import
+        <FileUp size={14} /> New import
       </button>
       <button className={active === 'purge' ? 'on' : ''} onClick={() => navigate('/import/purge')}>
         <Trash2 size={14} /> Purge
@@ -140,47 +130,131 @@ export function ImportTabs({ active }) {
   )
 }
 
+// The import, one step at a time
+const STEPS = [
+  { title: 'Upload', hint: 'Choose the file', Icon: UploadCloud },
+  { title: 'Columns', hint: 'What each column holds', Icon: Columns3 },
+  { title: 'Payees', hint: 'Name them, or skip', Icon: UsersRound },
+  { title: 'Needs action', hint: 'Fix, auto-analyse or skip', Icon: WandSparkles },
+  { title: 'Review & import', hint: 'Check and import', Icon: FileCheck2 },
+]
+
+function Stepper({ current, done }) {
+  return (
+    <ol className="stepper" aria-label="Import steps">
+      {STEPS.map(({ title, hint, Icon }, i) => {
+        const state = done || i < current ? 'done' : i === current ? 'current' : 'todo'
+        return (
+          <li key={title} className={`step ${state}`} aria-current={state === 'current' ? 'step' : undefined}>
+            <span className="step-icon">{state === 'done' ? <Check size={26} strokeWidth={2.6} /> : <Icon size={26} />}</span>
+            <span className="step-text">
+              <small>Step {i + 1}</small>
+              <b>{title}</b>
+              <span>{hint}</span>
+            </span>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+/** Back / Next at the foot of each step (stays in view while the step scrolls). */
+function StepNav({ onBack, backLabel = 'Back', onNext, nextLabel = 'Next', nextDisabled, note, children }) {
+  return (
+    <div className="step-nav">
+      {onBack ? (
+        <button className="btn secondary" onClick={onBack}>
+          <ArrowLeft size={16} /> {backLabel}
+        </button>
+      ) : <span />}
+      <span className="step-note muted small">{note}</span>
+      {children || (onNext && (
+        <button className="btn" onClick={onNext} disabled={nextDisabled}>
+          {nextLabel} <ArrowRight size={16} />
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export default function ImportRecords() {
   const { target, user } = useAuth()
   const [msg, setMsg] = useState(null)
   const [file, setFile] = useState(null) // what /extract returned
-  const [review, setReview] = useState(null) // { filename, file_type, file_hash }
+  const [step, setStep] = useState(0) // 0 upload, 1 columns; 2-4 are inside Review
+  const [review, setReview] = useState(null) // { filename, file_type, file_hash, rows, mapping }
+  const [reviewStep, setReviewStep] = useState(2)
   const [result, setResult] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const [locked, setLocked] = useState(null) // { f, error }: a password-protected file waiting for its password
   const viewingOther = target && target.id !== user.id
   // Purge & re-import: the earlier import the next file replaces (from Import history, or offered after an upload)
   const [params, setParams] = useSearchParams()
   const replaceId = Number(params.get('replace')) || null
   const setReplace = (id) => setParams(id ? { replace: String(id) } : {})
 
-  const choose = async (input) => {
-    const f = input.files[0]
-    input.value = '' // so choosing the same file again still triggers a read
-    if (!f) return
+  // Read a file; a locked one (423) asks for its password and is sent again with it. The password is only sent
+  // with this upload: it is never saved.
+  const read = async (f, password) => {
     setMsg(null)
-    setResult(null)
-    setReview(null)
-    setFile(null)
     setBusy(true)
     const form = new FormData()
     try {
       const [body, name] = await uploadable(f)
       form.append('file', body, name)
+      if (password) form.append('password', password)
       const res = await api.post('/imports/extract', form)
+      setLocked(null)
       setFile(res.data)
     } catch (err) {
-      setMsg({ type: 'error', text: errorMessage(err) })
+      if (err.response?.status === 423) setLocked({ f, error: password ? errorMessage(err) : null })
+      else {
+        setLocked(null)
+        setMsg({ type: 'error', text: errorMessage(err) })
+      }
     } finally {
       setBusy(false)
     }
+  }
+
+  const take = (f) => {
+    if (!f) return
+    setResult(null)
+    setReview(null)
+    setFile(null)
+    setLocked(null)
+    setStep(0)
+    read(f)
+  }
+  const choose = (input) => {
+    const f = input.files[0]
+    input.value = '' // so choosing the same file again still triggers a read
+    take(f)
+  }
+  const drop = (e) => {
+    e.preventDefault()
+    setDragging(false)
+    if (!busy) take(e.dataTransfer.files?.[0])
   }
 
   const startManual = () => {
     setMsg(null)
     setResult(null)
     setFile(null)
+    setReviewStep(4)
     setReview({ filename: 'Typed by hand', file_type: 'manual', file_hash: null, rows: null, mapping: null })
   }
+  const restart = () => {
+    setResult(null)
+    setFile(null)
+    setReview(null)
+    setStep(0)
+    setMsg(null)
+    setReplace(null)
+  }
+  const current = result ? STEPS.length : review ? reviewStep : step
 
   return (
     <div>
@@ -188,64 +262,211 @@ export default function ImportRecords() {
         <ImportTabs active="new" />
       </PageHeader>
       {viewingOther && <Alert type="info">Imports always go into your own account, not the data you are viewing.</Alert>}
+      <Stepper current={current} done={!!result} />
       <Msg msg={msg} />
       {replaceId && !result && (
         <Alert type="info">
-          Purge &amp; re-import: the file you choose replaces an earlier import. Once every row of it is checked and imported,
-          that import’s records are removed (also those edited since). If the file has a problem, nothing changes.{' '}
+          Purge &amp; re-import: the file you choose replaces an earlier import. Once it is imported, that import’s records are removed
+          (also those edited since).{' '}
           <button className="btn ghost small" onClick={() => setReplace(null)}>Cancel</button>
         </Alert>
       )}
 
       {result ? (
-        <Done result={result} onAgain={() => { setResult(null); setFile(null); setReview(null); setReplace(null) }} />
+        <Done result={result} onAgain={restart} />
       ) : review ? (
         <Review
           key={`${replaceId || 0}`}
           source={review}
           replaceId={replaceId}
           onReplace={setReplace}
-          onCancel={() => setReview(null)}
+          step={reviewStep}
+          setStep={setReviewStep}
+          onBack={() => { setReview(null); setStep(file ? 1 : 0) }}
+          onCancel={restart}
           onDone={(r) => { setReview(null); setFile(null); setResult(r) }}
           onError={(text) => setMsg({ type: 'error', text })}
         />
+      ) : step === 1 && file ? (
+        <Columns
+          file={file}
+          onBack={() => setStep(0)}
+          onRead={(rows, mapping, tableIndex) => {
+            setReviewStep(2)
+            setReview({ ...file, rows, mapping, other_tables: summaryRows(file.tables, tableIndex) })
+          }}
+          onError={(text) => setMsg({ type: 'error', text })}
+        />
       ) : (
-        <>
-          <div className="card">
-            <div className="card-head wrap">
-              <div>
-                <h3>1. Upload a file</h3>
-                <p>Excel (.xlsx, .xls), CSV, PDF or Word (.docx), up to 5 MB (bigger files are compressed before uploading) and about 5,000 records. Any column names and date or amount formats: you check what was read before anything is saved.</p>
-              </div>
-              <div className="filters">
-                <button className="btn secondary" onClick={startManual}>
-                  <Keyboard size={16} /> Type records instead
-                </button>
-                <label className="btn">
-                  <Upload size={16} /> {busy ? 'Reading…' : file ? file.filename : 'Choose file'}
-                  <input type="file" accept={ACCEPT} hidden disabled={busy} onChange={(e) => choose(e.target)} />
-                </label>
-              </div>
-            </div>
-            <p className="hint">
-              Scanned PDFs and photos of receipts can’t be read yet. Old Word .doc files: save them as .docx or PDF first.
-            </p>
-          </div>
+        <div className="card">
+          <label
+            className={`dropzone ${dragging ? 'over' : ''} ${file ? 'has-file' : ''}`}
+            onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={drop}
+          >
+            <input type="file" accept={ACCEPT} hidden disabled={busy} onChange={(e) => choose(e.target)} />
+            <span className="dropzone-icon">
+              {busy ? <RefreshCw size={44} className="spin" /> : file ? <CircleCheckBig size={44} /> : <UploadCloud size={44} />}
+            </span>
+            {busy ? (
+              <b>Reading the file…</b>
+            ) : file ? (
+              <>
+                <b>{file.filename}</b>
+                <span className="muted">
+                  {file.tables.length} table(s) found · {file.tables[file.table_index]?.rows.length ?? 0} rows in the main one. Click to choose another file.
+                </span>
+              </>
+            ) : (
+              <>
+                <b>Drop your file here, or click to choose</b>
+                <span className="muted">Excel (.xlsx, .xls), CSV, PDF or Word (.docx) · up to 5 MB and about 5,000 records</span>
+              </>
+            )}
+          </label>
           {file?.already_imported && !replaceId && (
             <Alert type="warn">
               This file was imported on {new Date(file.already_imported.date).toLocaleDateString('en-IN')} as “{file.already_imported.filename}”
-              ({file.already_imported.rows} records), so it can’t be imported again. To correct that import, replace it with this file:{' '}
+              ({file.already_imported.rows} records). Rows already imported are recognised and skipped. To correct that import instead,
+              replace it with this file:{' '}
               <button className="btn small" onClick={() => setReplace(file.already_imported.batch_id)}>Purge &amp; re-import</button>
             </Alert>
           )}
-          {file && <Columns file={file} onRead={(rows, mapping) => setReview({ ...file, rows, mapping })} onError={(text) => setMsg({ type: 'error', text })} />}
+          {locked && (
+            <PasswordPrompt
+              key={locked.f.name}
+              filename={locked.f.name}
+              error={locked.error}
+              busy={busy}
+              onSubmit={(pw) => read(locked.f, pw)}
+              onCancel={() => setLocked(null)}
+            />
+          )}
+          <p className="hint" style={{ marginTop: 12 }}>
+            Password-protected statements are fine: you’ll be asked for the password. Scanned PDFs and photos of receipts can’t be read yet;
+            old Word .doc files: save them as .docx or PDF first.
+          </p>
+          <StepNav
+            note={file ? 'Next: check what each column holds' : null}
+            onNext={file ? () => setStep(1) : null}
+            nextLabel="Next: columns"
+          >
+            {!file && (
+              <button className="btn secondary" onClick={startManual}>
+                <Keyboard size={16} /> Type records instead
+              </button>
+            )}
+          </StepNav>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Rows of the file's other tables that may hold the statement's totals (a label row and the row below it)
+const SUMMARY_WORDS = /total|balance|debit|credit|withdraw|deposit|count|brought|carried|\bdr\b|\bcr\b/i
+function summaryRows(tables, current) {
+  return (tables || [])
+    .filter((_, i) => i !== current)
+    .map((t) => t.rows.filter((r, i) => SUMMARY_WORDS.test(r.join(' ')) || (i > 0 && SUMMARY_WORDS.test(t.rows[i - 1].join(' ')))).slice(0, 200))
+    .filter((rows) => rows.length)
+    .slice(0, 20)
+}
+
+/** The records compared with the statement's own figures: totals, counts, opening → closing balance, running balance. */
+function StatementCheck({ check, accept, setAccept, onShowRows }) {
+  if (!check) return null
+  if (!check.available)
+    return <p className="hint">This file has no totals or balance column to check the records against: compare the totals below with your statement before importing.</p>
+  const rows = check.balances_verified ? ` · running balance checked on ${check.balances_verified} row(s) (${check.balance_order})` : ''
+  return (
+    <div className={`statement-check ${check.ok ? 'ok' : 'bad'}`}>
+      <div className="strong">
+        {check.ok ? '✓ Matches the statement' : '✗ The records don’t match the statement'}
+        <span className="muted small" style={{ fontWeight: 400 }}>{rows}</span>
+      </div>
+      {check.checks.length > 0 && (
+        <div className="table-wrap">
+          <table className="table compact">
+            <thead>
+              <tr><th>Check</th><th className="num">Statement says</th><th className="num">Read from the file</th><th></th></tr>
+            </thead>
+            <tbody>
+              {check.checks.map((c) => (
+                <tr key={c.key}>
+                  <td>{c.label}</td>
+                  <td className="num">{c.statement}</td>
+                  <td className="num">{c.read}</td>
+                  <td>{c.ok ? <span className="badge ok">OK</span> : <span className="badge bad">Off by {c.difference}</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {check.row_issue_count > 0 && (
+        <>
+          <ul className="statement-issues">
+            {check.row_issues.slice(0, 5).map((i, k) => (
+              <li key={k}>Row {i.row_no}: {i.message}</li>
+            ))}
+            {check.row_issue_count > 5 && <li>…and {check.row_issue_count - 5} more</li>}
+          </ul>
+          <button className="btn secondary small" onClick={onShowRows}>Show these rows</button>
+        </>
+      )}
+      {!check.ok && (
+        <>
+          <p className="hint" style={{ margin: 0 }}>
+            Usually a row was read wrongly or missed (e.g. in a PDF). Correct the amount on the row shown, add the missing record, or check the
+            column choices (Start over). Import stays off until the records match, or you confirm below.
+          </p>
+          <label className="check">
+            <input type="checkbox" checked={accept} onChange={(e) => setAccept(e.target.checked)} />
+            I’ve checked the differences and want to import anyway
+          </label>
         </>
       )}
     </div>
   )
 }
 
-function Columns({ file, onRead, onError }) {
+function PasswordPrompt({ filename, error, busy, onSubmit, onCancel }) {
+  const [password, setPassword] = useState('')
+  const submit = (e) => {
+    e.preventDefault()
+    if (password) onSubmit(password)
+  }
+  return (
+    <form className="password-prompt" onSubmit={submit}>
+      <p>
+        <Lock size={14} /> <strong>{filename}</strong> is password-protected. Enter the password to open it (bank statements often use
+        part of your name, date of birth or customer ID). It is only used to read the file and isn’t saved.
+      </p>
+      {error && <Alert type="error">{error}</Alert>}
+      <div className="filters">
+        <input
+          type="password"
+          autoFocus
+          autoComplete="off"
+          placeholder="File password"
+          value={password}
+          disabled={busy}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        <button className="btn" type="submit" disabled={busy || !password}>
+          {busy ? 'Opening…' : 'Open file'}
+        </button>
+        <button className="btn secondary" type="button" disabled={busy} onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function Columns({ file, onRead, onBack, onError }) {
   const [tableIndex, setTableIndex] = useState(file.table_index)
   const [mapping, setMapping] = useState(file.guess)
   const table = file.tables[tableIndex]
@@ -278,7 +499,7 @@ function Columns({ file, onRead, onError }) {
     <div className="card">
       <div className="card-head wrap">
         <div>
-          <h3>2. Check the columns</h3>
+          <h3>Check the columns</h3>
           <p>We guessed what each column holds. Change anything that’s wrong; columns left as “—” are not used.</p>
         </div>
       </div>
@@ -339,12 +560,7 @@ function Columns({ file, onRead, onError }) {
           </div>
         )}
       </div>
-      {table.truncated && (
-        <Alert type="error">
-          This table has {(table.total_rows || rows.length).toLocaleString('en-IN')} rows; up to about 5,000 records can be imported at once.
-          Split it into smaller files (for example one per year) and import them one after another.
-        </Alert>
-      )}
+      {table.truncated && <Alert type="warn">This table is longer than the import limit: only its first rows are shown and read.</Alert>}
       <div className="table-wrap" style={{ maxHeight: 260, marginTop: 14 }}>
         <table className="mini-table">
           <thead>
@@ -368,18 +584,18 @@ function Columns({ file, onRead, onError }) {
           </tbody>
         </table>
       </div>
-      <div className="form-actions" style={{ marginTop: 14 }}>
-        <span className="muted small grow-space">{missing || `${rows.length - start - (mapping.header_row >= 0 ? 1 : 0)} rows under the heading`}</span>
-        <button className="btn" disabled={!!missing || table.truncated} onClick={() => onRead(rows, mapping)}>
-          Read the records
-        </button>
-      </div>
+      <StepNav
+        onBack={onBack}
+        note={missing || `${rows.length - start - (mapping.header_row >= 0 ? 1 : 0)} rows under the heading`}
+        onNext={() => onRead(rows, mapping, tableIndex)}
+        nextDisabled={!!missing}
+        nextLabel="Next: read the records"
+      />
     </div>
   )
 }
 
-function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
-  const fromFile = !!source.rows // rows from a file can't be changed here: the file is fixed and uploaded again
+function Review({ source, replaceId, onReplace, step, setStep, onBack, onCancel, onDone, onError }) {
   const [records, setRecords] = useState([])
   const [info, setInfo] = useState(null) // the last check: summary, categories, accounts…
   // A file with an account column uses it (transfers and opening balances name their accounts anyway)
@@ -388,13 +604,17 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
     category_map: {}, category_treatment: {}, split_group_id: null,
   })
   const [checking, setChecking] = useState(false)
-  const [remembered, setRemembered] = useState(null) // what was filled in from the last import
+  const [statement, setStatement] = useState(null) // the statement's own totals / balances, as /preview read them
+  const [acceptMismatch, setAcceptMismatch] = useState(false)
   const [filter, setFilter] = useState('all')
   const [page, setPage] = useState(0)
   const [progress, setProgress] = useState(null)
   // Alias names / categories typed in "Payees in this file", not saved yet: { payee key: { alias, category } }
   const [drafts, setDrafts] = useState({})
   const [renameOld, setRenameOld] = useState(true)
+  const [skippedPayees, setSkippedPayees] = useState(() => new Set())
+  const [skippedRows, setSkippedRows] = useState(() => new Set())
+  const [remembered, setRemembered] = useState(null) // what was filled in from the last import
   // Purge & re-import: other imports this file replaces too (rows of it that came in with another file)
   const [also, setAlso] = useState([])
   const version = useRef(0)
@@ -402,7 +622,10 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
 
   const apply = (data) => {
     setInfo(data)
-    setRecords(data.records)
+    // A row fixed since the last check (problem → importable) is ticked as a new row would be
+    setRecords((prev) =>
+      data.records.map((r, i) => (prev[i] && !prev[i].can_import && r.can_import ? { ...r, include: r.default_include } : r)),
+    )
   }
 
   // First read: parse the table (or start an empty list when typing by hand)
@@ -411,8 +634,12 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
       setChecking(true)
       try {
         const res = source.rows
-          ? await api.post('/imports/preview', { rows: source.rows, mapping: source.mapping, options, replaces_id: replaceId, also_replaces: also })
+          ? await api.post('/imports/preview', {
+              rows: source.rows, mapping: source.mapping, options, other_tables: source.other_tables || [],
+              replaces_id: replaceId, also_replaces: also,
+            })
           : await api.post('/imports/check', { records: [], options })
+        if (res.data.statement) setStatement(res.data.statement)
         apply(res.data)
         if (!source.rows) addRow([])
         // Choices made in an earlier import for the same categories and accounts are filled in again
@@ -430,7 +657,9 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
             moves: Object.keys(rem.category_treatment || {}).length,
             accounts: Object.keys(rem.account_map || {}).length,
           })
-          const again = await api.post('/imports/check', { records: res.data.records.map(clean), options: next, replaces_id: replaceId, also_replaces: also })
+          const again = await api.post('/imports/check', {
+            records: res.data.records.map(clean), options: next, statement: res.data.statement, replaces_id: replaceId, also_replaces: also,
+          })
           apply(again.data)
         }
       } catch (err) {
@@ -459,7 +688,9 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
     const v = ++version.current
     setChecking(true)
     try {
-      const res = await api.post('/imports/check', { records: recs.map(clean), options: opts, replaces_id: replaceId, also_replaces: alsoIds })
+      const res = await api.post('/imports/check', {
+        records: recs.map(clean), options: opts, statement, replaces_id: replaceId, also_replaces: alsoIds,
+      })
       if (v === version.current) apply(res.data)
       return res.data
     } catch (err) {
@@ -498,7 +729,9 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
     }
     setDrafts({})
     const data = await check(records, options)
-    return data ? data.records : null
+    if (!data) return null
+    // Rows that became importable are ticked, as on screen
+    return data.records.map((r, i) => (records[i] && !records[i].can_import && r.can_import ? { ...r, include: r.default_include } : r))
   }
   const scheduleCheck = (recs, opts = options) => {
     version.current++
@@ -536,9 +769,9 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
     return records.map((r, i) => [r, i]).filter(([r]) => test(r))
   }, [records, filter])
   const pages = Math.max(1, Math.ceil(shown.length / PAGE))
-  const chosen = records.filter((r) => r.can_import)
-  const fileProblems = records.filter((r) => BLOCKING.includes(r.status))
-  const toChoose = records.filter((r) => r.status === 'NEEDS_CATEGORY' || r.status === 'NEEDS_ACCOUNT').length
+  const chosen = records.filter((r) => r.can_import && r.include)
+  const problems = records.filter((r) => !r.can_import && r.status !== 'IMPORTED_BEFORE' && r.status !== 'IGNORED').length
+  const importedBefore = records.filter((r) => r.status === 'IMPORTED_BEFORE').length
   const sumOf = (kinds) => chosen.filter((r) => kinds.includes(r.effective_kind)).reduce((s, r) => s + Number(r.amount || 0), 0)
   const totalOut = sumOf(['EXPENSE', 'SPLIT'])
   const totalIn = sumOf(['INCOME'])
@@ -548,6 +781,8 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
   const hasSplit = records.some((r) => r.kind === 'SPLIT')
   const hasAccountColumn = records.some((r) => r.account)
   const s = info?.summary
+  const stmt = info?.statement_check
+  const mismatch = !!(stmt?.available && !stmt.ok)
 
   const runImport = async () => {
     let recs = records
@@ -556,17 +791,17 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
       recs = await saveAliases()
       if (!recs) return
     }
-    const picked = recs.filter((r) => r.can_import)
-    const ignored = recs.filter((r) => r.status === 'IGNORED').length
+    const picked = recs.filter((r) => r.can_import && r.include)
+    const left = recs.length - picked.length
+    if (mismatch && !acceptMismatch) return
     const olds = info.replaces ? [info.replaces, ...(info.also_replaces || [])] : []
     const replacing = olds.length
       ? `\n\nThen ${olds.map((o) => `“${o.filename}” is removed: ${o.removes} record(s)${o.edited ? `, including ${o.edited} edited since its import` : ''}`).join('; ')}.`
       : ''
-    if (!window.confirm(`Import all ${picked.length} record(s) of ${source.filename}?${ignored ? `\n\n${ignored} balance / total line(s) aren’t transactions and are left out.` : ''}${replacing}\n\nIf anything stops the import, what was saved is taken back: the file comes in whole or not at all.`)) return
+    if (!window.confirm(`${mismatch ? 'The records DON’T match the statement’s totals / balances.\n\n' : ''}Import ${picked.length} record(s)?${left ? `\n\n${left} other row(s) will be listed in the import history as skipped or failed, with the reason.` : ''}${replacing}`)) return
     setProgress({ done: 0, total: recs.length, label: 'Importing…' })
-    let batch = null
     try {
-      batch = (await api.post('/imports', {
+      const batch = (await api.post('/imports', {
         filename: source.filename, file_type: source.file_type, file_hash: source.file_hash,
         records: recs.map(clean), options, replaces_id: replaceId, also_replaces: also,
       })).data
@@ -577,7 +812,6 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
         setProgress({ done: Math.min(recs.length, i + CHUNK), total: recs.length, label: 'Importing…' })
       }
       const done = (await api.post(`/imports/${batch.id}/finish`)).data
-      batch = null // in: nothing to take back from here on
       let replaced = null
       if (olds.length) {
         const names = olds.map((o) => `“${o.filename}”`).join(', ')
@@ -595,42 +829,155 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
       onReplace(null)
       onDone({ ...done, accounts_created: created, account_warnings: s?.account_warnings, replaced })
     } catch (err) {
-      let why = errorMessage(err)
-      if (batch) {
-        // Take back what was saved: the file comes in whole or not at all
-        try {
-          await purgeAll(batch.id, (n) => setProgress({ done: n, total: recs.length, label: 'Taking it back…' }))
-          why += '. Nothing from this file was kept: try again'
-        } catch {
-          why += '. What was saved before the error couldn’t all be taken back: open Import history and press “Take back” on it'
-        }
-      }
-      onError(why)
+      onError(`${errorMessage(err)}. What was imported before the error is in Import history, where it can be undone.`)
       setProgress(null)
     }
   }
 
-  if (!info) return <div className="card muted">Reading the records…</div>
+  if (!info) return <div className="card muted"><RefreshCw size={16} className="spin" /> Reading the records…</div>
+
+  const fileLine = `${source.filename} · ${records.length} record(s)${info.ignored_rows ? ` · ${info.ignored_rows} blank, heading or total row(s) skipped` : ''}`
+  const checkingBadge = checking && <span className="muted small"><RefreshCw size={14} className="spin" /> Checking…</span>
+  const needAction = records.map((r, i) => [r, i]).filter(([r]) => !r.can_import && r.status !== 'IMPORTED_BEFORE' && r.status !== 'IGNORED')
+  const openActions = needAction.filter(([r]) => !skippedRows.has(r.row_no))
+  const payeesLeft = (info.payees || []).filter((p) => !p.alias_id && !skippedPayees.has(p.payee_key)).length
+
+  const applyPatches = (patches) => {
+    const byRow = Object.fromEntries(patches.map((x) => [x.row_no, x.patch]))
+    const next = records.map((r) => (byRow[r.row_no] ? { ...r, ...byRow[r.row_no], include: true } : r))
+    setRecords(next)
+    scheduleCheck(next)
+  }
+  const leavePayees = async () => {
+    if (pending.length && window.confirm(`Add the ${pending.length} payee name(s) you typed?`)) {
+      if (!(await saveAliases())) return
+    }
+    setStep(3)
+  }
+
+  if (step === 2)
+    return (
+      <div className="card">
+        <div className="card-head wrap">
+          <div>
+            <h3>Payees in this file</h3>
+            <p>{fileLine}</p>
+          </div>
+          <div className="filters">{checkingBadge}</div>
+        </div>
+        <PayeeStep
+          info={info} drafts={drafts} setDrafts={setDrafts} busy={checking} renameOld={renameOld} setRenameOld={setRenameOld}
+          skipped={skippedPayees} setSkipped={setSkippedPayees} onSaved={() => check(records, options)} onError={onError}
+        />
+        <StepNav onBack={onBack} backLabel="Columns" note={payeesLeft ? `${payeesLeft} payee(s) not named yet: they keep their bank description` : 'Every payee is named or skipped'}
+                 onNext={leavePayees} nextLabel="Next: needs action" />
+      </div>
+    )
+
+  if (step === 3)
+    return (
+      <div className="card">
+        <div className="card-head wrap">
+          <div>
+            <h3>Rows that need action</h3>
+            <p>{fileLine}</p>
+          </div>
+          <div className="filters">{checkingBadge}</div>
+        </div>
+        <ActionStep
+          rows={needAction} records={records} skipped={skippedRows} setSkipped={setSkippedRows}
+          onEdit={edit} onApply={applyPatches} onError={onError}
+        />
+        <StepNav onBack={() => setStep(2)} backLabel="Payees"
+                 note={openActions.length ? `${openActions.length} row(s) still need action: they won’t be imported unless fixed` : `${chosen.length} record(s) ready to import`}
+                 onNext={() => setStep(4)} nextLabel="Next: review & import" />
+      </div>
+    )
 
   return (
     <>
       <div className="card">
         <div className="card-head wrap">
           <div>
-            <h3>3. Review</h3>
-            <p>
-              {source.filename} · {records.length} record(s)
-              {info.ignored_rows ? ` · ${info.ignored_rows} blank or heading row(s) skipped` : ''}.{' '}
-              {fromFile
-                ? 'The whole file is imported, or nothing: every row must be right. Choose categories and accounts below; anything else is fixed in the file, which you then upload again.'
-                : 'Add and correct the records; all of them are imported together.'}
-            </p>
+            <h3>Review and import</h3>
+            <p>{fileLine}</p>
           </div>
-          <div className="filters">
-            {checking && <span className="muted small"><RefreshCw size={14} className="spin" /> Checking…</span>}
-            <button className="btn secondary" onClick={onCancel}>Start over</button>
-          </div>
+          <div className="filters">{checkingBadge}</div>
         </div>
+
+        <Alert type={chosen.length ? 'ok' : 'warn'}>
+          {chosen.length ? (
+            <>
+              <strong>{chosen.length} of {records.length} record(s) are ready to import</strong>: categories and accounts have been
+              filled in for you. You can press <b>Import</b> now, or change anything below first.
+              {problems ? ` ${problems} row(s) with a problem (e.g. no amount or date) will be skipped.` : ''}
+              {s?.duplicates ? ` ${s.duplicates} possible duplicate(s) are left out unless you tick them.` : ''}
+            </>
+          ) : importedBefore && importedBefore === records.length ? (
+            <>Every record in this file was imported before: there is nothing new to import.</>
+          ) : (
+            <>No row can be imported yet: check that the date and amount columns were chosen correctly (Start over).</>
+          )}
+        </Alert>
+        {importedBefore > 0 && (
+          <Alert type="info">
+            <strong>{importedBefore} record(s) were imported before</strong> (same UPI reference, or the same UPI ID, date and amount, or the
+            same row): they are skipped automatically and listed in Import history as skipped. Everything else imports as usual.{' '}
+            <button className="link-btn" onClick={() => { setFilter('imported'); setPage(0) }}>Show them</button>
+          </Alert>
+        )}
+
+        {remembered && (
+          <Alert type="info">
+            Filled in from your earlier imports:{' '}
+            {[
+              remembered.categories && `${remembered.categories} category choice(s)`,
+              remembered.moves && `${remembered.moves} category move(s)`,
+              remembered.accounts && `${remembered.accounts} account(s)`,
+            ].filter(Boolean).join(', ')}. Change any of them below.
+          </Alert>
+        )}
+        {info.books_moves_to && (
+          <Alert type="info">
+            {info.before_books} record(s) are older than your accounting books, which start on{' '}
+            {new Date(info.books_start).toLocaleDateString('en-IN')}. The books will start from{' '}
+            {new Date(info.books_moves_to).toLocaleDateString('en-IN')} instead, so every record is posted and nothing is lost.
+          </Alert>
+        )}
+        {info.replaces && (
+          <Alert type={info.replaces.blocks.length ? 'error' : 'info'}>
+            This file replaces “{info.replaces.filename}”, imported on {new Date(info.replaces.created_at).toLocaleDateString('en-IN')}:
+            its {info.replaces.removes} record(s){info.replaces.edited ? `, including ${info.replaces.edited} edited since` : ''} are removed once this file is in.
+            {info.replaces.blocks.length > 0 && ` It can’t be purged: ${info.replaces.blocks.map((b) => `${b.rows} record(s): ${b.reason}`).join('; ')}. Unlock the period or unmatch the bank statement lines first.`}
+            {(info.also_replaces || []).map((o) => (
+              <div key={o.id}>
+                It also replaces “{o.filename}”, imported on {new Date(o.created_at).toLocaleDateString('en-IN')}: its {o.removes} record(s) are removed too.{' '}
+                <button className="btn ghost small" onClick={() => dropAlso(o.id)}>Don’t replace it</button>
+              </div>
+            ))}
+          </Alert>
+        )}
+        {(info.earlier_imports || []).length > 0 && (
+          <Alert type="info">
+            {replaceId
+              ? 'Some rows of this file also came in with other imports (they are skipped). To correct those too, replace them as well:'
+              : 'To correct an earlier import with this file instead of skipping the rows it already brought in, purge and re-import it:'}
+            <div className="filters" style={{ marginTop: 6 }}>
+              {!replaceId && info.earlier_imports.map((b) => (
+                <button key={b.id} className="btn small" disabled={!b.can_replace} onClick={() => onReplace(b.id)}>
+                  Purge &amp; re-import “{b.filename}” ({b.rows} row(s))
+                </button>
+              ))}
+              {replaceId && info.earlier_imports.filter((b) => b.can_replace).map((b) => (
+                <button key={b.id} className="btn small" onClick={() => addAlso(b.id)}>
+                  Replace “{b.filename}” too ({b.rows} row(s) of this file came in with it)
+                </button>
+              ))}
+            </div>
+          </Alert>
+        )}
+
+        <StatementCheck check={stmt} accept={acceptMismatch} setAccept={setAcceptMismatch} onShowRows={() => { setFilter('statement'); setPage(0) }} />
 
         <div className="form-grid">
           <div>
@@ -669,70 +1016,9 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
             A split row adds your share as an expense; what you paid for the others becomes a split bill they owe you (shared between the names in the row, or “Others”).
           </p>
         )}
-        {remembered && (
-          <Alert type="info">
-            Filled in from your earlier imports:{' '}
-            {[
-              remembered.categories && `${remembered.categories} category choice(s)`,
-              remembered.moves && `${remembered.moves} category move(s)`,
-              remembered.accounts && `${remembered.accounts} account(s)`,
-            ].filter(Boolean).join(', ')}. Change any of them below.
-          </Alert>
-        )}
-        {info.books_moves_to && (
-          <Alert type="info">
-            {info.before_books} record(s) are older than your accounting books, which start on{' '}
-            {new Date(info.books_start).toLocaleDateString('en-IN')}. The books will start from{' '}
-            {new Date(info.books_moves_to).toLocaleDateString('en-IN')} instead, so every record is posted and nothing is lost.
-          </Alert>
-        )}
-        {info.replaces && (
-          <Alert type={info.replaces.blocks.length ? 'error' : 'info'}>
-            This file replaces “{info.replaces.filename}”, imported on {new Date(info.replaces.created_at).toLocaleDateString('en-IN')}:
-            its {info.replaces.removes} record(s){info.replaces.edited ? `, including ${info.replaces.edited} edited since` : ''} are removed once this file is in.
-            {info.replaces.blocks.length > 0 && ` It can’t be purged: ${info.replaces.blocks.map((b) => `${b.rows} record(s): ${b.reason}`).join('; ')}. Unlock the period or unmatch the bank statement lines first.`}
-            {(info.also_replaces || []).map((o) => (
-              <div key={o.id}>
-                It also replaces “{o.filename}”, imported on {new Date(o.created_at).toLocaleDateString('en-IN')}: its {o.removes} record(s) are removed too.{' '}
-                <button className="btn ghost small" onClick={() => dropAlso(o.id)}>Don’t replace it</button>
-              </div>
-            ))}
-          </Alert>
-        )}
-        {info.blocked && (
-          <Alert type="error">
-            <div className="strong">This file can’t be imported: {fileProblems.length} row(s) have a problem in the file.</div>
-            Nothing is imported until every row is right, so a file never comes in half or twice. Fix these rows in the file and upload it again:
-            <ul style={{ margin: '6px 0' }}>
-              {fileProblems.slice(0, 8).map((r) => (
-                <li key={r.row_no}>Row {r.row_no}: {r.problems?.[0]}</li>
-              ))}
-              {fileProblems.length > 8 && <li>…and {fileProblems.length - 8} more (see “Problems in the file” below)</li>}
-            </ul>
-            <div className="filters">
-              <button className="btn secondary small" onClick={() => problemsCsv(source.filename, fileProblems)}>
-                <Download size={14} /> Download the list
-              </button>
-              {!replaceId && (info.earlier_imports || []).map((b) => (
-                <button key={b.id} className="btn small" onClick={() => onReplace(b.id)}>
-                  Purge &amp; re-import “{b.filename}” with this file
-                </button>
-              ))}
-              {replaceId && (info.earlier_imports || []).filter((b) => b.can_replace).map((b) => (
-                <button key={b.id} className="btn small" onClick={() => addAlso(b.id)}>
-                  Replace “{b.filename}” too ({b.rows} row(s) of this file came in with it)
-                </button>
-              ))}
-            </div>
-          </Alert>
-        )}
         {info.lock_date && <p className="hint">Your accounting books are locked up to {new Date(info.lock_date).toLocaleDateString('en-IN')}: records dated on or before it can’t be imported.</p>}
 
         <AccountMap info={info} options={options} setOption={setOption} />
-        <PayeeMap
-          info={info} drafts={drafts} setDrafts={setDrafts} pending={pending} onSave={saveAliases} busy={checking}
-          renameOld={renameOld} setRenameOld={setRenameOld}
-        />
         <CategoryMap info={info} options={options} setOption={setOption} />
         <TreatmentMap info={info} options={options} setOption={setOption} />
       </div>
@@ -740,27 +1026,22 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
       <div className="card flush">
         <div className="toolbar wrap">
           <div className="segmented">
-            {FILTERS.map(([k, label, test, always]) => {
-              const n = records.filter(test).length
-              if (!always && !n && filter !== k) return null
-              return (
-                <button key={k} className={filter === k ? 'on' : ''} onClick={() => { setFilter(k); setPage(0) }}>
-                  {label} <span className="pill">{n}</span>
-                </button>
-              )
-            })}
+            {FILTERS.map(([k, label, test]) => (
+              <button key={k} className={filter === k ? 'on' : ''} onClick={() => { setFilter(k); setPage(0) }}>
+                {label} <span className="pill">{records.filter(test).length}</span>
+              </button>
+            ))}
           </div>
           <span className="spacer" />
-          {!fromFile && (
-            <button className="btn secondary small" onClick={() => addRow()}>
-              <Plus size={14} /> Add a record
-            </button>
-          )}
+          <button className="btn secondary small" onClick={() => addRow()}>
+            <Plus size={14} /> Add a record
+          </button>
         </div>
         <div className="table-wrap">
           <table className="table import-table">
             <thead>
               <tr>
+                <th title="Import this row"></th>
                 <th>Row</th>
                 <th>Status</th>
                 <th>Date</th>
@@ -775,10 +1056,10 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
             </thead>
             <tbody>
               {shown.slice(page * PAGE, page * PAGE + PAGE).map(([r, i]) => (
-                <Row key={`${r.row_no}-${i}`} r={r} hasSplit={hasSplit} readOnly={fromFile}
+                <Row key={`${r.row_no}-${i}`} r={r} hasSplit={hasSplit}
                      onEdit={(patch) => edit(i, patch)} onRemove={() => removeRow(i)} />
               ))}
-              {!shown.length && <EmptyRow cols={10}>No records here.</EmptyRow>}
+              {!shown.length && <EmptyRow cols={11}>No records here.</EmptyRow>}
             </tbody>
           </table>
         </div>
@@ -794,45 +1075,341 @@ function Review({ source, replaceId, onReplace, onCancel, onDone, onError }) {
       <div className="card">
         <BelowZero warnings={s?.account_warnings} />
         <div className="form-actions">
+          {source.rows && (
+            <button className="btn secondary" onClick={() => setStep(3)}>
+              <ArrowLeft size={16} /> Needs action
+            </button>
+          )}
           <div className="grow-space">
             <div className="strong">{chosen.length} record(s) to import</div>
             <div className="muted small">
               Spending {money(totalOut)} · Money received {money(totalIn)}
               {transfers ? ` · ${transfers} transfer(s) of ${money(totalMoved)}` : ''}
               {openings ? ` · ${openings} opening balance(s)` : ''}
+              {s?.duplicates ? ` · ${s.duplicates} possible duplicate(s) left out unless ticked` : ''}
+              {s?.repeated ? ` · ${s.repeated} row(s) repeated in the file` : ''}
               {s?.ignored ? ` · ${s.ignored} balance / total line(s) left out` : ''}
               {s?.to_check ? ` · ${s.to_check} unusually large row(s) to check` : ''}
-              {fileProblems.length ? ` · ${fileProblems.length} row(s) with a problem in the file: fix the file and upload it again` : ''}
-              {toChoose ? ` · ${toChoose} row(s) still need a category or account` : ''}
+              {importedBefore ? ` · ${importedBefore} imported before: skipped` : ''}
+              {problems ? ` · ${problems} row(s) with problems won’t be imported` : ''}
             </div>
           </div>
           {progress ? (
             <div style={{ minWidth: 220 }}>
               <div className="progress"><i style={{ width: `${(100 * progress.done) / Math.max(1, progress.total)}%`, background: 'var(--primary)' }} /></div>
-              <div className="muted small">{progress.label} {progress.done} of {progress.total}</div>
+              <div className="muted small">{progress.label || 'Importing…'} {progress.done} of {progress.total}</div>
             </div>
           ) : (
-            <button className="btn" disabled={checking || !info.can_import} onClick={runImport}
-                    title={info.blocked ? 'Fix the problems in the file and upload it again' : toChoose ? 'Choose the categories and accounts first' : ''}>
-              {info.replaces ? 'Import and replace' : 'Import'} all {records.filter((r) => r.status !== 'IGNORED').length} record(s)
+            <button className="btn" disabled={checking || !chosen.length || (mismatch && !acceptMismatch)} onClick={runImport}
+                    title={mismatch && !acceptMismatch ? 'The records don’t match the statement: see “Statement check” above' : ''}>
+              {info.replaces ? 'Import and replace' : 'Import'} {chosen.length} record(s)
             </button>
           )}
         </div>
         <p className="hint">
-          Records keep their original date and appear in Expenses, Balance, the Dashboard and Reports; transfers move money between your accounts and opening balances are added to them. They can be edited for 3 days from today, don’t trigger budget alerts, and post to your books if you use Accounting. To correct the import later, use Purge &amp; re-import in Import history with the corrected file.
+          Records keep their original date and appear in Expenses, Balance, the Dashboard and Reports; transfers move money between your accounts and opening balances are added to them. They can be edited for 3 days from today, don’t trigger budget alerts, and post to your books if you use Accounting. You can undo the whole import from Import history.
         </p>
       </div>
     </>
   )
 }
 
-function Row({ r, hasSplit, readOnly, onEdit, onRemove }) {
+/** Step 3: every payee, to name (alias + category) or skip, one by one or all at once. */
+function PayeeStep({ info, drafts, setDrafts, busy, renameOld, setRenameOld, skipped, setSkipped, onSaved, onError }) {
+  const [show, setShow] = useState('todo')
+  const [limit, setLimit] = useState(20)
+  const [saving, setSaving] = useState(null)
+  const payees = info.payees || []
+  if (!payees.length)
+    return (
+      <div className="empty-step">
+        <UsersRound size={48} />
+        <b>No payees to name in this file</b>
+        <span className="muted">Press Next to continue.</span>
+      </div>
+    )
+  const stateOf = (p) => (p.alias_id ? 'added' : skipped.has(p.payee_key) ? 'skipped' : 'todo')
+  const counts = { todo: 0, added: 0, skipped: 0 }
+  payees.forEach((p) => counts[stateOf(p)]++)
+  const list = payees.filter((p) => show === 'all' || stateOf(p) === show)
+  const set = (key, patch) => setDrafts((d) => ({ ...d, [key]: { ...d[key], ...patch } }))
+  const skip = (keys, on = true) =>
+    setSkipped((prev) => {
+      const next = new Set(prev)
+      keys.forEach((k) => (on ? next.add(k) : next.delete(k)))
+      return next
+    })
+
+  const save = async (ps) => {
+    setSaving(ps.length === 1 ? ps[0].payee_key : 'all')
+    let done = 0
+    try {
+      for (const p of ps) {
+        const d = drafts[p.payee_key] || {}
+        const name = (d.alias ?? p.alias ?? p.suggestion ?? '').trim()
+        const category = (d.category ?? p.alias_category ?? '').trim() || null
+        if (!name) continue
+        if (p.alias_id) await api.put(`/aliases/${p.alias_id}`, { alias: name, category, clear_category: !category })
+        else await api.post('/aliases', { match_key: p.payee_key, alias: name, category, apply_all_existing: renameOld, set_category_existing: renameOld && !!category })
+        done++
+      }
+      setDrafts((d) => {
+        const next = { ...d }
+        ps.forEach((p) => delete next[p.payee_key])
+        return next
+      })
+      skip(ps.map((p) => p.payee_key), false)
+    } catch (err) {
+      onError(`${errorMessage(err)} (${done} of ${ps.length} payee name(s) added)`)
+    }
+    await onSaved()
+    setSaving(null)
+  }
+  const todo = payees.filter((p) => stateOf(p) === 'todo')
+
+  return (
+    <>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Give a payee a short name (an alias) and a category: all its records, now and in later imports, are shown that way. Skip the ones you don’t
+        want to name; they keep the bank’s description and get a category automatically.
+      </p>
+      <div className="toolbar wrap" style={{ padding: '0 0 12px', border: 0 }}>
+        <div className="segmented">
+          {[['todo', 'To review'], ['added', 'Added'], ['skipped', 'Skipped'], ['all', 'All']].map(([k, l]) => (
+            <button key={k} className={show === k ? 'on' : ''} onClick={() => { setShow(k); setLimit(20) }}>
+              {l} <span className="pill">{k === 'all' ? payees.length : counts[k]}</span>
+            </button>
+          ))}
+        </div>
+        <span className="spacer" />
+        {todo.length > 0 && (
+          <>
+            <button className="btn secondary small" disabled={!!saving || busy} onClick={() => save(todo)}>
+              <Sparkles size={14} /> Add all {todo.length} with the suggested names
+            </button>
+            <button className="btn ghost small" onClick={() => skip(todo.map((p) => p.payee_key))}>
+              <SkipForward size={14} /> Skip the rest
+            </button>
+          </>
+        )}
+      </div>
+      <datalist id="payee-categories">
+        {info.categories.map((c) => (
+          <option key={c} value={c} />
+        ))}
+      </datalist>
+      <div className="payee-list">
+        {list.slice(0, limit).map((p) => {
+          const st = stateOf(p)
+          const d = drafts[p.payee_key] || {}
+          return (
+            <div key={p.payee_key} className={`payee-card ${st}`}>
+              <span className="payee-avatar">{(p.alias || p.suggestion || p.payee_key || '?').slice(0, 1).toUpperCase()}</span>
+              <div className="payee-main">
+                <b title={p.description}>{p.description}</b>
+                <span className="muted small">
+                  {p.sent_count ? `Sent ${money(p.sent_total)} (${p.sent_count}×)` : ''}
+                  {p.sent_count && p.received_count ? ' · ' : ''}
+                  {p.received_count ? `Received ${money(p.received_total)} (${p.received_count}×)` : ''}
+                </span>
+              </div>
+              <div className="payee-fields">
+                <input value={d.alias ?? p.alias ?? ''} placeholder={p.suggestion || 'Name'} maxLength={100}
+                       onChange={(e) => set(p.payee_key, { alias: e.target.value })} aria-label={`Name for ${p.description}`} />
+                <input value={d.category ?? p.alias_category ?? ''} list="payee-categories" placeholder={p.sent_count ? 'Category' : '—'} maxLength={50}
+                       disabled={!p.sent_count} onChange={(e) => set(p.payee_key, { category: e.target.value })} aria-label={`Category for ${p.description}`} />
+              </div>
+              <div className="payee-actions">
+                {st === 'added' && !drafts[p.payee_key] ? (
+                  <span className="badge ok"><Check size={12} /> Added</span>
+                ) : (
+                  <button className="btn small" disabled={!!saving || busy} onClick={() => save([p])}>
+                    {saving === p.payee_key ? <RefreshCw size={14} className="spin" /> : <Plus size={14} />} {st === 'added' ? 'Update' : 'Add'}
+                  </button>
+                )}
+                {st === 'skipped' ? (
+                  <button className="btn ghost small" onClick={() => skip([p.payee_key], false)}>Undo skip</button>
+                ) : st === 'todo' ? (
+                  <button className="btn ghost small" onClick={() => skip([p.payee_key])}>
+                    <SkipForward size={14} /> Skip
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          )
+        })}
+        {!list.length && <div className="empty-step small"><CircleCheckBig size={40} /><b>Nothing here</b></div>}
+      </div>
+      {list.length > limit && (
+        <button className="btn ghost small" style={{ marginTop: 8 }} onClick={() => setLimit(limit + 40)}>Show more ({list.length - limit} left)</button>
+      )}
+      <label className="check small" style={{ marginTop: 12 }}>
+        <input type="checkbox" checked={renameOld} onChange={(e) => setRenameOld(e.target.checked)} /> Also rename matching records already in the app
+      </label>
+    </>
+  )
+}
+
+/** Step 4: rows that can't be imported as they are. Fix by hand, or auto-analyse; skipping offers the analysis first. */
+function ActionStep({ rows, records, skipped, setSkipped, onEdit, onApply, onError }) {
+  const [results, setResults] = useState({}) // row_no → analysis
+  const [asking, setAsking] = useState(null) // row_no whose Skip asks "auto-analyse first?"
+  const [busy, setBusy] = useState(null)
+  const open = rows.filter(([r]) => !skipped.has(r.row_no))
+  const done = rows.filter(([r]) => skipped.has(r.row_no))
+  const setSkip = (rowNo, on = true) =>
+    setSkipped((prev) => {
+      const next = new Set(prev)
+      on ? next.add(rowNo) : next.delete(rowNo)
+      return next
+    })
+
+  const analyse = async (rowNos) => {
+    setBusy(rowNos.length === 1 ? rowNos[0] : 'all')
+    try {
+      const res = await api.post('/imports/analyse', { records: records.map(clean), row_nos: rowNos })
+      setResults((prev) => ({ ...prev, ...Object.fromEntries(res.data.map((x) => [x.row_no, x])) }))
+      return res.data
+    } catch (err) {
+      onError(errorMessage(err))
+      return []
+    } finally {
+      setBusy(null)
+      setAsking(null)
+    }
+  }
+  const apply = (fixes) => {
+    onApply(fixes.filter((x) => x.solved))
+    setResults((prev) => {
+      const next = { ...prev }
+      fixes.forEach((x) => delete next[x.row_no])
+      return next
+    })
+  }
+  const solvedWaiting = Object.values(results).filter((x) => x.solved && open.some(([r]) => r.row_no === x.row_no))
+
+  if (!rows.length)
+    return (
+      <div className="empty-step">
+        <CircleCheckBig size={56} />
+        <b>Every row can be imported</b>
+        <span className="muted">Nothing needs your action. Press Next to review and import.</span>
+      </div>
+    )
+
+  return (
+    <>
+      <div className="action-summary">
+        <span className="action-count"><ListChecks size={30} /> <b>{open.length}</b> to look at · {done.length} skipped</span>
+        <span className="spacer" />
+        {open.length > 0 && (
+          <button className="btn secondary" disabled={!!busy} onClick={() => analyse(open.map(([r]) => r.row_no))}>
+            {busy === 'all' ? <RefreshCw size={16} className="spin" /> : <WandSparkles size={16} />} Auto-analyse all {open.length}
+          </button>
+        )}
+        {solvedWaiting.length > 0 && (
+          <button className="btn" onClick={() => apply(solvedWaiting)}>
+            <Check size={16} /> Apply {solvedWaiting.length} fix(es)
+          </button>
+        )}
+      </div>
+      <div className="action-list">
+        {open.map(([r, i]) => {
+          const res = results[r.row_no]
+          return (
+            <div key={r.row_no} className="action-card">
+              <div className="action-head">
+                <span className="badge bad">Row {r.row_no}</span>
+                <b className="grow">{r.description || '(no description)'}</b>
+                <button className="btn ghost small" disabled={busy === r.row_no} onClick={() => analyse([r.row_no])}>
+                  {busy === r.row_no ? <RefreshCw size={14} className="spin" /> : <WandSparkles size={14} />} Auto-analyse
+                </button>
+                <button className="btn ghost small" onClick={() => setAsking(r.row_no)}>
+                  <SkipForward size={14} /> Skip
+                </button>
+              </div>
+              <ul className="action-problems">
+                {(r.problems || []).map((p, k) => <li key={k}>{p}</li>)}
+              </ul>
+              <div className="action-fields">
+                <label>Date<DateInput value={r.date || ''} max={todayISO()} onChange={(e) => onEdit(i, { date: e.target.value || null })} /></label>
+                <label>Type
+                  <select value={r.kind || ''} onChange={(e) => onEdit(i, { kind: e.target.value || null })}>
+                    <option value="">Choose…</option>
+                    <option value="EXPENSE">Expense (money out)</option>
+                    <option value="INCOME">Income (money in)</option>
+                    <option value="SPLIT">Split bill</option>
+                    <option value="TRANSFER">Transfer</option>
+                    <option value="OPENING">Opening balance</option>
+                  </select>
+                </label>
+                <label>Amount<input type="number" step="0.01" min="0" value={r.amount ?? ''} onChange={(e) => onEdit(i, { amount: e.target.value === '' ? null : e.target.value })} /></label>
+                <label className="wide">Description<input value={r.description || ''} maxLength={300} onChange={(e) => onEdit(i, { description: e.target.value })} /></label>
+              </div>
+              {asking === r.row_no && !res && (
+                <div className="action-ask">
+                  <WandSparkles size={28} />
+                  <div className="grow">
+                    <b>Before skipping: shall we try to work this row out?</b>
+                    <div className="muted small">We look at the balance, the rows around it and the description.</div>
+                  </div>
+                  <button className="btn" onClick={() => analyse([r.row_no])}>Auto-analyse</button>
+                  <button className="btn ghost" onClick={() => { setSkip(r.row_no); setAsking(null) }}>Skip anyway</button>
+                </div>
+              )}
+              {res && (
+                <div className={`action-result ${res.solved ? 'ok' : 'bad'}`}>
+                  {res.solved ? <CircleCheckBig size={28} /> : <WandSparkles size={28} />}
+                  <div className="grow">
+                    <b>{res.solved ? 'Worked out' : res.reasons.length ? 'Partly worked out' : 'Couldn’t work it out'}</b>
+                    <ul>
+                      {res.reasons.map((x, k) => <li key={k}>{x}</li>)}
+                      {res.message && <li>{res.message}</li>}
+                    </ul>
+                  </div>
+                  {res.reasons.length > 0 && (
+                    <button className="btn" onClick={() => apply([{ ...res, solved: true }])}>{res.solved ? 'Apply' : 'Apply what was found'}</button>
+                  )}
+                  <button className="btn ghost" onClick={() => { setSkip(r.row_no); setResults((p) => { const n = { ...p }; delete n[r.row_no]; return n }) }}>
+                    Skip anyway
+                  </button>
+                </div>
+              )}
+            </div>
+          )
+        })}
+        {!open.length && (
+          <div className="empty-step small">
+            <CircleCheckBig size={44} />
+            <b>All rows are fixed or skipped</b>
+          </div>
+        )}
+      </div>
+      {done.length > 0 && (
+        <details className="skipped-rows">
+          <summary>{done.length} skipped row(s): they won’t be imported</summary>
+          {done.map(([r]) => (
+            <div key={r.row_no} className="skipped-row">
+              <span>Row {r.row_no} · {r.description || '(no description)'} · {(r.problems || [])[0]}</span>
+              <button className="btn ghost small" onClick={() => setSkip(r.row_no, false)}>Undo skip</button>
+            </div>
+          ))}
+        </details>
+      )}
+    </>
+  )
+}
+
+function Row({ r, hasSplit, onEdit, onRemove }) {
   const [cls, label] = STATUS[r.status] || ['info', r.status]
   const notes = [...(r.problems || []), ...(r.warnings || [])]
   const num = (v) => (v === '' ? null : v)
-  if (readOnly) return <FileRow r={r} hasSplit={hasSplit} cls={cls} label={label} notes={notes} onEdit={onEdit} />
   return (
-    <tr className={r.can_import ? '' : 'row-problem'}>
+    <tr className={r.can_import ? '' : r.status === 'IMPORTED_BEFORE' ? 'row-skipped' : 'row-problem'}>
+      <td>
+        <input type="checkbox" aria-label={`Import row ${r.row_no}`} checked={!!(r.can_import && r.include)} disabled={!r.can_import}
+               onChange={(e) => onEdit({ include: e.target.checked })} />
+      </td>
       <td className="muted">{r.row_no}</td>
       <td style={{ minWidth: 150 }}>
         <span className={`badge ${cls}`}>{label}</span>
@@ -841,7 +1418,7 @@ function Row({ r, hasSplit, readOnly, onEdit, onRemove }) {
         ))}
       </td>
       <td>
-        <input type="date" value={r.date || ''} max={todayISO()} onChange={(e) => onEdit({ date: e.target.value || null })} />
+        <DateInput value={r.date || ''} max={todayISO()} onChange={(e) => onEdit({ date: e.target.value || null })} />
       </td>
       <td>
         <select value={r.kind || ''} onChange={(e) => onEdit({ kind: e.target.value || null })}>
@@ -857,8 +1434,6 @@ function Row({ r, hasSplit, readOnly, onEdit, onRemove }) {
       <td>
         <input value={r.description || ''} maxLength={300} onChange={(e) => onEdit({ description: e.target.value })} />
         {r.alias_name && <div className="hint" style={{ margin: '4px 0 0' }}>→ shown as <b>{r.alias_name}</b></div>}
-        <input value={r.note || ''} maxLength={500} placeholder="Note (optional)" aria-label={`Note for row ${r.row_no}`}
-               style={{ marginTop: 4 }} onChange={(e) => onEdit({ note: e.target.value || null })} />
       </td>
       <td>
         <input value={r.category || ''} maxLength={100} placeholder={r.kind === 'INCOME' ? 'Income' : ''} onChange={(e) => onEdit({ category: e.target.value || null })} />
@@ -899,165 +1474,11 @@ function Row({ r, hasSplit, readOnly, onEdit, onRemove }) {
   )
 }
 
-/** A row from a file, as the file has it: it is changed by fixing the file. Only a note of one's own can be added. */
-function FileRow({ r, hasSplit, cls, label, notes, onEdit }) {
-  return (
-    <tr className={r.can_import || r.status === 'IGNORED' ? '' : 'row-problem'}>
-      <td className="muted">{r.row_no}</td>
-      <td style={{ minWidth: 150 }}>
-        <span className={`badge ${cls}`}>{label}</span>
-        {notes.map((n, k) => (
-          <div key={k} className="hint" style={{ margin: '4px 0 0' }}>{n}</div>
-        ))}
-      </td>
-      <td>{r.date ? new Date(r.date).toLocaleDateString('en-IN') : <span className="muted">—</span>}{r.time && <div className="muted small">{r.time}</div>}</td>
-      <td>
-        {KIND_LABEL[r.kind] || <span className="muted">—</span>}
-        {r.effective_kind === 'TRANSFER' && r.kind !== 'TRANSFER' && <div className="hint" style={{ margin: '4px 0 0' }}>→ moved, not spent</div>}
-      </td>
-      <td>
-        {r.description || <span className="muted">—</span>}
-        {r.alias_name && <div className="hint" style={{ margin: '4px 0 0' }}>→ shown as <b>{r.alias_name}</b></div>}
-        {r.status !== 'IGNORED' && (
-          <input value={r.note || ''} maxLength={500} placeholder="Note (optional)" aria-label={`Note for row ${r.row_no}`}
-                 style={{ marginTop: 4 }} onChange={(e) => onEdit({ note: e.target.value || null })} />
-        )}
-      </td>
-      <td>
-        {r.category || <span className="muted">—</span>}
-        {r.category_final && r.category_final !== r.category && <div className="hint" style={{ margin: '4px 0 0' }}>→ {r.category_final}</div>}
-      </td>
-      <td className="num">{r.amount != null && r.amount !== '' ? money(r.amount) : <span className="muted">—</span>}</td>
-      {hasSplit && <td className="num">{r.kind === 'SPLIT' && r.my_share != null ? money(r.my_share) : ''}</td>}
-      <td style={{ minWidth: 150 }}>
-        {r.account || <span className="muted">—</span>}
-        {r.to_account && <> <ArrowRight size={11} /> {r.to_account}</>}
-        {r.account_label && (
-          <div className="hint" style={{ margin: '4px 0 0' }}>
-            {r.account_label}
-            {r.to_account_label && <> <ArrowRight size={11} /> {r.to_account_label}</>}
-          </div>
-        )}
-      </td>
-      <td></td>
-    </tr>
-  )
-}
-
-/** Payees in the file, grouped by UPI ID / name: their alias, or a name and category to give them now. */
-function PayeeMap({ info, drafts, setDrafts, pending, onSave, busy, renameOld, setRenameOld }) {
-  const [side, setSide] = useState('all')
-  const [showAll, setShowAll] = useState(false)
-  const payees = info.payees || []
-  if (!payees.length) return null
-  const named = payees.filter((p) => p.alias_id).length
-  const list = payees.filter((p) => side === 'all' || (side === 'sent' ? p.sent_count : p.received_count))
-  const shown = showAll ? list : list.slice(0, 12)
-  const set = (key, patch) => setDrafts((d) => ({ ...d, [key]: { ...d[key], ...patch } }))
-  const useSuggestions = () =>
-    setDrafts((d) => {
-      const next = { ...d }
-      for (const p of list) if (!p.alias_id && !next[p.payee_key]?.alias) next[p.payee_key] = { ...next[p.payee_key], alias: p.suggestion }
-      return next
-    })
-
-  return (
-    <div className="map-block">
-      <div className="card-head wrap" style={{ marginBottom: 8 }}>
-        <div>
-          <h4 style={{ margin: 0 }}>
-            <Tag size={15} style={{ verticalAlign: '-2px' }} /> Payees in this file
-          </h4>
-          <p className="hint" style={{ margin: 0 }}>
-            {named} of {payees.length} already have an alias: their rows get its name and category, so they need no category mapping. Give the others a
-            name (and a category) and every record from or to them, now and later, is shown that way.
-          </p>
-        </div>
-        <div className="segmented" role="tablist" aria-label="Sent or received">
-          {[
-            ['all', `All (${payees.length})`],
-            ['sent', `Sent (${payees.filter((p) => p.sent_count).length})`],
-            ['received', `Received (${payees.filter((p) => p.received_count).length})`],
-          ].map(([k, l]) => (
-            <button key={k} className={side === k ? 'on' : ''} onClick={() => setSide(k)}>
-              {l}
-            </button>
-          ))}
-        </div>
-      </div>
-      <datalist id="payee-categories">
-        {info.categories.map((c) => (
-          <option key={c} value={c} />
-        ))}
-      </datalist>
-      <div className="table-wrap">
-        <table className="table mini-table">
-          <thead>
-            <tr>
-              <th>Payee</th>
-              <th className="num">Sent</th>
-              <th className="num">Received</th>
-              <th>Show as</th>
-              <th>Category</th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map((p) => {
-              const d = drafts[p.payee_key] || {}
-              const changed = pending.includes(p)
-              return (
-                <tr key={p.payee_key}>
-                  <td style={{ wordBreak: 'break-word', maxWidth: 320 }}>
-                    <b>{p.description}</b>
-                    <div className="hint">
-                      <code>{p.payee_key}</code> {p.alias_id && !changed && <span className="badge ok">alias</span>}
-                      {changed && <span className="badge warn">not saved</span>}
-                    </div>
-                  </td>
-                  <td className="num">{p.sent_count ? <>{money(p.sent_total)}<div className="hint">{p.sent_count}×</div></> : '—'}</td>
-                  <td className="num">{p.received_count ? <><span className="net-pos">{money(p.received_total)}</span><div className="hint">{p.received_count}×</div></> : '—'}</td>
-                  <td>
-                    <input value={d.alias ?? p.alias ?? ''} placeholder={p.suggestion} maxLength={100} style={{ minWidth: 150 }}
-                           onChange={(e) => set(p.payee_key, { alias: e.target.value })} aria-label={`Alias for ${p.description}`} />
-                  </td>
-                  <td>
-                    <input value={d.category ?? p.alias_category ?? ''} list="payee-categories" placeholder={p.sent_count ? 'Pick or type' : '—'} maxLength={50}
-                           style={{ minWidth: 130 }} disabled={!p.sent_count} title={p.sent_count ? '' : 'Money received has no category'}
-                           onChange={(e) => set(p.payee_key, { category: e.target.value })} aria-label={`Category for ${p.description}`} />
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-      <div className="form-actions" style={{ justifyContent: 'space-between', flexWrap: 'wrap', marginTop: 8 }}>
-        <div className="actions">
-          {list.length > 12 && (
-            <button className="btn ghost small" onClick={() => setShowAll(!showAll)}>
-              {showAll ? 'Show fewer' : `Show all ${list.length}`}
-            </button>
-          )}
-          <button className="btn ghost small" onClick={useSuggestions} title="Fill the empty names with the suggested ones">
-            <Sparkles size={14} /> Use suggested names
-          </button>
-          <label className="check small">
-            <input type="checkbox" checked={renameOld} onChange={(e) => setRenameOld(e.target.checked)} /> Also rename matching records already in the app
-          </label>
-        </div>
-        <button className="btn secondary" disabled={busy || !pending.length} onClick={onSave}>
-          Save {pending.length || ''} name{pending.length === 1 ? '' : 's'} &amp; apply
-        </button>
-      </div>
-    </div>
-  )
-}
-
 function CategoryMap({ info, options, setOption }) {
+  const [open, setOpen] = useState(false)
   const treated = (c) => !!options.category_treatment[c.value.toLowerCase()]
   const unknown = info.category_values.filter((c) => c.expense_rows && !c.known && !treated(c))
   if (!unknown.length) return null
-  const open = unknown.filter((c) => !options.category_map[c.value.toLowerCase()])
   const choose = (value, choice) => {
     let target = choice
     if (choice === '__new__') {
@@ -1069,54 +1490,42 @@ function CategoryMap({ info, options, setOption }) {
     else delete map[value.toLowerCase()]
     setOption({ category_map: map })
   }
-  const bulk = (useSuggestions) => {
-    const map = { ...options.category_map }
-    for (const c of open) {
-      if (useSuggestions && c.suggested) map[c.value.toLowerCase()] = c.suggested
-      else if (!useSuggestions && c.value.trim()) map[c.value.toLowerCase()] = c.value.trim()
-    }
-    setOption({ category_map: map })
-  }
+  const changed = unknown.filter((c) => options.category_map[c.value.toLowerCase()]).length
   return (
     <div style={{ marginTop: 16 }}>
       <div className="toolbar wrap" style={{ padding: 0, border: 0 }}>
-        <h4 style={{ margin: 0 }}>Categories not in the app yet ({open.length} to choose of {unknown.length})</h4>
+        <h4 style={{ margin: 0 }}>Categories (filled in automatically{changed ? ` · ${changed} changed by you` : ''})</h4>
         <span className="spacer" />
-        {open.some((c) => c.suggested) && (
-          <button className="btn secondary small" onClick={() => bulk(true)}><Sparkles size={14} /> Use the suggestions</button>
-        )}
-        {open.length > 0 && <button className="btn secondary small" onClick={() => bulk(false)}>Create the rest as new categories</button>}
+        <button className="btn secondary small" onClick={() => setOpen(!open)}>{open ? 'Hide' : 'Change categories'}</button>
       </div>
       <p className="hint" style={{ marginTop: 4 }}>
-        Choose an existing category for each, or create it. Rows stay unimported until their category is chosen.
-        {unknown.some((c) => c.maybe) && ' A “maybe” is not applied by “Use the suggestions”: check what its rows hold first (a “Mobile” category can hold recharges and a new phone).'}
+        Rows without a category get the one their payee had before, else one guessed from the description (Swiggy → Food, Uber → Transport…), else “General”.
+        Categories the app doesn’t have are matched to a close one or created. Nothing here has to be changed.
       </p>
-      <div className="form-grid">
-        {unknown.map((c) => {
-          const mapped = options.category_map[c.value.toLowerCase()]
-          const isNew = mapped && !info.categories.includes(mapped)
-          return (
-            <div key={c.value}>
-              <label>
-                {c.value ? `“${c.value}”` : 'Rows without a category'} · {c.expense_rows} row(s)
-                {c.suggested && !mapped ? ` · suggested: ${c.suggested}` : ''}
-                {c.maybe && !mapped ? ` · maybe ${c.maybe}? Please check` : ''}
-              </label>
-              <select value={mapped ? (isNew ? `new:${mapped}` : mapped) : ''} onChange={(e) => choose(c.value, e.target.value.startsWith('new:') ? e.target.value.slice(4) : e.target.value)}>
-                <option value="">Choose…</option>
-                {c.value && <option value={`new:${c.value.trim()}`}>Create “{c.value.trim()}” as a new category</option>}
-                {isNew && mapped !== c.value.trim() && <option value={`new:${mapped}`}>New category “{mapped}”</option>}
-                <option value="__new__">Create a new category with another name…</option>
-                <optgroup label="Your categories">
-                  {info.categories.map((k) => (
-                    <option key={k} value={k}>{k}{k === c.suggested ? ' (suggested)' : k === c.maybe ? ' (maybe)' : ''}</option>
-                  ))}
-                </optgroup>
-              </select>
-            </div>
-          )
-        })}
-      </div>
+      {open && (
+        <div className="form-grid">
+          {unknown.map((c) => {
+            const mapped = options.category_map[c.value.toLowerCase()]
+            const isNew = mapped && !info.categories.includes(mapped)
+            return (
+              <div key={c.value}>
+                <label>{c.value ? `“${c.value}”` : 'Rows without a category'} · {c.expense_rows} row(s)</label>
+                <select value={mapped ? (isNew ? `new:${mapped}` : mapped) : ''} onChange={(e) => choose(c.value, e.target.value.startsWith('new:') ? e.target.value.slice(4) : e.target.value)}>
+                  <option value="">{c.automatic ? `Automatic: ${c.automatic}` : 'Automatic (guessed for each row)'}</option>
+                  {c.value && c.value.trim() !== c.automatic && <option value={`new:${c.value.trim()}`}>Create “{c.value.trim()}” as a new category</option>}
+                  {isNew && mapped !== c.value.trim() && <option value={`new:${mapped}`}>New category “{mapped}”</option>}
+                  <option value="__new__">Create a new category with another name…</option>
+                  <optgroup label={c.value ? 'Your categories' : 'Use one category for all of them'}>
+                    {info.categories.map((k) => (
+                      <option key={k} value={k}>{k}</option>
+                    ))}
+                  </optgroup>
+                </select>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -1153,7 +1562,7 @@ function AccountMap({ info, options, setOption }) {
         {unmatched.length > 0 && <button className="btn secondary small" onClick={createAll}><Plus size={14} /> Create the {unmatched.length} missing account(s)</button>}
       </div>
       <p className="hint" style={{ marginTop: 4 }}>
-        Matched to your accounts by name (dots, spaces and capitals ignored) or last 4 digits. Choose or create the others; transfers and opening balances need both their accounts.
+        Matched to your accounts by name (dots, spaces and capitals ignored) or last 4 digits. Names that don’t match are created as new accounts (Undo removes them); choose one of yours instead if it’s the same account.
       </p>
       <div className="form-grid">
         {info.account_values.map((a) => {
@@ -1287,6 +1696,7 @@ function clean(r) {
     amount: r.amount === '' ? null : r.amount, my_share: r.kind === 'SPLIT' ? (r.my_share === '' ? null : r.my_share) : null,
     split_with: r.split_with || [], paid_by: r.kind === 'SPLIT' ? r.paid_by || null : null, account: r.account || null, to_account: r.kind === 'TRANSFER' ? r.to_account || null : null,
     note: r.note || null, quantity: r.quantity || 1,
-    include: true, parse_errors: r.parse_errors || [], parse_warnings: r.parse_warnings || [], fingerprint: r.fingerprint || null,
+    balance: r.balance ?? null, upi_seq: r.upi_seq ?? null,
+    include: r.include !== false, parse_errors: r.parse_errors || [], parse_warnings: r.parse_warnings || [], fingerprint: r.fingerprint || null,
   }
 }
