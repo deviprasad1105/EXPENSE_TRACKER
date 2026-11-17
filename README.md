@@ -85,6 +85,9 @@ They run against an in-memory SQLite database, so they need neither Postgres nor
 
 ## Android app (APK)
 
+**Download the app:** [mobile-app/ExpenseTracker.apk](mobile-app/ExpenseTracker.apk), with install steps in
+[mobile-app/README.md](mobile-app/README.md).
+
 `frontend/android/` wraps the same React build in a native Android app with [Capacitor](https://capacitorjs.com) (free and
 open source). The app has no server of its own: it calls the live site's API, set as `VITE_SITE_URL` in
 `frontend/.env.android`. The backend always accepts the app's origins (`https://localhost`, `capacitor://localhost`).
