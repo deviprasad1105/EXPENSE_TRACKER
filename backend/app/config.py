@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
 
     # One-time email codes. These are the starting values; the admin can change both in Admin → Settings.
-    otp_signup_minutes: int = 3
+    otp_signup_minutes: int = 5
     otp_account_minutes: int = 5
     otp_max_attempts: int = 5
     otp_resend_seconds: int = 30

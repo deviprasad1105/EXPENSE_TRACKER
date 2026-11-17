@@ -178,7 +178,7 @@ One-time 6-digit codes sent by email. `purpose` is `SIGNUP` (confirming the emai
 | `user_id` | INTEGER, FK → `app_users.id` | Whose code it is. Indexed. |
 | `purpose` | VARCHAR2(10) | `SIGNUP`, `PASSWORD` or `USERNAME`. |
 | `code_hash` | VARCHAR2(64) | HMAC-SHA256 of the code (keyed with `JWT_SECRET`). The code itself is only in the email. |
-| `created_at` / `expires_at` | DATE | Validity comes from `APP_SETTINGS` (default 3 minutes for sign-up, 5 for password/username). |
+| `created_at` / `expires_at` | DATE | Validity comes from `APP_SETTINGS` (default 5 minutes for sign-up and for password/username). |
 | `used_at` | DATE, nullable | When the code was accepted. A code works once. |
 | `failed_attempts` | INTEGER | Wrong codes entered. At `OTP_MAX_ATTEMPTS` (5) the code is disabled. |
 
@@ -193,7 +193,7 @@ App-wide settings the admin changes in the app (Admin → Settings), as key / va
 
 | Key | Meaning |
 |---|---|
-| `otp_signup_minutes` | How long the sign-up email code is valid (1–60, default `OTP_SIGNUP_MINUTES` = 3). |
+| `otp_signup_minutes` | How long the sign-up email code is valid (1–60, default `OTP_SIGNUP_MINUTES` = 5). |
 | `otp_account_minutes` | How long password / username change codes are valid (1–60, default `OTP_ACCOUNT_MINUTES` = 5). |
 
 ## DAILY_ITEMS

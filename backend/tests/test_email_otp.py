@@ -78,7 +78,7 @@ def test_abandoned_signup_frees_username_after_code_expires(client, db, outbox):
 
 def test_admin_sets_code_validity(client, db, make_user, outbox):
     admin = make_user("boss", admin=True)
-    assert client.get("/api/admin/settings/otp", headers=headers(admin)).json() == {"signup_minutes": 3, "account_minutes": 5}
+    assert client.get("/api/admin/settings/otp", headers=headers(admin)).json() == {"signup_minutes": 5, "account_minutes": 5}
     res = client.put("/api/admin/settings/otp", headers=headers(admin), json={"signup_minutes": 10, "account_minutes": 7})
     assert res.json() == {"signup_minutes": 10, "account_minutes": 7}
     assert client.put("/api/admin/settings/otp", headers=headers(admin), json={"signup_minutes": 0, "account_minutes": 7}).status_code == 422
