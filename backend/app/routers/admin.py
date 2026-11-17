@@ -22,6 +22,7 @@ from ..models import (
     DailyItem,
     DataBackup,
     DataShare,
+    EmailOtp,
     Expense,
     Fund,
     Notification,
@@ -42,9 +43,17 @@ from ..models import (
     UsernameChangeRequest,
 )
 from ..schemas import (
-    AccountDeletionOut, AdminReason, AdminUserUpdate, BackupOut, ManagedUserOut, UsernameDecision, UsernameRequestOut,
+    AccountDeletionOut,
+    AdminReason,
+    AdminUserUpdate,
+    BackupOut,
+    ManagedUserOut,
+    OtpSettings,
+    UsernameDecision,
+    UsernameRequestOut,
 )
 from ..security import hash_password
+from ..services import otp
 from ..services.mailer import send_email
 from ..services.backup import (
     KIND_USER,
@@ -79,6 +88,10 @@ def list_users(status_filter: str | None = None, admin: User = Depends(require_a
 @router.post("/users/{user_id}/approve", response_model=ManagedUserOut)
 def approve(user_id: int, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     user = _get_user(db, user_id)
+    if not user.email_verified:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This user hasn't confirmed their email yet. They must enter the emailed code first."
+        )
     user.status = STATUS_APPROVED
     user.approved_at = now_local()
     db.add(Notification(user_id=user.id, kind="INFO", message=f"Welcome! Your account was approved by {admin.username}."))
@@ -113,6 +126,8 @@ def update_user(user_id: int, data: AdminUserUpdate, admin: User = Depends(requi
         if user.role == ROLE_ADMIN:
             user.manager_id = None
     if data.status is not None:
+        if data.status == STATUS_APPROVED and not user.email_verified:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This user hasn't confirmed their email yet")
         user.status = data.status
         if data.status == STATUS_APPROVED and not user.approved_at:
             user.approved_at = now_local()
@@ -265,6 +280,7 @@ def delete_account(db: Session, user: User, actor: User, reason: str | None, kee
     for model, col in (
         (UserAvatar, UserAvatar.user_id), (UserBackground, UserBackground.user_id), (Notification, Notification.user_id),
         (UsernameChangeRequest, UsernameChangeRequest.user_id), (PasswordReset, PasswordReset.user_id),
+        (EmailOtp, EmailOtp.user_id),
     ):
         db.execute(delete(model).where(col == user.id))
     db.execute(delete(DataShare).where(or_(DataShare.owner_id == user.id, DataShare.viewer_id == user.id)))
@@ -494,3 +510,18 @@ def reject_deletion_request(
     )
     db.commit()
     return req
+
+
+# ---------- app settings ----------
+@router.get("/settings/otp", response_model=OtpSettings)
+def get_otp_settings(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    return OtpSettings(**otp.otp_minutes(db))
+
+
+@router.put("/settings/otp", response_model=OtpSettings)
+def update_otp_settings(data: OtpSettings, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """How long emailed codes stay valid: sign-up email confirmation, and password / username changes.
+    Codes already sent keep the expiry they were sent with."""
+    otp.set_otp_minutes(db, data.signup_minutes, data.account_minutes, admin.username)
+    db.commit()
+    return OtpSettings(**otp.otp_minutes(db))

@@ -41,11 +41,12 @@ def test_ip_rate_limit(client, make_user):
     assert login(client, "nobody", "x").status_code == 429
 
 
-def test_password_change_revokes_old_tokens(client, make_user):
+def test_password_change_revokes_old_tokens(client, make_user, outbox):
     user = make_user("asha")
     old = headers(user)
+    assert client.post("/api/profile/otp", headers=old, json={"purpose": "PASSWORD"}).status_code == 200
     res = client.post("/api/profile/password", headers=old,
-                      json={"current_password": PASSWORD, "new_password": "brand-new-password"})
+                      json={"current_password": PASSWORD, "new_password": "brand-new-password", "otp": outbox.last_code()})
     assert res.status_code == 200
     assert client.get("/api/auth/me", headers=old).status_code == 401
     new = {"Authorization": f"Bearer {res.json()['access_token']}"}

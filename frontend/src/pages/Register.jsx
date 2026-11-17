@@ -1,14 +1,15 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { MailCheck, UserPlus } from 'lucide-react'
+import { UserPlus } from 'lucide-react'
 import api, { errorMessage } from '../api'
 import AuthShell from '../components/AuthShell'
 import { Alert } from '../components/ui'
+import { VerifyEmailCard } from './VerifyEmail'
 
 export default function Register() {
   const [form, setForm] = useState({ username: '', email: '', full_name: '', password: '', manager_username: '' })
   const [error, setError] = useState('')
-  const [done, setDone] = useState('')
+  const [sent, setSent] = useState(null)
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value })
 
   const submit = async (e) => {
@@ -16,7 +17,7 @@ export default function Register() {
     setError('')
     try {
       const res = await api.post('/auth/register', { ...form, manager_username: form.manager_username || null })
-      setDone(res.data.message)
+      setSent({ username: form.username, data: res.data })
     } catch (err) {
       setError(errorMessage(err))
     }
@@ -24,20 +25,13 @@ export default function Register() {
 
   return (
     <AuthShell>
-      {done ? (
-        <div className="auth-card">
-          <MailCheck size={40} color="var(--primary)" />
-          <h2>Registration submitted</h2>
-          <p className="muted">{done}</p>
-          <Link to="/login" className="btn block">
-            Back to sign in
-          </Link>
-        </div>
+      {sent ? (
+        <VerifyEmailCard username={sent.username} initial={sent.data} />
       ) : (
         <form className="auth-card" onSubmit={submit}>
           <div>
             <h2>Create an account</h2>
-            <p className="muted">An administrator approves new accounts before they can sign in.</p>
+            <p className="muted">We’ll email you a code to confirm your address. After that, an administrator approves the account.</p>
           </div>
           {error && <Alert type="error">{error}</Alert>}
           <div className="field">

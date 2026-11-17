@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ArchiveRestore, AtSign, Check, DatabaseBackup, Download, Eraser, Eye, Lock, Search, Trash2, Unlock, UserX, Users, X } from 'lucide-react'
+import { ArchiveRestore, AtSign, Check, DatabaseBackup, Download, Eraser, Eye, Lock, MailWarning, Search, Settings2, Trash2, Unlock, UserX, Users, X } from 'lucide-react'
 import api, { download, errorMessage } from '../api'
 import { useAuth } from '../auth'
 import Avatar from '../components/Avatar'
@@ -23,15 +23,21 @@ export default function Admin() {
   const [filter, setFilter] = useState('')
   const [search, setSearch] = useState('')
   const [msg, setMsg] = useState(null)
+  const [otpCfg, setOtpCfg] = useState(null)
 
   const load = useCallback(async () => {
-    const [u, r, b, d] = await Promise.all([
-      api.get('/admin/users'), api.get('/admin/username-requests'), api.get('/admin/backups'), api.get('/admin/deletion-requests'),
+    const [u, r, b, d, o] = await Promise.all([
+      api.get('/admin/users'),
+      api.get('/admin/username-requests'),
+      api.get('/admin/backups'),
+      api.get('/admin/deletion-requests'),
+      api.get('/admin/settings/otp'),
     ])
     setUsers(u.data)
     setRequests(r.data)
     setBackups(b.data)
     setDeletions(d.data)
+    setOtpCfg(o.data)
   }, [])
   useEffect(() => {
     load()
@@ -110,6 +116,11 @@ export default function Admin() {
     )
   }
 
+  const saveOtp = (e) => {
+    e.preventDefault()
+    act(() => api.put('/admin/settings/otp', { signup_minutes: Number(otpCfg.signup_minutes), account_minutes: Number(otpCfg.account_minutes) }), 'Code validity saved')
+  }
+
   const byId = Object.fromEntries(users.map((u) => [u.id, u]))
   const orgAdmins = users.filter((u) => u.role === 'ORG_ADMIN')
   const pendingUsers = users.filter((u) => u.status === 'PENDING').length
@@ -135,6 +146,9 @@ export default function Admin() {
           </button>
           <button className={tab === 'backups' ? 'on' : ''} onClick={() => setTab('backups')}>
             <DatabaseBackup size={14} /> Backups
+          </button>
+          <button className={tab === 'settings' ? 'on' : ''} onClick={() => setTab('settings')}>
+            <Settings2 size={14} /> Settings
           </button>
         </div>
       </PageHeader>
@@ -187,6 +201,11 @@ export default function Admin() {
                       </td>
                       <td>
                         <span className={`badge ${STATUS_CLS[u.status]}`}>{u.status.toLowerCase()}</span>{' '}
+                        {!u.email_verified && (
+                          <span className="badge warn" title="They haven’t entered the code we emailed them, so they can’t be approved yet">
+                            <MailWarning size={11} /> email not confirmed
+                          </span>
+                        )}{' '}
                         {u.is_locked && (
                           <span className="badge bad" title={`Locked by ${u.locked_by} on ${fmt(u.locked_at)}${u.lock_reason ? ` · ${u.lock_reason}` : ''}`}>
                             <Lock size={11} /> locked
@@ -294,7 +313,8 @@ export default function Admin() {
                       <td>
                         <div className="actions">
                           {u.status !== 'APPROVED' && (
-                            <button className="btn small" onClick={() => act(() => api.post(`/admin/users/${u.id}/approve`), `@${u.username} approved`)}>
+                            <button className="btn small" disabled={!u.email_verified} title={u.email_verified ? undefined : 'Waiting for them to confirm their email'}
+                                    onClick={() => act(() => api.post(`/admin/users/${u.id}/approve`), `@${u.username} approved`)}>
                               <Check size={14} /> Approve
                             </button>
                           )}
@@ -408,6 +428,32 @@ export default function Admin() {
             </table>
           </div>
         </div>
+      )}
+
+      {tab === 'settings' && otpCfg && (
+        <form className="card" onSubmit={saveOtp} style={{ maxWidth: 640 }}>
+          <div className="card-head">
+            <div>
+              <h3>Email codes</h3>
+              <p>How long the one-time codes we email stay valid (1 to 60 minutes). Codes already sent keep their old expiry.</p>
+            </div>
+          </div>
+          <div className="form-grid">
+            <div>
+              <label>Sign-up email confirmation (minutes)</label>
+              <input type="number" min={1} max={60} required value={otpCfg.signup_minutes} onChange={(e) => setOtpCfg({ ...otpCfg, signup_minutes: e.target.value })} />
+              <span className="hint">New users must enter this code before you can approve them.</span>
+            </div>
+            <div>
+              <label>Password and username changes (minutes)</label>
+              <input type="number" min={1} max={60} required value={otpCfg.account_minutes} onChange={(e) => setOtpCfg({ ...otpCfg, account_minutes: e.target.value })} />
+              <span className="hint">Also used for username requests sent to you.</span>
+            </div>
+          </div>
+          <div className="form-actions">
+            <button className="btn">Save</button>
+          </div>
+        </form>
       )}
 
       {tab === 'requests' && (

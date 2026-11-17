@@ -297,8 +297,10 @@ export default function Layout() {
       {drawerOpen && <div className="drawer-back" onClick={() => setDrawerOpen(false)} aria-hidden="true" />}
       <aside className="sidebar" id="app-sidebar" aria-label="Main menu" {...(isDrawer && !drawerOpen ? { inert: '' } : {})}>
         <div className="brand">
-          <Logo size={34} />
-          <span className="brand-name">Expense Tracker</span>
+          <Link to="/" className="brand-link" aria-label="Go to Overview" onClick={() => setDrawerOpen(false)}>
+            <Logo size={34} />
+            <span className="brand-name">Expense Tracker</span>
+          </Link>
           {isDrawer && (
             <button className="icon-btn drawer-close" onClick={() => setDrawerOpen(false)} aria-label="Close menu">
               <CloseRounded style={{ fontSize: 20 }} />

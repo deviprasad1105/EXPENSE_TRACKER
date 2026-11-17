@@ -4,16 +4,37 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
 from ..deps import ORG_LOCKED_MESSAGE, accessible_users, can_write, get_current_user
-from ..models import ROLE_ADMIN, STATUS_APPROVED, STATUS_PENDING, STATUS_REJECTED, Notification, PasswordReset, User
+from ..models import (
+    OTP_SIGNUP,
+    ROLE_ADMIN,
+    STATUS_APPROVED,
+    STATUS_PENDING,
+    STATUS_REJECTED,
+    EmailOtp,
+    Notification,
+    PasswordReset,
+    User,
+)
 from ..ratelimit import RateLimiter
-from ..schemas import AccessibleUser, ForgotPasswordIn, RegisterIn, ResetPasswordIn, TokenOut, UserOut
+from ..schemas import (
+    AccessibleUser,
+    ForgotPasswordIn,
+    OtpSentOut,
+    RegisterIn,
+    ResendSignupOtpIn,
+    ResetPasswordIn,
+    TokenOut,
+    UserOut,
+    VerifyEmailIn,
+)
 from ..security import create_access_token, hash_password, verify_password
+from ..services import otp
 from ..services.mailer import send_email
 from ..timeutil import now_local
 from .profile import account_exists
@@ -29,10 +50,39 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-@router.post("/register", status_code=201)
+VERIFY_EMAIL_MESSAGE = "Confirm your email first: enter the code we emailed you. You can ask for a new code."
+
+
+def _drop_stale_unverified(db: Session, username: str, email: str) -> None:
+    """A sign-up whose email was never confirmed doesn't hold its username or email forever: once its code has
+    expired, registering again with that username or email replaces it."""
+    stale = db.scalars(
+        select(User).where(
+            User.status == STATUS_PENDING,
+            User.email_verified.is_(False),
+            or_(func.lower(User.username) == username.lower(), func.lower(User.email) == email.strip().lower()),
+        )
+    ).all()
+    for u in stale:
+        if not _has_live_code(db, u.id):
+            db.execute(delete(EmailOtp).where(EmailOtp.user_id == u.id))
+            db.delete(u)
+    db.flush()
+
+
+def _has_live_code(db: Session, user_id: int) -> bool:
+    stmt = select(EmailOtp.id).where(
+        EmailOtp.user_id == user_id, EmailOtp.used_at.is_(None), EmailOtp.expires_at > now_local()
+    )
+    return db.scalar(stmt.limit(1)) is not None
+
+
+@router.post("/register", status_code=201, response_model=OtpSentOut)
 def register(data: RegisterIn, request: Request, db: Session = Depends(get_db)):
+    """Create a PENDING, unverified account and email it a code. Admins hear about it only once the code is entered."""
     if not public_form_limiter.hit(f"register:{_client_ip(request)}"):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests. Wait a minute and try again.")
+    _drop_stale_unverified(db, data.username, data.email)
     if account_exists(db, data.username, data.email):
         raise HTTPException(status.HTTP_409_CONFLICT, "Username or email already registered")
 
@@ -49,15 +99,51 @@ def register(data: RegisterIn, request: Request, db: Session = Depends(get_db)):
         full_name=data.full_name,
         password_hash=hash_password(data.password),
         status=STATUS_PENDING,
+        email_verified=False,
         manager_id=manager_id,
     )
     db.add(user)
     db.flush()
+    expires, sent = otp.issue(db, user, OTP_SIGNUP)
+    message = (
+        f"We emailed a code to {user.email}. Enter it to confirm your email."
+        if sent
+        else "Your account was created, but we couldn't send the code email. Use 'Send a new code'."
+    )
+    return OtpSentOut(message=message, expires_at=expires, expires_in_seconds=otp.seconds_left(expires), email_sent=sent)
 
+
+def _unverified_signup(db: Session, username: str) -> User:
+    user = db.scalar(select(User).where(User.username == username.strip()))
+    if not user or user.status != STATUS_PENDING or user.email_verified:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "There is no sign-up waiting for an email code under that username")
+    return user
+
+
+@router.post("/verify-email")
+def verify_email(data: VerifyEmailIn, request: Request, db: Session = Depends(get_db)):
+    if not login_limiter.hit(f"verify:{_client_ip(request)}"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many attempts. Wait a minute and try again.")
+    user = _unverified_signup(db, data.username)
+    otp.consume(db, user, OTP_SIGNUP, data.code)
+    user.email_verified = True
     for admin_id in db.scalars(select(User.id).where(User.role == ROLE_ADMIN)):
         db.add(Notification(user_id=admin_id, kind="APPROVAL", message=f"New user '{user.username}' is waiting for approval"))
     db.commit()
-    return {"message": "Registration submitted. An admin must approve your account before you can log in."}
+    return {"message": "Email confirmed. An admin must now approve your account before you can sign in."}
+
+
+@router.post("/resend-email-code", response_model=OtpSentOut)
+def resend_email_code(data: ResendSignupOtpIn, request: Request, db: Session = Depends(get_db)):
+    if not public_form_limiter.hit(f"resend:{_client_ip(request)}"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests. Wait a minute and try again.")
+    user = _unverified_signup(db, data.username)
+    wait = otp.resend_wait_seconds(db, user.id, OTP_SIGNUP)
+    if wait:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, f"Wait {wait} second(s) before asking for another code.")
+    expires, sent = otp.issue(db, user, OTP_SIGNUP)
+    otp.require_sent(sent)
+    return OtpSentOut(message=f"We emailed a new code to {user.email}.", expires_at=expires, expires_in_seconds=otp.seconds_left(expires))
 
 
 @router.post("/login", response_model=TokenOut)
@@ -76,6 +162,8 @@ def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: Ses
         if user:
             _record_failed_login(db, user, request)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username or password")
+    if user.status == STATUS_PENDING and not user.email_verified:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, VERIFY_EMAIL_MESSAGE)
     if user.status == STATUS_PENDING:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Your account is waiting for admin approval")
     if user.status == STATUS_REJECTED:
@@ -197,7 +285,7 @@ def forgot_password(data: ForgotPasswordIn, request: Request, db: Session = Depe
             token_hash=_token_hash(token),
             temp_password_hash=hash_password(temp_password),
             created_at=now,
-            expires_at=expires,
+            expires_at=expires, expires_in_seconds=otp.seconds_left(expires),
             requested_ip=request.client.host if request.client else None,
         )
     )
