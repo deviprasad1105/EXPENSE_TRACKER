@@ -27,6 +27,9 @@ from .timeutil import now_local
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("expense_tracker")
 
+# Where the mobile app's web view says it is: Android (Capacitor androidScheme https) and iOS
+APP_ORIGINS = ("https://localhost", "capacitor://localhost")
+
 
 def seed_admin():
     with SessionLocal() as db:
@@ -128,7 +131,9 @@ async def security_headers(request: Request, call_next):
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+    # The Android app (Capacitor) loads the frontend from https://localhost and calls this API across origins;
+    # it sends a Bearer token, not cookies, so allowing that fixed origin exposes nothing new
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()] + list(APP_ORIGINS),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -20,7 +20,7 @@ import SavingsOutlined from '@mui/icons-material/SavingsOutlined'
 import StarOutlineRounded from '@mui/icons-material/StarOutlineRounded'
 import StarRounded from '@mui/icons-material/StarRounded'
 import SwapHorizRounded from '@mui/icons-material/SwapHorizRounded'
-import api, { errorMessage, money, todayISO } from '../api'
+import api, { errorMessage, money, SITE_ORIGIN, todayISO } from '../api'
 import { hasFeature, useAuth } from '../auth'
 import { ACCOUNT_KINDS, accountLabel } from '../components/Accounts'
 import AliasModal from '../components/AliasModal'
@@ -1055,7 +1055,7 @@ function UpiSettings({ user, updateUser }) {
   const makeLink = async () => {
     if (data.has_token && !window.confirm('Make a new link? The current one stops working, so update your forwarding app.')) return
     const r = await run(() => api.post('/upi/token'), 'New forwarding link made. Copy it now: it is shown only once.')
-    if (r) setLink(`${window.location.origin}${r.data.hook_path}`)
+    if (r) setLink(`${SITE_ORIGIN}${r.data.hook_path}`)
   }
 
   const copy = (text) => navigator.clipboard?.writeText(text).then(() => setMsg({ type: 'ok', text: 'Copied.' }))

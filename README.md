@@ -83,6 +83,28 @@ cd backend
 
 They run against an in-memory SQLite database, so they need neither Postgres nor a running server.
 
+## Android app (APK)
+
+`frontend/android/` wraps the same React build in a native Android app with [Capacitor](https://capacitorjs.com) (free and
+open source). The app has no server of its own: it calls the live site's API, set as `VITE_SITE_URL` in
+`frontend/.env.android`. The backend always accepts the app's origins (`https://localhost`, `capacitor://localhost`).
+
+You need JDK 17 and the Android SDK (Android Studio, or the command-line tools with `platforms;android-34` and
+`build-tools;34.0.0`), with `JAVA_HOME` and `ANDROID_HOME` set. Then:
+
+```bash
+cd frontend
+npm run apk        # web build for Android + cap sync + Gradle
+```
+
+The APK is written to `frontend/android/app/build/outputs/apk/debug/app-debug.apk`. Share it directly; on the phone allow
+"Install unknown apps" once for the app it was opened from. Install a newer APK over the old one to update; signed-in users
+stay signed in. Inside the app, report and export downloads open the Android share sheet (save to Files or Drive, or open
+in Excel or a PDF viewer). Icons and splash screens come from `frontend/assets/`; regenerate them with
+`npx @capacitor/assets generate --android`.
+
+Most changes are web changes: deploy them to Vercel as usual, then rebuild the APK so the app gets them too.
+
 ## Features
 
 - **Daily items** (*My Daily Items*): the things you buy every day (cigarette, chocolate, food…).
