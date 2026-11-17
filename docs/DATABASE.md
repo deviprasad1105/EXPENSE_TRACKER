@@ -261,8 +261,14 @@ SPLIT_GROUPS ──< SPLIT_MEMBERS >── APP_USERS (NULL for guests)
 
 Everyone in a group, app user or guest, is a `SPLIT_MEMBERS` row, and bills, shares and payments point at those
 rows. Deleting a group deletes its members, bills, shares and payments (`ON DELETE CASCADE`). The links to
-`APP_USERS` have no cascade on purpose: deleting a user would change other people's balances, so the admin
-cannot delete a user who is or was in a split group, or created one, until those groups are deleted.
+`APP_USERS` have no cascade on purpose, because deleting those rows would change other people's balances. Instead,
+when an admin deletes a user who is or was in a split group, their `SPLIT_MEMBERS` rows stay and become guests
+named "<full name> (deleted account)" (`user_id` NULL), so every bill, share, payment and balance is unchanged.
+Groups they own pass to another app user in the group (an active group admin first), and the bills and payments
+they recorded are credited to that owner. A group with no other app user is deleted, because only they could see it.
+The account backup lists those member rows, so restoring it turns the guests back into the user. Organisation
+admins still cannot delete a member who is in split groups, because those groups can include people outside the
+organisation.
 
 The first version stored participants by user id. On startup, `backend/app/migrate.py` moves such a database to
 this layout: it recreates the bill, share and settlement tables (only if they are empty) and makes

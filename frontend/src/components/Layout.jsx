@@ -19,7 +19,7 @@ import MenuBookOutlined from '@mui/icons-material/MenuBookOutlined'
 import NotificationsNoneOutlined from '@mui/icons-material/NotificationsNoneOutlined'
 import PersonOutlineOutlined from '@mui/icons-material/PersonOutlineOutlined'
 import HomeOutlined from '@mui/icons-material/HomeOutlined'
-import InstallMobileOutlined from '@mui/icons-material/InstallMobileOutlined'
+import AndroidRounded from '@mui/icons-material/AndroidRounded'
 import ChevronRightRounded from '@mui/icons-material/ChevronRightRounded'
 import CloseRounded from '@mui/icons-material/CloseRounded'
 import ChevronLeftRounded from '@mui/icons-material/ChevronLeftRounded'
@@ -378,7 +378,7 @@ export default function Layout() {
             {/* Already in the app: no point offering to download it */}
             {!isApp && (
               <a href={APP_DOWNLOAD_URL} className="icon-btn" title="Download the Android app" aria-label="Download the Android app">
-                <InstallMobileOutlined style={{ fontSize: 20 }} />
+                <AndroidRounded style={{ fontSize: 22, color: '#3ddc84' }} />
               </a>
             )}
             <div className="menu-wrap" ref={menuRef}>

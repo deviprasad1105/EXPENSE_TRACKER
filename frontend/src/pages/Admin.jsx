@@ -58,7 +58,7 @@ export default function Admin() {
 
   const removeUser = (u) => {
     const reason = window.prompt(
-      `Permanently delete @${u.username} and ALL their data?\n\nA full backup is saved first, and you can restore it from the Backups tab.\n\nReason (optional):`,
+      `Permanently delete @${u.username} and ALL their data?\n\nIn split bill groups they stay as a guest under their name, so nobody’s balance changes; groups they own pass to another member.\n\nA full backup is saved first, and you can restore it from the Backups tab.\n\nReason (optional):`,
       '',
     )
     if (reason === null) return
