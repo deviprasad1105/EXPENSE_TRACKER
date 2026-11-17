@@ -1,6 +1,12 @@
 import axios from 'axios'
+import { Capacitor } from '@capacitor/core'
 
-const api = axios.create({ baseURL: '/api' })
+// True inside the Android app. The app has no server of its own, so it calls the live site's API
+// (VITE_SITE_URL, set in .env.android); in a browser the API sits on the same domain under /api.
+export const isApp = Capacitor.isNativePlatform()
+export const SITE_ORIGIN = isApp ? import.meta.env.VITE_SITE_URL : window.location.origin
+
+const api = axios.create({ baseURL: `${isApp ? SITE_ORIGIN : ''}/api` })
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
@@ -81,12 +87,33 @@ export async function download(url, params, fallbackName) {
   }
   const disposition = res.headers['content-disposition'] || ''
   const match = disposition.match(/filename="?([^"]+)"?/)
+  const name = match ? match[1] : fallbackName
+  if (isApp) return shareFile(res.data, name)
   const link = document.createElement('a')
   link.href = URL.createObjectURL(res.data)
-  link.download = match ? match[1] : fallbackName
+  link.download = name
   link.click()
   // Revoking at once can cancel the download in some browsers
   setTimeout(() => URL.revokeObjectURL(link.href), 10_000)
+}
+
+// The Android web view ignores <a download>: save the file in the app's cache and open the share sheet,
+// from where it can be saved to Files/Drive or opened in Excel, a PDF viewer…
+async function shareFile(blob, name) {
+  const [{ Filesystem, Directory }, { Share }] = await Promise.all([import('@capacitor/filesystem'), import('@capacitor/share')])
+  const data = await new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result).split(',')[1])
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(blob)
+  })
+  const { uri } = await Filesystem.writeFile({ path: name.replace(/[\\/:*?"<>|]/g, '_'), data, directory: Directory.Cache })
+  try {
+    await Share.share({ title: name, files: [uri] })
+  } catch (err) {
+    // Closing the share sheet without picking an app is not an error
+    if (!/cancel/i.test(String(err?.message))) throw err
+  }
 }
 
 export const money = (v) =>
