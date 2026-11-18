@@ -519,6 +519,24 @@ and reminders use the oldest unpaid bill (an overdue one before next month's), e
 out with the evening job (a `CARD_DUE` notification and an email): `remind_days` before, on the due day, and the day
 after if still unpaid.
 
+### HOLDINGS
+One investment the user holds (Investments page): a mutual fund, share, ETF, crypto coin, gold, bond or deposit.
+Only `kind` and `name` are required; every figure is kept only when the user knows it.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `user_id` | INTEGER, FK → `app_users.id` | Owner. Indexed. |
+| `kind` | VARCHAR2(12) | `MUTUAL_FUND`, `STOCK`, `ETF`, `CRYPTO`, `GOLD`, `BOND`, `DEPOSIT` or `OTHER`. |
+| `name`, `platform`, `symbol` | VARCHAR2 | The scheme / share / coin, where it is held (Groww, Nuvama, CoinDCX...) and its ticker. |
+| `units` | NUMBER(18,6), nullable | Units, shares, coins or grams. |
+| `invested`, `current_value` | NUMBER(14,2), nullable | Amount put in and what it is worth on `valued_on` (DATE, nullable). |
+| `note` | VARCHAR2(300), nullable | Free text. |
+| `is_active` | NUMBER(1) | 0 once sold: still listed, but left out of the totals. |
+
+The page works out the average cost and price per unit only when `units` is known, and a gain only when both
+`invested` and `current_value` are. It compares the holdings' value with the balance of the user's `INVESTMENT`
+accounts, which is what the rest of the app counts. Holdings don't post to the accounts.
+
 ### ACCOUNT_TRANSFERS
 Money moved between two of the user's own accounts (`from_account_id` → `to_account_id`, `amount`,
 `transfer_date`, `note`). Not income and not spending, so it never changes the available balance or budgets.

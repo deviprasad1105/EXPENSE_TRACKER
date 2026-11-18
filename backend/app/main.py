@@ -16,8 +16,8 @@ from .deps import FEATURE_ACCOUNTING, FEATURE_EXPENSE, FEATURE_SUBSCRIPTION, FEA
 from .migrate import sync_schema
 from .models import ROLE_ADMIN, STATUS_APPROVED, JobRun, User
 from .routers import (
-    accounts, admin, aliases, auth, autotrack, budgets, cards, categories, cron, daily_items, dashboard, expenses, funds, mfa,
-    notifications, org, profile, recover, reports, shares, splits, subscriptions, upi,
+    accounts, admin, aliases, auth, autotrack, budgets, cards, categories, cron, daily_items, dashboard, expenses, funds, investments,
+    mfa, notifications, org, profile, recover, reports, shares, splits, subscriptions, upi,
 )
 from .security import hash_password
 from .services.cards import card_reminder_job
@@ -149,7 +149,7 @@ app.add_middleware(
 for r in (auth, recover, admin, org, profile, mfa, notifications, splits, cron):
     app.include_router(r.router)
 # Expense tracking is a feature the admin grants per user
-for r in (expenses, daily_items, funds, dashboard, reports, shares, accounts, budgets, aliases, categories, cards):
+for r in (expenses, daily_items, funds, dashboard, reports, shares, accounts, budgets, aliases, categories, cards, investments):
     app.include_router(r.router, dependencies=[Depends(require_feature(FEATURE_EXPENSE))])
 app.include_router(importer.router, dependencies=[Depends(require_feature(FEATURE_EXPENSE))])
 app.include_router(subscriptions.router, dependencies=[Depends(require_feature(FEATURE_SUBSCRIPTION))])

@@ -580,6 +580,66 @@ class CardMarkPaidIn(BaseModel):
     paid: bool = True
 
 
+# ---------- investments ----------
+HOLDING_KINDS = ("MUTUAL_FUND", "STOCK", "ETF", "CRYPTO", "GOLD", "BOND", "DEPOSIT", "OTHER")
+
+
+class HoldingIn(BaseModel):
+    kind: Literal[HOLDING_KINDS]  # type: ignore[valid-type]
+    name: str = Field(min_length=1, max_length=120)
+    platform: str | None = Field(default=None, max_length=60)
+    symbol: str | None = Field(default=None, max_length=30)
+    units: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=6)
+    invested: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    current_value: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    valued_on: date | None = None
+    note: str | None = Field(default=None, max_length=300)
+    is_active: bool = True
+
+
+class HoldingOut(ORM):
+    id: int
+    kind: str
+    name: str
+    platform: str | None
+    symbol: str | None
+    units: Decimal | None
+    invested: Decimal | None
+    current_value: Decimal | None
+    valued_on: date | None
+    note: str | None
+    is_active: bool
+    # Worked out only when the figures behind them are known
+    avg_cost: Decimal | None = None
+    price: Decimal | None = None
+    gain: Decimal | None = None
+    gain_percent: float | None = None
+
+
+class HoldingGroup(BaseModel):
+    kind: str
+    count: int
+    invested: Decimal
+    current_value: Decimal
+    gain: Decimal | None
+    gain_percent: float | None
+
+
+class InvestmentsOut(BaseModel):
+    holdings: list[HoldingOut]
+    groups: list[HoldingGroup]
+    invested: Decimal
+    current_value: Decimal
+    # Over holdings with both figures known
+    gain: Decimal | None
+    gain_percent: float | None
+    # Holdings without a current value (left out of the value total)
+    unvalued: int
+    # Balance of the user's Investment-type accounts, to compare with the holdings' value
+    accounts_balance: Decimal | None
+    accounts: list[str]
+
+
 # ---------- auto-tracking (bank SMS / notifications) ----------
 class AutoTrackSettingsIn(BaseModel):
     enabled: bool

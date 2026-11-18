@@ -206,6 +206,34 @@ class CardBill(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
 
 
+class Holding(Base):
+    """One investment the user holds (Investments page): a mutual fund, share, crypto coin, gold and so on.
+
+    Only `name` and `kind` are required. Units, amount invested and current value are kept only when the user knows
+    them, and the page shows averages and gains only where the figures behind them are known."""
+
+    __tablename__ = "holdings"
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # MUTUAL_FUND, STOCK, ETF, CRYPTO, GOLD, BOND, DEPOSIT or OTHER
+    kind: Mapped[str] = mapped_column(String(12), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    # Where it is held: Groww, Nuvama, CoinDCX, a fund house...
+    platform: Mapped[str | None] = mapped_column(String(60))
+    symbol: Mapped[str | None] = mapped_column(String(30))
+    units: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    invested: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    current_value: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    # The date the current value is from
+    valued_on: Mapped[date | None] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(String(300))
+    # False once sold; kept for the record
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local, onupdate=now_local)
+
+
 class AccountTransfer(Base):
     """Money moved between two of the user's own accounts. Not income and not an expense."""
 
