@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, CheckCircle2, RotateCcw, Trash2 } from 'lucide-react'
 import api, { errorMessage } from '../api'
 import AuthShell from '../components/AuthShell'
@@ -22,7 +22,9 @@ const ACTIONS = {
 /** A deleted account's owner restores it, or erases its backup for good, confirming with a code sent to its email. */
 export default function RecoverAccount() {
   const [email, setEmail] = useState('')
-  const [action, setAction] = useState('RESTORE')
+  const [params] = useSearchParams()
+  // Opened from 'erase its data' on the sign-in page: start on that choice
+  const [action, setAction] = useState(params.get('action') === 'PURGE' ? 'PURGE' : 'RESTORE')
   const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [done, setDone] = useState(null)
