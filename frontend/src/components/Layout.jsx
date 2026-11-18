@@ -5,6 +5,7 @@ import AccountBalanceWalletOutlined from '@mui/icons-material/AccountBalanceWall
 import AccountTreeOutlined from '@mui/icons-material/AccountTreeOutlined'
 import AdminPanelSettingsOutlined from '@mui/icons-material/AdminPanelSettingsOutlined'
 import AssessmentOutlined from '@mui/icons-material/AssessmentOutlined'
+import SmsOutlined from '@mui/icons-material/SmsOutlined'
 import AutoAwesomeOutlined from '@mui/icons-material/AutoAwesomeOutlined'
 import BusinessOutlined from '@mui/icons-material/BusinessOutlined'
 import CallSplitOutlined from '@mui/icons-material/CallSplitOutlined'
@@ -34,6 +35,7 @@ import UploadFileOutlined from '@mui/icons-material/UploadFileOutlined'
 import VisibilityOutlined from '@mui/icons-material/VisibilityOutlined'
 import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded'
 import api, { APP_DOWNLOAD_URL, isApp, todayISO } from '../api'
+import { AutoTrack } from '../autotrack'
 import { canUseSplits, hasFeature, useAuth } from '../auth'
 import Avatar from './Avatar'
 import Tour from './Tour'
@@ -100,6 +102,16 @@ export default function Layout() {
   const splitPlan = hasFeature(user, 'split')
   const subscription = hasFeature(user, 'subscription')
   const accounting = hasFeature(user, 'accounting')
+
+  // Android app: send bank messages waiting on the phone, and open the page a tapped auto-tracking notification asked for
+  useEffect(() => {
+    if (!AutoTrack) return undefined
+    const go = () => AutoTrack.takeRoute().then(({ route }) => route && navigate(route)).catch(() => {})
+    go()
+    AutoTrack.flush().catch(() => {})
+    window.addEventListener('autotrackRoute', go)
+    return () => window.removeEventListener('autotrackRoute', go)
+  }, [navigate])
 
   // Welcome tour: once per login session until the user ticks "Don't show again"
   useEffect(() => {
@@ -234,7 +246,12 @@ export default function Layout() {
               ['/expenses', 'Expenses', ReceiptLongOutlined, 'nav-expenses'],
             ]
           : []),
-        ...(hasFeature(user, 'upi') ? [['/upi', 'UPI Tracker', PhonelinkRingOutlined, 'nav-upi']] : []),
+        ...(hasFeature(user, 'upi')
+          ? [
+              ['/auto-tracking', 'Auto-tracking', SmsOutlined, 'nav-autotrack'],
+              ['/upi', 'UPI Tracker', PhonelinkRingOutlined, 'nav-upi'],
+            ]
+          : []),
         ...(split ? [['/splits', 'Split Bills', CallSplitOutlined, 'nav-splits']] : []),
         ...(subscription ? [['/subscriptions', 'Subscriptions', EventRepeatOutlined, 'nav-subscriptions']] : []),
       ],

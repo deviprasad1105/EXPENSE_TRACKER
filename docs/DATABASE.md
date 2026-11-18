@@ -647,6 +647,35 @@ Each message the UPI tracker received and what became of it.
 own on / off) and `upi_token_hash` / `upi_token_hint` (SHA-256 and last 4 characters of the private forwarding link's
 token; the token itself is shown once and never stored).
 
+### BANK_MESSAGES
+Auto-tracking: each bank SMS or bank-app notification the Android app sent (or a message pasted on the Auto-tracking
+page), what was read from it, and what became of it. Part of the UPI tracker feature (`feature_upi`). The phone sends
+only messages from business senders that mention an amount and money moving; personal messages and one-time
+passwords never leave it.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `received_at` | DATE | When the phone received it. Indexed. |
+| `source` | VARCHAR(12) | `SMS`, `NOTIFICATION` (a bank / payment app's notification) or `PASTE`. |
+| `sender`, `body` | VARCHAR(80), VARCHAR(1000) | The SMS sender (e.g. `AX-AXISBK`) or app name, and the text. |
+| `body_hash` | VARCHAR(64) | SHA-256 of user + sender + text + day: a message sent twice (rescan) is kept once. Indexed. |
+| `status` | VARCHAR(10) | `CREATED` (recorded), `PENDING` (waiting for the user), `DUPLICATE`, `IGNORED` (OTP, offer, balance update, before the start date, tracking off), `FAILED` (looked like a transaction but couldn't be read), `BILL` (a bill due), `DISMISSED` (the user chose not to record it). |
+| `reason` | VARCHAR(300) | Why it is waiting, skipped or a duplicate. |
+| `kind`, `direction`, `channel` | VARCHAR | `TXN` / `BILL`; `DEBIT` / `CREDIT`; `UPI`, `CARD`, `ATM`, `BANK`, `CARD_BILL`, `AUTOPAY`. |
+| `amount`, `balance`, `min_due` | NUMBER | The amount, the balance after it, a bill's minimum due. |
+| `bank`, `last4`, `party`, `ref` | VARCHAR | The bank (from the sender), the account / card's last digits, the other party, the reference number (indexed). |
+| `txn_date`, `due_date` | DATE | The transaction's date (the day it arrived when the message's date is implausible); a bill's due date. |
+| `suggestion`, `name`, `category` | VARCHAR | What to record (`EXPENSE`, `INCOME`, `TRANSFER`) and under which name / category. |
+| `account_id`, `to_account_id` | INTEGER, FK → `accounts.id`, nullable | The account (by last digits, else by bank name); for a transfer, where it went. |
+| `expense_id` / `fund_id` / `transfer_id` | INTEGER, FK, nullable | What was recorded from it. |
+
+The same transaction is recorded once: by reference number (also against `UPI_EVENTS`), the SMS and notification of one
+payment (same amount, day and card within 10 minutes), and a card bill payment seen from both the bank and the card.
+A message whose date and amount match an existing expense / income / transfer waits for the user even in automatic
+mode. `APP_USERS` holds the switches: `autotrack_enabled`, `autotrack_mode` (`REVIEW` or `AUTO`), `autotrack_since`
+(transactions before it are skipped; by default the latest existing record's date), and `autotrack_token_hash` /
+`autotrack_token_hint` (the phone's token, which can only send messages; shown once, never stored).
+
 ---
 
 ## Imported records

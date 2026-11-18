@@ -69,6 +69,15 @@ class User(Base):
     # SHA-256 of the private forwarding token (the token itself is shown once and never stored)
     upi_token_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     upi_token_hint: Mapped[str | None] = mapped_column(String(8))
+    # Auto-tracking (part of the UPI tracker feature): bank SMS / notifications read by the phone app.
+    # Mode REVIEW waits for the user to accept each transaction; AUTO records the ones it is sure about.
+    autotrack_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    autotrack_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="REVIEW")
+    # Messages about transactions before this date are skipped (they're already in the records)
+    autotrack_since: Mapped[date | None] = mapped_column(Date)
+    # SHA-256 of the phone's token for sending messages (it can only send messages; the token is shown once)
+    autotrack_token_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    autotrack_token_hint: Mapped[str | None] = mapped_column(String(8))
     # Part of every sign-in token: raising it (password change, "sign out everywhere", lock) revokes all tokens
     token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # Wrong passwords in a row; at LOGIN_MAX_FAILURES sign-in is blocked until login_blocked_until
@@ -348,6 +357,58 @@ class UpiEvent(Base):
     raw_text: Mapped[str | None] = mapped_column(String(1000))
     expense_id: Mapped[int | None] = mapped_column(ForeignKey("expenses.id", ondelete="SET NULL"))
     fund_id: Mapped[int | None] = mapped_column(ForeignKey("funds.id", ondelete="SET NULL"))
+
+
+MSG_CREATED = "CREATED"      # a record was made from it
+MSG_PENDING = "PENDING"      # waiting for the user to accept, edit or dismiss
+MSG_DUPLICATE = "DUPLICATE"  # the same transaction was already recorded
+MSG_IGNORED = "IGNORED"      # not a transaction (OTP, offer, balance update…), or before the start date
+MSG_FAILED = "FAILED"        # looked like a transaction but couldn't be read: the user can add it by hand
+MSG_BILL = "BILL"            # a bill that is due
+MSG_DISMISSED = "DISMISSED"  # the user chose not to record it
+
+
+class BankMessage(Base):
+    """A bank SMS or app notification the phone sent for auto-tracking, what was read from it and what became of it."""
+
+    __tablename__ = "bank_messages"
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # When the phone received it, and when it reached us
+    received_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+    # SMS, NOTIFICATION (a bank app's notification) or PASTE (typed on the page)
+    source: Mapped[str] = mapped_column(String(12), nullable=False)
+    sender: Mapped[str | None] = mapped_column(String(80))
+    body: Mapped[str] = mapped_column(String(1000), nullable=False)
+    # The same message sent twice (a rescan, or the SMS and the notification) is kept once
+    body_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(10), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(300))
+    # What was read: TXN or BILL, DEBIT / CREDIT, how (UPI, CARD, ATM, BANK, CARD_BILL, AUTOPAY)
+    kind: Mapped[str | None] = mapped_column(String(6))
+    direction: Mapped[str | None] = mapped_column(String(6))
+    channel: Mapped[str | None] = mapped_column(String(10))
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    bank: Mapped[str | None] = mapped_column(String(40))
+    last4: Mapped[str | None] = mapped_column(String(6))
+    party: Mapped[str | None] = mapped_column(String(120))
+    ref: Mapped[str | None] = mapped_column(String(40), index=True)
+    balance: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    txn_date: Mapped[date | None] = mapped_column(Date)
+    due_date: Mapped[date | None] = mapped_column(Date)
+    min_due: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    # What to record: EXPENSE, INCOME or TRANSFER, under this name / category, in these accounts
+    suggestion: Mapped[str | None] = mapped_column(String(10))
+    name: Mapped[str | None] = mapped_column(String(100))
+    category: Mapped[str | None] = mapped_column(String(50))
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
+    to_account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
+    # What was recorded from it
+    expense_id: Mapped[int | None] = mapped_column(ForeignKey("expenses.id", ondelete="SET NULL"))
+    fund_id: Mapped[int | None] = mapped_column(ForeignKey("funds.id", ondelete="SET NULL"))
+    transfer_id: Mapped[int | None] = mapped_column(ForeignKey("account_transfers.id", ondelete="SET NULL"))
 
 
 class DataShare(Base):

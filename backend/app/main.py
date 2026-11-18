@@ -151,6 +151,9 @@ app.include_router(accounting.router, dependencies=[Depends(require_feature(FEAT
 app.include_router(upi.router, dependencies=[Depends(require_feature(FEATURE_UPI))])
 # The forwarding link signs nobody in: its secret token names the user, and it checks their plan itself
 app.include_router(upi.hook_router)
+app.include_router(autotrack.router, dependencies=[Depends(require_feature(FEATURE_UPI))])
+# The phone sends with its own token (no sign-in session), and its plan is checked there
+app.include_router(autotrack.device_router)
 accounting.register_error_handler(app)
 
 
