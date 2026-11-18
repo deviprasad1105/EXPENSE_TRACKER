@@ -31,16 +31,19 @@ export default function ForgotPassword() {
           <MailCheck size={40} color="var(--primary)" />
           <h2>Check your email</h2>
           <p className="muted">{sent}</p>
-          <p className="muted small">You can reset your password at most 2 times in 15 days.</p>
-          <Link to="/login" className="btn secondary block">
-            <ArrowLeft size={16} /> Back to sign in
+          <p className="muted small">
+            The temporary password works once, for 1 hour. Remembered your password? Sign in with it as usual and the temporary one stops
+            working. You can reset your password at most 2 times in 15 days.
+          </p>
+          <Link to="/login" className="btn block">
+            <ArrowLeft size={16} /> Sign in with the temporary password
           </Link>
         </div>
       ) : (
         <form className="auth-card" onSubmit={submit}>
           <div>
             <h2>Forgot your password?</h2>
-            <p className="muted">Enter your username or email address. We’ll email you a temporary password and a link to choose a new one.</p>
+            <p className="muted">Enter your username or email address. We’ll email you a temporary password: sign in with it within 1 hour, then choose a new password.</p>
           </div>
           {error && <Alert type="error">{error}</Alert>}
           <div className="field">

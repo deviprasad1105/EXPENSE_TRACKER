@@ -31,6 +31,9 @@ class LoginOut(BaseModel):
     token_type: str = "bearer"
     mfa_required: bool = False
     mfa_token: str | None = None
+    # Signed in with a temporary password: send password_token with the new password to /login/new-password
+    password_change_required: bool = False
+    password_token: str | None = None
 
 
 class MfaLoginIn(BaseModel):
@@ -203,9 +206,10 @@ class ForgotPasswordIn(BaseModel):
     username: str = Field(min_length=1, max_length=120, description="Username or email address")
 
 
-class ResetPasswordIn(BaseModel):
-    token: str = Field(min_length=10, max_length=200)
-    temp_password: str = Field(min_length=1, max_length=100)
+class NewPasswordIn(BaseModel):
+    """The new password, chosen after signing in with a temporary password."""
+
+    password_token: str = Field(min_length=10, max_length=1000)
     new_password: str = Field(min_length=8, max_length=100)
 
 

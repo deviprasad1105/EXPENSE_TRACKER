@@ -17,7 +17,6 @@ import Profile from './pages/Profile'
 import Settings from './pages/Settings'
 import ForgotPassword from './pages/ForgotPassword'
 import VerifyEmail from './pages/VerifyEmail'
-import ResetPassword from './pages/ResetPassword'
 import RecoverAccount from './pages/RecoverAccount'
 import Splits from './pages/Splits'
 import SplitGroup from './pages/SplitGroup'
@@ -81,7 +80,8 @@ export default function App() {
       <Route path="/register" element={<Register />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/verify-email" element={<VerifyEmail />} />
-      <Route path="/reset-password" element={<ResetPassword />} />
+      {/* Reset emails no longer carry a link: older links lead to sign-in, where the temporary password works */}
+      <Route path="/reset-password" element={<Navigate to="/login" replace />} />
       <Route path="/recover-account" element={<RecoverAccount />} />
       <Route
         element={
