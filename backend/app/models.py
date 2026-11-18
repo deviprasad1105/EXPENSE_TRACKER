@@ -238,6 +238,24 @@ class Holding(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local, onupdate=now_local)
 
 
+class InvestmentLink(Base):
+    """A payment that looked like buying an investment (an expense or a transfer into an Investment account) and has
+    been dealt with on the Investments page: added to a holding, or marked as not an investment (holding_id empty).
+    So each one is asked about once."""
+
+    __tablename__ = "investment_links"
+    __table_args__ = (UniqueConstraint("user_id", "source", "source_id", name="uq_investment_link_source"),)
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # EXPENSE or TRANSFER, and that row's id (no foreign key: the payment may be deleted later)
+    source: Mapped[str] = mapped_column(String(8), nullable=False)
+    source_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    holding_id: Mapped[int | None] = mapped_column(Integer)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+
+
 class AccountTransfer(Base):
     """Money moved between two of the user's own accounts. Not income and not an expense."""
 

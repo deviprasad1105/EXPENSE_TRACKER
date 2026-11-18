@@ -619,6 +619,35 @@ class HoldingOut(ORM):
     gain_percent: float | None = None
 
 
+class PendingInvestment(BaseModel):
+    """A payment that looks like buying an investment, not yet added to the Investments page."""
+
+    source: str  # EXPENSE or TRANSFER
+    id: int
+    date: date
+    amount: Decimal
+    label: str
+    account: str | None
+
+
+class PendingInvestmentsOut(BaseModel):
+    since: date
+    items: list[PendingInvestment]
+
+
+class InvestActionIn(BaseModel):
+    """ADD it to holding_id (with the units bought, if known), NEW holding, or SKIP (not an investment)."""
+
+    action: Literal["ADD", "NEW", "SKIP"]
+    holding_id: int | None = None
+    units: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=6)
+    holding: HoldingIn | None = None
+
+
+class InvestActionOut(BaseModel):
+    holding: HoldingOut | None
+
+
 class HoldingGroup(BaseModel):
     kind: str
     count: int

@@ -22,6 +22,7 @@ from ..models import (
     BankMessage,
     CardBill,
     Holding,
+    InvestmentLink,
     Budget,
     DailyItem,
     DataBackup,
@@ -199,6 +200,7 @@ def _delete_user_data(db: Session, user_id: int):
     db.execute(delete(Budget).where(Budget.user_id == user_id))
     db.execute(delete(CardBill).where(CardBill.user_id == user_id))
     db.execute(delete(Holding).where(Holding.user_id == user_id))
+    db.execute(delete(InvestmentLink).where(InvestmentLink.user_id == user_id))
     db.execute(delete(AccountTransfer).where(AccountTransfer.user_id == user_id))
     db.execute(delete(Account).where(Account.user_id == user_id))
 

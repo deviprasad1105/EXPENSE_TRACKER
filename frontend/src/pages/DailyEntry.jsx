@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { checkInvestments } from '../components/InvestPrompt'
 import { Link } from 'react-router-dom'
 import { CheckCircle2, Lock, Plus, X } from 'lucide-react'
 import api, { errorMessage, money, niceDate, todayISO } from '../api'
@@ -92,7 +93,8 @@ export default function DailyEntry() {
     if (!window.confirm(`Save ${items.length} item(s) totalling ${money(total)} for ${day}${from ? `, paid from ${accountLabel(from)}` : ''}?\n\nYou can edit them for the next 3 days. After that they are locked.`))
       return
     try {
-      await api.post('/expenses/daily', { expense_date: day, items, account_id: accountId ?? null }, { params })
+      const r = await api.post('/expenses/daily', { expense_date: day, items, account_id: accountId ?? null }, { params })
+      checkInvestments({ expenseIds: r.data.map((x) => x.id) })
       setAccountsVersion((v) => v + 1)
       setMsg({ type: 'ok', text: `Saved ${items.length} item(s) for ${day}.` })
       await load()
