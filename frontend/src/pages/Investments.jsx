@@ -50,8 +50,22 @@ export default function Investments({ embedded = false }) {
   const canWrite = target?.writable !== false
   const [data, setData] = useState(null)
   const [editing, setEditing] = useState(null) // null, 'new' or a holding
-  // Parents whose lines are folded away (shown by default)
-  const [folded, setFolded] = useState({})
+  // What is folded away (everything is open by default): a holding's id (the lines under it), `t:KIND` (a type in the
+  // breakdown), `g:KIND` (a type's section) and `alloc` (the breakdown). Remembered in this browser only.
+  const [folded, setFolded] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(FOLD_KEY) || '{}') || {}
+    } catch {
+      return {}
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(FOLD_KEY, JSON.stringify(folded))
+    } catch {
+      /* private window: just not remembered */
+    }
+  }, [folded])
   const [msg, setMsg] = useState(null)
 
   const load = useCallback(() => api.get('/investments', { params }).then((r) => setData(r.data)), [params])
@@ -83,6 +97,14 @@ export default function Investments({ embedded = false }) {
   const value = Number(data?.current_value || 0)
   const diff = data?.accounts_balance != null ? value - Number(data.accounts_balance) : null
   const tree = { kids, folded, toggle: (id) => setFolded({ ...folded, [id]: !folded[id] }) }
+  const foldAll = () => {
+    const all = { alloc: false }
+    for (const g of data?.groups || []) all[`t:${g.kind}`] = all[`g:${g.kind}`] = true
+    for (const id of Object.keys(kids)) all[id] = true
+    all['g:SOLD'] = true
+    setFolded(all)
+  }
+  const anyFolded = Object.values(folded).some(Boolean)
 
   return (
     <div>
@@ -149,8 +171,22 @@ export default function Investments({ embedded = false }) {
 
       {data && data.groups.length > 0 && (
         <div className="card">
-          <h3>Where your money is</h3>
+          <div className="row-between inv-group-head">
+            <h3 style={{ margin: 0 }}>
+              <FoldButton open={!folded.alloc} onClick={() => tree.toggle('alloc')} />
+              Where your money is
+            </h3>
+            <div className="inv-fold-all">
+              <button type="button" className="btn ghost small" onClick={() => setFolded({})} disabled={!anyFolded}>
+                Expand all
+              </button>
+              <button type="button" className="btn ghost small" onClick={foldAll}>
+                Collapse all
+              </button>
+            </div>
+          </div>
           {/* Each type, then every holding in it (and the lines under a holding), with its share of the total value */}
+          {!folded.alloc && (
           <div className="inv-alloc" role="table" aria-label="Breakdown of investments">
             {data.groups.map((g) => {
               const pct = (v) => (value && v != null ? (Number(v) / value) * 100 : null)
@@ -181,6 +217,7 @@ export default function Investments({ embedded = false }) {
                 <div key={g.kind} className="inv-alloc-group" role="rowgroup">
                   <div className="inv-alloc-row inv-alloc-type" role="row">
                     <span className="strong">
+                      <FoldButton open={!folded[`t:${g.kind}`]} onClick={() => tree.toggle(`t:${g.kind}`)} />
                       {KINDS[g.kind]} <span className="muted">· {g.count}</span>
                     </span>
                     <div className="progress" title={`${share.toFixed(1)}%`}>
@@ -189,13 +226,15 @@ export default function Investments({ embedded = false }) {
                     <span className="num strong">{money(g.current_value)}</span>
                     <span className="num strong">{share.toFixed(1)}%</span>
                   </div>
-                  {held
-                    .filter((h) => h.kind === g.kind)
-                    .flatMap((h) => [line(h, false), ...(folded[h.id] ? [] : (kids[h.id] || []).map((c) => line(c, true)))])}
+                  {!folded[`t:${g.kind}`] &&
+                    held
+                      .filter((h) => h.kind === g.kind)
+                      .flatMap((h) => [line(h, false), ...(folded[h.id] ? [] : (kids[h.id] || []).map((c) => line(c, true)))])}
                 </div>
               )
             })}
           </div>
+          )}
         </div>
       )}
 
@@ -210,22 +249,24 @@ export default function Investments({ embedded = false }) {
       )}
 
       {data?.groups.map((g) => (
-        <Group key={g.kind} title={KINDS[g.kind]} g={g} rows={held.filter((h) => h.kind === g.kind)} tree={tree} canWrite={canWrite} setEditing={setEditing} run={run} />
+        <Group key={g.kind} id={`g:${g.kind}`} title={KINDS[g.kind]} g={g} rows={held.filter((h) => h.kind === g.kind)} tree={tree} canWrite={canWrite} setEditing={setEditing} run={run} />
       ))}
-      {sold.length > 0 && <Group title="Sold" rows={sold} tree={tree} canWrite={canWrite} setEditing={setEditing} run={run} />}
+      {sold.length > 0 && <Group id="g:SOLD" title="Sold" rows={sold} tree={tree} canWrite={canWrite} setEditing={setEditing} run={run} />}
     </div>
   )
 }
 
+const FOLD_KEY = 'investments-folded'
+
 function FoldButton({ open, onClick }) {
   return (
-    <button type="button" className="inv-fold" onClick={onClick} aria-expanded={open} aria-label={open ? 'Hide the lines under it' : 'Show the lines under it'}>
+    <button type="button" className="inv-fold" onClick={onClick} aria-expanded={open} aria-label={open ? 'Collapse' : 'Expand'} title={open ? 'Collapse' : 'Expand'}>
       {open ? '▾' : '▸'}
     </button>
   )
 }
 
-function Group({ title, g, rows, tree, canWrite, setEditing, run }) {
+function Group({ id, title, g, rows, tree, canWrite, setEditing, run }) {
   const { kids, folded, toggle } = tree
   // Each top-level row, then (unless folded) the lines under it
   const lines = rows.flatMap((h) => [{ h, child: false }, ...(folded[h.id] ? [] : (kids[h.id] || []).map((c) => ({ h: c, child: true })))])
@@ -267,10 +308,12 @@ function Group({ title, g, rows, tree, canWrite, setEditing, run }) {
       {h.note && <div className="hint inv-note">{h.note}</div>}
     </>
   )
+  const open = !folded[id]
   return (
     <div className="card">
-      <div className="row-between inv-group-head">
+      <div className={`row-between ${open ? 'inv-group-head' : ''}`}>
         <h3 style={{ margin: 0 }}>
+          <FoldButton open={open} onClick={() => toggle(id)} />
           {title} <span className="muted">· {rows.length}</span>
         </h3>
         {g && (
@@ -280,6 +323,8 @@ function Group({ title, g, rows, tree, canWrite, setEditing, run }) {
           </div>
         )}
       </div>
+      {open && (
+      <>
       <div className="table-wrap inv-table-wrap">
         <table className="table inv-table">
           <thead>
@@ -346,6 +391,8 @@ function Group({ title, g, rows, tree, canWrite, setEditing, run }) {
           </div>
         ))}
       </div>
+      </>
+      )}
     </div>
   )
 }

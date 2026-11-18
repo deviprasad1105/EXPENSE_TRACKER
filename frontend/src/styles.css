@@ -1145,6 +1145,7 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 .inv-alloc-child { padding-left: 52px; font-size: 13px; color: var(--text-2); border-bottom: 1px dashed var(--border); }
 .inv-fold { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-right: 6px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: pointer; box-shadow: none; font-size: 16px; line-height: 1; vertical-align: middle; }
 .inv-fold:hover { background: var(--surface-3); color: var(--text); }
+.inv-fold-all { display: flex; gap: 4px; flex-wrap: wrap; }
 .inv-fold-label { margin-left: 8px; font-size: 12px; font-weight: 400; }
 .inv-table tr.inv-parent td { border-bottom: 0; }
 .inv-table tr.inv-child td { padding-top: 6px; padding-bottom: 6px; font-size: 13px; background: var(--surface-2); }
