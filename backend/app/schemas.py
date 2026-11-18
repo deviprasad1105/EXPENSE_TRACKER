@@ -130,12 +130,12 @@ class OtpSentOut(BaseModel):
 
 
 class VerifyEmailIn(BaseModel):
-    username: str = Field(min_length=1, max_length=50)
+    username: str = Field(min_length=1, max_length=120, description="Username or email address")
     code: str = Field(min_length=1, max_length=10)
 
 
 class ResendSignupOtpIn(BaseModel):
-    username: str = Field(min_length=1, max_length=50)
+    username: str = Field(min_length=1, max_length=120, description="Username or email address")
 
 
 class RecoverCodeIn(BaseModel):
@@ -155,7 +155,7 @@ class OtpSettings(BaseModel):
 
 
 class ForgotPasswordIn(BaseModel):
-    username: str = Field(min_length=1, max_length=50)
+    username: str = Field(min_length=1, max_length=120, description="Username or email address")
 
 
 class ResetPasswordIn(BaseModel):

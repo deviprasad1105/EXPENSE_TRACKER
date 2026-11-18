@@ -50,6 +50,19 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def find_by_login(db: Session, identifier: str) -> User | None:
+    """The account a sign-in name refers to: its username, or its email address (any letter case).
+
+    Usernames can't contain '@', so a name with '@' is always an email.
+    """
+    name = (identifier or "").strip()
+    if not name:
+        return None
+    if "@" in name:
+        return db.scalar(select(User).where(func.lower(User.email) == name.lower()).order_by(User.id).limit(1))
+    return db.scalar(select(User).where(User.username == name))
+
+
 VERIFY_EMAIL_MESSAGE = "Confirm your email first: enter the code we emailed you. You can ask for a new code."
 
 
@@ -114,9 +127,9 @@ def register(data: RegisterIn, request: Request, db: Session = Depends(get_db)):
 
 
 def _unverified_signup(db: Session, username: str) -> User:
-    user = db.scalar(select(User).where(User.username == username.strip()))
+    user = find_by_login(db, username)
     if not user or user.status != STATUS_PENDING or user.email_verified:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "There is no sign-up waiting for an email code under that username")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "There is no sign-up waiting for an email code under that username or email")
     return user
 
 
@@ -150,7 +163,8 @@ def resend_email_code(data: ResendSignupOtpIn, request: Request, db: Session = D
 def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     if not login_limiter.hit(_client_ip(request)):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many sign-in attempts. Wait a minute and try again.")
-    user = db.scalar(select(User).where(User.username == form.username))
+    # The form field is called 'username' (OAuth2), but it takes the username or the email address
+    user = find_by_login(db, form.username)
     now = now_local()
     if user and user.login_blocked_until and user.login_blocked_until > now:
         minutes = max(1, -(-int((user.login_blocked_until - now).total_seconds()) // 60))
@@ -161,7 +175,7 @@ def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: Ses
     if not verify_password(form.password, user.password_hash if user else None):
         if user:
             _record_failed_login(db, user, request)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username or password")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username/email or password")
     if user.status == STATUS_PENDING and not user.email_verified:
         raise HTTPException(status.HTTP_403_FORBIDDEN, VERIFY_EMAIL_MESSAGE)
     if user.status == STATUS_PENDING:
@@ -227,7 +241,7 @@ def list_accessible_users(user: User = Depends(get_current_user), db: Session = 
 
 # ---------- forgot password ----------
 FORGOT_MESSAGE = (
-    "If that username exists, we've emailed its owner a temporary password and a reset link. "
+    "If an account matches that username or email, we've emailed its owner a temporary password and a reset link. "
     "Check your inbox. The link expires soon."
 )
 MAX_TEMP_PASSWORD_ATTEMPTS = 5
@@ -242,12 +256,13 @@ def _token_hash(token: str) -> str:
 def forgot_password(data: ForgotPasswordIn, request: Request, db: Session = Depends(get_db)):
     """Email a temporary password and a one-time reset link.
 
-    The response is the same whether or not the username exists, so it can't be used to discover accounts.
+    `username` takes the username or the account's email address.
+    The response is the same whether or not the account exists, so it can't be used to discover accounts.
     At most RESET_MAX_PER_WINDOW resets are issued per RESET_WINDOW_DAYS. Past that, the owner is told by email.
     """
     if not public_form_limiter.hit(f"forgot:{_client_ip(request)}"):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests. Wait a minute and try again.")
-    user = db.scalar(select(User).where(User.username == data.username.strip()))
+    user = find_by_login(db, data.username)
     if not user or user.status != STATUS_APPROVED or user.is_locked or user.org_locked:
         return {"message": FORGOT_MESSAGE}
 
@@ -285,7 +300,7 @@ def forgot_password(data: ForgotPasswordIn, request: Request, db: Session = Depe
             token_hash=_token_hash(token),
             temp_password_hash=hash_password(temp_password),
             created_at=now,
-            expires_at=expires, expires_in_seconds=otp.seconds_left(expires),
+            expires_at=expires,
             requested_ip=request.client.host if request.client else None,
         )
     )

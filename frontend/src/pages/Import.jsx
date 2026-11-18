@@ -9,6 +9,7 @@ import { useAuth } from '../auth'
 import { ACCOUNT_KINDS } from '../components/Accounts'
 import { Alert, EmptyRow, Msg, PageHeader } from '../components/ui'
 import DateInput from '../components/DateInput'
+import PasswordInput from '../components/PasswordInput'
 
 export const ACCEPT = '.xlsx,.xls,.csv,.txt,.pdf,.docx,.doc'
 const PAGE = 50
@@ -446,8 +447,7 @@ function PasswordPrompt({ filename, error, busy, onSubmit, onCancel }) {
       </p>
       {error && <Alert type="error">{error}</Alert>}
       <div className="filters">
-        <input
-          type="password"
+        <PasswordInput
           autoFocus
           autoComplete="off"
           placeholder="File password"

@@ -49,8 +49,8 @@ export function VerifyEmailCard({ username: initialUsername = '', initial }) {
       {error && <Alert type="error">{error}</Alert>}
       {!initialUsername && (
         <div className="field">
-          <label>Username <span className="req" aria-hidden="true">*</span></label>
-          <input value={username} onChange={(e) => setUsername(e.target.value)} required autoComplete="username" />
+          <label>Username or email <span className="req" aria-hidden="true">*</span></label>
+          <input value={username} onChange={(e) => setUsername(e.target.value)} required autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
         </div>
       )}
       <OtpField
@@ -58,7 +58,7 @@ export function VerifyEmailCard({ username: initialUsername = '', initial }) {
         onChange={setCode}
         initial={initial}
         send={async () => {
-          if (!username.trim()) throw new Error('Enter your username first')
+          if (!username.trim()) throw new Error('Enter your username or email first')
           return (await api.post('/auth/resend-email-code', { username: username.trim() })).data
         }}
       />

@@ -5,6 +5,7 @@ import api, { errorMessage } from '../api'
 import AuthShell from '../components/AuthShell'
 import { Alert } from '../components/ui'
 import { VerifyEmailCard } from './VerifyEmail'
+import PasswordInput from '../components/PasswordInput'
 
 export default function Register() {
   const [form, setForm] = useState({ username: '', email: '', full_name: '', password: '', manager_username: '' })
@@ -55,7 +56,7 @@ export default function Register() {
             </div>
             <div>
               <label>Password <span className="req" aria-hidden="true">*</span></label>
-              <input type="password" value={form.password} onChange={set('password')} minLength={8} maxLength={100} required autoComplete="new-password" />
+              <PasswordInput value={form.password} onChange={set('password')} minLength={8} maxLength={100} required autoComplete="new-password" />
               <span className="hint">At least 8 characters</span>
             </div>
           </div>

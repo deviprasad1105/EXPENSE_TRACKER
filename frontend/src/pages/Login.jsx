@@ -5,6 +5,7 @@ import { errorMessage } from '../api'
 import { useAuth } from '../auth'
 import AuthShell from '../components/AuthShell'
 import { Alert } from '../components/ui'
+import PasswordInput from '../components/PasswordInput'
 
 export default function Login() {
   const { user, login } = useAuth()
@@ -51,8 +52,8 @@ export default function Login() {
           </Alert>
         )}
         <div className="field">
-          <label htmlFor="username">Username <span className="req" aria-hidden="true">*</span></label>
-          <input id="username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required autoFocus autoComplete="username" />
+          <label htmlFor="username">Username or email <span className="req" aria-hidden="true">*</span></label>
+          <input id="username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required autoFocus autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="Your username or email address" />
         </div>
         <div className="field">
           <div className="row-between">
@@ -61,7 +62,7 @@ export default function Login() {
               Forgot password?
             </Link>
           </div>
-          <input id="password" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required autoComplete="current-password" />
+          <PasswordInput id="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required autoComplete="current-password" />
         </div>
         <button className="btn block" disabled={busy}>
           <LogIn size={16} /> {busy ? 'Signing in…' : 'Sign in'}
