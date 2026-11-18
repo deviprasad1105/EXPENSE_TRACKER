@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
-import { LogIn } from 'lucide-react'
+import { ArrowLeft, LogIn, ShieldCheck } from 'lucide-react'
 import { errorMessage } from '../api'
 import { useAuth } from '../auth'
 import AuthShell from '../components/AuthShell'
@@ -8,12 +8,16 @@ import { Alert } from '../components/ui'
 import PasswordInput from '../components/PasswordInput'
 
 export default function Login() {
-  const { user, login } = useAuth()
+  const { user, login, completeMfa } = useAuth()
   const navigate = useNavigate()
   const [form, setForm] = useState({ username: '', password: '' })
   const [error, setError] = useState('')
   const [needsCode, setNeedsCode] = useState(false)
   const [busy, setBusy] = useState(false)
+  // Two-step sign-in: the ticket from the password step, and the code from the authenticator app
+  const [mfaToken, setMfaToken] = useState(null)
+  const [code, setCode] = useState('')
+  const [useRecovery, setUseRecovery] = useState(false)
 
   if (user) return <Navigate to="/" replace />
 
@@ -23,7 +27,12 @@ export default function Login() {
     setError('')
     setNeedsCode(false)
     try {
-      await login(form.username, form.password)
+      const res = await login(form.username, form.password)
+      if (res.mfaToken) {
+        setMfaToken(res.mfaToken)
+        setCode('')
+        return
+      }
       navigate('/')
     } catch (err) {
       setError(errorMessage(err))
@@ -31,6 +40,71 @@ export default function Login() {
     } finally {
       setBusy(false)
     }
+  }
+
+  const submitCode = async (e) => {
+    e.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      await completeMfa(mfaToken, code.trim())
+      navigate('/')
+    } catch (err) {
+      setError(errorMessage(err))
+      // The ticket expired or the account was blocked: start again from the password
+      if ([429].includes(err?.response?.status) || /expired/i.test(errorMessage(err))) setMfaToken(null)
+      setCode('')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const backToPassword = () => {
+    setMfaToken(null)
+    setError('')
+    setUseRecovery(false)
+    setForm({ ...form, password: '' })
+  }
+
+  if (mfaToken) {
+    return (
+      <AuthShell>
+        <form className="auth-card" onSubmit={submitCode}>
+          <div>
+            <ShieldCheck size={36} color="var(--primary)" />
+            <h2>Two-step sign-in</h2>
+            <p className="muted">
+              {useRecovery
+                ? 'Enter one of the recovery codes you saved when you turned on two-step sign-in. Each code works once.'
+                : 'Open your authenticator app and enter the 6-digit code for Expense Tracker.'}
+            </p>
+          </div>
+          {error && <Alert type="error">{error}</Alert>}
+          <div className="field">
+            <label htmlFor="mfa-code">{useRecovery ? 'Recovery code' : 'Code'}</label>
+            {useRecovery ? (
+              <input id="mfa-code" key="recovery" value={code} onChange={(e) => setCode(e.target.value)} required autoFocus
+                autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="xxxxx-xxxxx" maxLength={20} />
+            ) : (
+              <input id="mfa-code" key="totp" className="mfa-code-input" value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} required autoFocus
+                inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}" placeholder="123456" maxLength={6} />
+            )}
+          </div>
+          <button className="btn block" disabled={busy || (!useRecovery && code.length !== 6)}>
+            <ShieldCheck size={16} /> {busy ? 'Checking…' : 'Verify and sign in'}
+          </button>
+          <button type="button" className="btn ghost block" onClick={() => { setUseRecovery(!useRecovery); setCode(''); setError('') }}>
+            {useRecovery ? 'Use the code from my app instead' : 'Lost your phone? Use a recovery code'}
+          </button>
+          <p className="muted small" style={{ textAlign: 'center', margin: 0 }}>
+            <button type="button" className="link-button" onClick={backToPassword}>
+              <ArrowLeft size={14} /> Back to sign in
+            </button>
+          </p>
+        </form>
+      </AuthShell>
+    )
   }
 
   return (

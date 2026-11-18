@@ -19,3 +19,5 @@ python-docx==1.1.2
 xlrd==2.0.1
 # Opening password-protected Excel / Word files (PDF passwords are handled by pdfplumber)
 msoffcrypto-tool==6.0.0
+# Encrypting two-step sign-in (authenticator app) secrets at rest
+cryptography==50.0.2

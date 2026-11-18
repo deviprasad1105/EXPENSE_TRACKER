@@ -24,6 +24,50 @@ class TokenOut(BaseModel):
     token_type: str = "bearer"
 
 
+class LoginOut(BaseModel):
+    """A sign-in token, or (two-step sign-in on) a short-lived ticket to send with the authenticator code."""
+
+    access_token: str | None = None
+    token_type: str = "bearer"
+    mfa_required: bool = False
+    mfa_token: str | None = None
+
+
+class MfaLoginIn(BaseModel):
+    mfa_token: str = Field(min_length=10, max_length=1000)
+    code: str = Field(min_length=1, max_length=20, description="6-digit code from the app, or a recovery code")
+
+
+class MfaStatusOut(BaseModel):
+    enabled: bool
+    enabled_at: datetime | None = None
+    recovery_codes_left: int = 0
+
+
+class MfaSetupIn(BaseModel):
+    password: str = Field(min_length=1, max_length=100)
+
+
+class MfaSetupOut(BaseModel):
+    secret: str
+    otpauth_uri: str
+
+
+class MfaEnableIn(BaseModel):
+    code: str = Field(min_length=1, max_length=20)
+
+
+class MfaConfirmIn(BaseModel):
+    """Turning two-step sign-in off, or making new recovery codes: the password and a current code."""
+
+    password: str = Field(min_length=1, max_length=100)
+    code: str = Field(min_length=1, max_length=20)
+
+
+class MfaRecoveryCodesOut(BaseModel):
+    recovery_codes: list[str]
+
+
 USERNAME_PATTERN = r"^[A-Za-z0-9_.-]+$"
 
 
@@ -62,6 +106,7 @@ class UserOut(ORM):
     ask_account: bool = True
     background_updated_at: datetime | None = None
     email_verified: bool = True
+    mfa_enabled: bool = False
 
 
 class ManagedUserOut(UserOut):

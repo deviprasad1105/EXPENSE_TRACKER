@@ -58,6 +58,12 @@ Everyone who can log in, plus their role, approval state, reporting line and pre
 | `ask_account` | SMALLINT | 1 = expense entry asks which account paid (default). 0 = everything goes to the primary account. |
 | `background_updated_at` | DATE, nullable | When the custom background picture last changed. `NULL` means the default background. |
 | `email_verified` | SMALLINT | 0 = signed up but hasn't entered the emailed code yet: can't sign in, and the admin can't approve. Accounts from before this check, and ones an admin or org admin creates, are 1. |
+| `mfa_enabled` | SMALLINT | 1 = two-step sign-in is on: after the password, signing in needs the 6-digit code from an authenticator app (or a recovery code). Each user turns it on in Settings → Security; an admin can turn it off for them. |
+| `mfa_secret` | VARCHAR2(255), nullable | The authenticator app's secret key, encrypted with `MFA_KEY` (or a key derived from `JWT_SECRET`). Changing that key makes every stored secret unreadable, which turns two-step sign-in off in practice. |
+| `mfa_pending_secret` | VARCHAR2(255), nullable | A new secret during setup, until the first code from the app confirms it. |
+| `mfa_enabled_at` | DATE, nullable | When two-step sign-in was turned on. |
+| `mfa_last_step` | INTEGER, nullable | The 30-second time step of the last code used, so a code can't be used twice. |
+| `mfa_recovery_hashes` | VARCHAR2(1000), nullable | Comma-separated hashes of the unused recovery codes (10 are made at a time; each is removed once used). |
 
 **How it works**
 - **Registration and approval:** registration creates a `PENDING` row, and every admin gets a notification.
