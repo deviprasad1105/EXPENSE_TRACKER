@@ -21,6 +21,7 @@ from ..models import (
     Account,
     AccountTransfer,
     Budget,
+    CardBill,
     DailyItem,
     DataBackup,
     DataShare,
@@ -47,7 +48,7 @@ KIND_SUBSCRIPTION = "SUBSCRIPTION"
 
 # Restore order matters: parents before children
 MODELS = [
-    User, UserAvatar, UserBackground, Account, DailyItem, Expense, Fund, AccountTransfer, Budget, Subscription,
+    User, UserAvatar, UserBackground, Account, CardBill, DailyItem, Expense, Fund, AccountTransfer, Budget, Subscription,
     SubscriptionCharge, DataShare, Notification, UsernameChangeRequest, *BACKUP_MODELS,
 ]
 BY_TABLE = {m.__tablename__: m for m in MODELS}
@@ -104,6 +105,7 @@ def snapshot_user_data(db: Session, user_id: int) -> dict:
         "accounts": _rows(db, Account, Account.user_id == user_id),
         "account_transfers": _rows(db, AccountTransfer, AccountTransfer.user_id == user_id),
         "budgets": _rows(db, Budget, Budget.user_id == user_id),
+        "card_bills": _rows(db, CardBill, CardBill.user_id == user_id),
         "daily_items": _rows(db, DailyItem, DailyItem.user_id == user_id),
         "expenses": _rows(db, Expense, Expense.user_id == user_id),
         "funds": _rows(db, Fund, Fund.user_id == user_id),
@@ -204,6 +206,8 @@ def restore_backup(db: Session, backup: DataBackup, admin: User) -> dict:
             if model in (Expense, Fund) and data.get("account_id") and not exists(Account, data["account_id"]):
                 data["account_id"] = None
             if model is AccountTransfer and not (exists(Account, data["from_account_id"]) and exists(Account, data["to_account_id"])):
+                continue
+            if model is CardBill and not exists(Account, data["account_id"]):
                 continue
             if model is Expense:
                 if data.get("created_by") and not exists(User, data["created_by"]):

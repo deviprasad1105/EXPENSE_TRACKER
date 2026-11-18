@@ -467,6 +467,59 @@ class UpiActivityOut(BaseModel):
     days: list[UpiDay]
 
 
+# ---------- credit cards ----------
+class CardSettingsIn(BaseModel):
+    credit_limit: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
+    statement_day: int | None = Field(default=None, ge=1, le=31)
+    due_day: int | None = Field(default=None, ge=1, le=31)
+    remind_days: int = Field(default=3, ge=0, le=15)
+    remind_on: bool = True
+
+
+class CardBillIn(BaseModel):
+    due_date: date
+    total_due: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    min_due: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
+    statement_date: date | None = None
+
+
+class CardBillOut(BaseModel):
+    id: int
+    account_id: int
+    due_date: date
+    statement_date: date | None
+    total_due: Decimal
+    min_due: Decimal | None
+    source: str
+    paid_at: datetime | None
+    paid: bool
+    paid_amount: Decimal
+    days_left: int
+    status: str
+
+
+class CardOut(BaseModel):
+    id: int
+    name: str
+    bank: str | None
+    last4: str | None
+    is_active: bool
+    owed: Decimal
+    spent_this_month: Decimal
+    credit_limit: Decimal | None
+    available: Decimal | None
+    used_percent: float | None
+    statement_day: int | None
+    due_day: int | None
+    remind_days: int
+    remind_on: bool
+    bill: CardBillOut | None
+
+
+class CardMarkPaidIn(BaseModel):
+    paid: bool = True
+
+
 # ---------- auto-tracking (bank SMS / notifications) ----------
 class AutoTrackSettingsIn(BaseModel):
     enabled: bool

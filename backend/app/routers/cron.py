@@ -9,6 +9,7 @@ import secrets
 from fastapi import APIRouter, Header, HTTPException, status
 
 from ..config import settings
+from ..services.cards import card_reminder_job
 from ..services.reminders import daily_reminder_job
 from ..services.subscriptions import subscription_job
 
@@ -25,6 +26,8 @@ def _authorise(authorization: str | None) -> None:
 def run_daily_reminder(authorization: str | None = Header(default=None)):
     _authorise(authorization)
     daily_reminder_job()
+    # Card bill reminders go out with the evening reminder (the host allows only a few scheduled calls a day)
+    card_reminder_job()
     return {"status": "ok"}
 
 

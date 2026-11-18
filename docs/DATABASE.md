@@ -464,9 +464,32 @@ A bank account, card, wallet or cash that money is received in or spent from.
 | `is_primary` | SMALLINT | 1 = used when no account is chosen. At most one per user; the first account becomes primary. |
 | `is_active` | SMALLINT | 0 = closed: hidden from pickers, history kept. |
 | `created_at` | DATE | |
+| `credit_limit` | NUMBER(12,2), nullable | Credit cards: the limit (shows what's available and how much is used). |
+| `statement_day`, `due_day` | INTEGER, nullable | Credit cards: day of the month the statement is made / the bill is due (1–31; the last day in shorter months). |
+| `remind_days` | INTEGER | Credit cards: remind this many days before the due date (0–15, default 3). |
+| `remind_on` | SMALLINT | Credit cards: 0 = no bill reminders. |
 
 **Balance** = `opening_balance` + funds received in it − expenses paid from it + transfers in − transfers out.
-Deleting an account keeps its expenses and funds (their `account_id` becomes `NULL`) and deletes its transfers.
+Deleting an account keeps its expenses and funds (their `account_id` becomes `NULL`) and deletes its transfers and
+card bills.
+
+### CARD_BILLS
+A credit card's bill (Credit Cards page). Unique per (`account_id`, `due_date`).
+
+| Column | Type | Meaning |
+|---|---|---|
+| `account_id` | INTEGER, FK → `accounts.id` | The card. Indexed. |
+| `statement_date`, `due_date` | DATE | When the statement was made (nullable) and when the bill is due. |
+| `total_due`, `min_due` | NUMBER(12,2) | The bill and its minimum due (nullable). |
+| `source` | VARCHAR2(10) | `SMS` (the card's statement message, via auto-tracking), `MANUAL` (typed in) or `ESTIMATE` (no statement yet: the card's `due_day` and what it owes; replaced when the statement comes). A typed-in bill isn't overwritten by a message. |
+| `paid_at` | DATE, nullable | Set when the user marks it paid. |
+| `reminded` | VARCHAR2(30), nullable | Reminders already sent (`BEFORE`, `TODAY`, `OVERDUE`), so each goes once. |
+
+A bill is **paid** when it is marked paid, or when payments into the card since its statement (transfers to the card
+and money received on it; 25 days before the due date when there's no statement date) cover `total_due`. The page
+and reminders use the oldest unpaid bill (an overdue one before next month's), else the next estimate. Reminders go
+out with the evening job (a `CARD_DUE` notification and an email): `remind_days` before, on the due day, and the day
+after if still unpaid.
 
 ### ACCOUNT_TRANSFERS
 Money moved between two of the user's own accounts (`from_account_id` → `to_account_id`, `amount`,

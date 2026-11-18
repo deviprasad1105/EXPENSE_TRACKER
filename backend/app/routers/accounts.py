@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, resolve_target
-from ..models import Account, AccountTransfer, Expense, Fund, User
+from ..models import Account, AccountTransfer, CardBill, Expense, Fund, User
 from ..schemas import AccountIn, AccountOut, TransferIn, TransferOut
 from ..services.accounts import balances
 from ..timeutil import today_local
@@ -104,6 +104,7 @@ def delete_account(account_id: int, viewer: User = Depends(get_current_user), db
     db.execute(update(Expense).where(Expense.account_id == account.id).values(account_id=None))
     db.execute(update(Fund).where(Fund.account_id == account.id).values(account_id=None))
     db.execute(delete(AccountTransfer).where(or_(AccountTransfer.from_account_id == account.id, AccountTransfer.to_account_id == account.id)))
+    db.execute(delete(CardBill).where(CardBill.account_id == account.id))
     db.delete(account)
     db.commit()
 

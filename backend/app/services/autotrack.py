@@ -34,6 +34,7 @@ from .bank_sms import (
     parse_bank_message,
 )
 from .budgets import check_budgets
+from .cards import SRC_SMS, save_bill
 
 MODE_REVIEW, MODE_AUTO = "REVIEW", "AUTO"
 SUG_EXPENSE, SUG_INCOME, SUG_TRANSFER = "EXPENSE", "INCOME", "TRANSFER"
@@ -290,6 +291,9 @@ def _record_bill(db: Session, user: User, msg: BankMessage, parsed: ParsedBank, 
         due = f" is due on {parsed.due_date:%d %b %Y}" if parsed.due_date else " is due"
         minimum = f" (minimum {parsed.min_due})" if parsed.min_due else ""
         db.add(Notification(user_id=user.id, kind="BILL_DUE", message=f"{msg.name}: {parsed.amount}{minimum}{due}"))
+    # The card's bill on the Credit Cards page (replaces an estimate for the same cycle; a typed-in one stays)
+    if card and parsed.due_date:
+        save_bill(db, card, parsed.due_date, parsed.amount, SRC_SMS, parsed.min_due)
     db.flush()
     return msg
 

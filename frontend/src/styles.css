@@ -1023,3 +1023,14 @@ label { font-size: 13px; font-weight: 500; color: var(--text-2); }
 .phone-step .badge { min-width: 34px; justify-content: center; }
 .clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; max-width: 520px; }
 .nowrap { white-space: nowrap; }
+
+/* ---------- Credit Cards ---------- */
+.cc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; margin-bottom: 20px; }
+.cc-grid > .card { margin-bottom: 0; }
+.cc-card { display: flex; flex-direction: column; gap: 12px; }
+.cc-owed { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; }
+.cc-amount { font-size: 26px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.cc-bill { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.cc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cc-form { border-top: 1px solid var(--border); padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+@media (max-width: 420px) { .cc-grid { grid-template-columns: 1fr; } }
