@@ -30,7 +30,7 @@ from ..timeutil import now_local, today_local
 from .accounts import resolve_account
 from .aliases import label_new
 from .bank_sms import (
-    CH_ATM, CH_CARD_BILL, CREDIT, DEBIT, KIND_BILL, NotATransaction, ParsedBank, Unreadable, guess_category,
+    CH_ATM, CH_CARD_BILL, CH_UPI, CREDIT, DEBIT, KIND_BILL, NotATransaction, ParsedBank, Unreadable, guess_category,
     parse_bank_message,
 )
 from .budgets import check_budgets
@@ -169,6 +169,10 @@ def _card_bill_pair(db: Session, user: User, parsed: ParsedBank) -> BankMessage 
     ).order_by(BankMessage.id.desc()).limit(1))
 
 
+# Accounts a UPI payment can come from
+BANK_KINDS = ("SAVINGS", "CURRENT", "SALARY")
+
+
 def _suggest(db: Session, user: User, msg: BankMessage, parsed: ParsedBank, accounts: list[Account]) -> None:
     """Fill in what to record: the kind of record, its accounts, name and category."""
     own = match_account(accounts, parsed.last4, parsed.bank, card=parsed.is_credit_card)
@@ -183,6 +187,10 @@ def _suggest(db: Session, user: User, msg: BankMessage, parsed: ParsedBank, acco
             msg.to_account_id = own.id if own else None
         msg.name = f"Card bill{' – ' + parsed.card_name if parsed.card_name else ''}"[:100]
         return
+    if own is None and parsed.channel == CH_UPI and not parsed.last4 and not parsed.is_credit_card:
+        # UPI apps often don't say which account paid: with only one bank account, it's that one
+        banks = [a for a in accounts if a.is_active and a.kind in BANK_KINDS]
+        own = banks[0] if len(banks) == 1 else None
     if parsed.channel == CH_ATM:
         cash = [a for a in accounts if a.is_active and a.kind == "CASH"]
         if len(cash) == 1:
