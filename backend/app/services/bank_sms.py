@@ -40,17 +40,24 @@ _DUE_DATE = re.compile(r"(?:due\s*(?:date|on|by)?|pay\s+by|payable\s+by|by)[\s.:
 
 _OTP = re.compile(r"\b(otp|one[\s-]?time\s+password|verification\s+code|passcode|password|cvv|mpin|activation\s+code)\b", re.I)
 _REQUEST = re.compile(r"\b(has\s+requested|requested\s+(?:money|rs|inr|₹)|collect\s+request|payment\s+request|request\s+(?:of|for)\s+(?:rs|inr|₹))", re.I)
+# Not finished yet: the app sends another message when it completes (or fails)
+_PENDING = re.compile(r"\b(pending|processing|in\s+progress|awaiting\s+confirmation|will\s+be\s+(?:debited|updated))\b", re.I)
 _FAILED = re.compile(r"\b(failed|declined|unsuccessful|could\s+not\s+be\s+processed|was\s+not\s+successful|insufficient)\b", re.I)
 _PROMO = re.compile(
     r"\b(offer|pre[\s-]?approved|eligible|apply\s+now|get\s+up\s*to|win|lucky|congratulations|instant\s+loan|limit\s+increase"
-    r"|upgrade|reward\s+points?\s+(?:worth|expir)|click|download|t&c|cashback\s+up\s*to|emi\s+offer|voucher)\b", re.I)
+    r"|upgrade|reward\s+points?\s+(?:worth|expir)|click|download|t&c|cashback\s+up\s*to|emi\s+offer|voucher"
+    # UPI app nudges: "₹100 cashback on your next payment", "Pay your bill now", "Plans starting at ₹199"
+    r"|next\s+payment|pay\s+(?:your|now)|recharge\s+now|starting\s+(?:at|from)|reminder|get\s+(?:rs\.?|inr|₹)\s*[\d,]+)\b", re.I)
 _DEBIT = re.compile(
-    r"\b(debited|debit(?:ed)?\s+(?:by|for|with)|spent|withdrawn|withdrawal|paid|sent|purchase|used\s+(?:for|at)|txn\s+of|transaction\s+of"
-    r"|transferred\s+to|payment\s+of|charged|deducted|auto[\s-]?debit|autopay|mandate\s+executed)\b", re.I)
-_CREDIT = re.compile(r"\b(credited|received|deposited|refund(?:ed)?|reversed|reversal|cashback\s+of|added\s+to\s+your)\b", re.I)
+    r"\b(debited|debit(?:ed)?\s+(?:by|for|with)|spent|withdrawn|withdrawal|paid|sent(?!\s+you)|purchase|used\s+(?:for|at)|txn\s+of"
+    r"|transaction\s+of|transferred\s+to|payment\s+(?:of|to|for)|charged|deducted|auto[\s-]?debit|autopay|mandate\s+executed"
+    # UPI apps: "Your ₹10 payment to X", "₹1 Payment Successful", "Payment completed"
+    r"|(?:rs\.?|inr|₹)\s*[\d,.]+\s+payment|payment\s+(?:is\s+|was\s+|has\s+been\s+)?(?:successful|completed|done))\b", re.I)
+_CREDIT = re.compile(r"\b(credited|received|deposited|refund(?:ed)?|reversed|reversal|cashback\s+of|added\s+to\s+your|sent\s+you)\b", re.I)
 _LAST4 = re.compile(
     r"(?:a/?c|acct|account|card|ac)\s*(?:no\.?|number|num)?\s*(?:ending(?:\s+(?:with|in))?)?\s*[:#-]?\s*[*xX.\s]*(\d{3,6})\b"
-    r"|ending\s+(?:with|in)?\s*[*xX]*(\d{4})\b", re.I)
+    r"|ending\s+(?:with|in)?\s*[*xX]*(\d{4})\b"
+    r"|\bbank\s*[-–:]?\s*[*xX•·]*\s*(\d{4})\b|(?:[*xX•·]{2,})(\d{4})\b", re.I)
 _REF = re.compile(
     r"(?:ref(?:erence)?\.?\s*(?:no|num|number|id)?\.?|refno|rrn|utr(?:\s*no)?|upi\s*(?:ref|txn|transaction)?\s*(?:no|id)?\.?"
     r"|txn\s*(?:id|no|ref)?\.?|transaction\s+(?:id|ref(?:erence)?)\s*(?:no)?\.?|imps\s*ref)[\s:#.-]*([A-Za-z0-9]{6,22})", re.I)
@@ -58,12 +65,18 @@ _MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun",
 _DATE_NUM = re.compile(r"\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\b")
 _DATE_ISO = re.compile(r"\b(20\d\d)[-/.](\d{1,2})[-/.](\d{1,2})\b")
 _DATE_MON = re.compile(r"\b(\d{1,2})[-\s]?([A-Za-z]{3})[a-z]*[-\s,]*'?(\d{2,4})\b")
-_NAME_END = (r"(?=\s+(?:on|ref|refno|upi|via|using|at|dated|avl|avbl|bal|not|if|for|from|with|thru|through|info|txn|is|has|-)\b"
+_NAME_END = (r"(?=\s+(?:on|ref|refno|upi|via|using|at|dated|avl|avbl|bal|not|if|for|from|with|thru|through|info|txn|is|has|was"
+             r"|successful(?:ly)?|completed|done|of|-)\b"
              r"|\s*[.;:(\n,]|\s*$)")
 _AT = re.compile(r"\b(?:at|@)\s+([A-Za-z0-9][\w .&'*/-]{1,60}?)" + _NAME_END, re.I)
 _INFO = re.compile(r"\b(?:info|merchant|towards)[\s:.-]+([A-Za-z0-9][\w .&'*/-]{1,60}?)" + _NAME_END, re.I)
 _TO = re.compile(r"\b(?:to|trf\s+to|transfer\s+to|paid\s+to|sent\s+to)\s+(?:vpa\s+|a/c\s+)?([A-Za-z][\w .&'@-]{1,60}?)" + _NAME_END, re.I)
 _FROM = re.compile(r"\b(?:from|by|transfer\s+from|received\s+from|sent\s+by)\s+(?:vpa\s+|a/c\s+)?([A-Za-z][\w .&'@-]{1,60}?)" + _NAME_END, re.I)
+# "Ravi Kumar sent you ₹500" (UPI apps)
+_SENT_YOU = re.compile(r"(?:^|[:.!]\s*)([A-Za-z][\w .&'-]{1,60}?)\s+(?:has\s+)?sent\s+you\b", re.I)
+# App hints that aren't part of the payment ("Tap to view details")
+_APP_HINT = re.compile(r"\b(?:tap|click)\s+(?:here\s+)?(?:to|for)\s+(?:view|see|check|know)\s+(?:more\s+)?(?:the\s+)?(?:details?|more|receipt|info)\b", re.I)
+_UPI_APPS = re.compile(r"\b(?:phonepe|google\s*pay|gpay|paytm|bhim|amazon\s*pay|cred|mobikwik|freecharge|navi|super\.?money)\b", re.I)
 _SEMI_CREDITED = re.compile(r";\s*([A-Za-z][\w .&'-]{1,60}?)\s+credited", re.I)
 # "from HDFC Bank A/c", "to your a/c", "by NEFT": the user's own bank or the channel, not the other party
 _NOT_A_PARTY = re.compile(
@@ -144,6 +157,12 @@ class ParsedBank:
             return "Credit card bill payment"
         word = {CH_UPI: "UPI", CH_CARD: "Card", CH_AUTOPAY: "Auto-debit"}.get(self.channel or "", "Bank")
         return f"{word} {'payment' if self.direction == DEBIT else 'credit'}"
+
+
+def _digits(m: re.Match | None) -> str | None:
+    """The last 4 digits from a _LAST4 match (whichever of its forms matched)."""
+    found = next((g for g in m.groups() if g), None) if m else None
+    return found[-4:] if found else None
 
 
 def bank_for_sender(sender: str | None) -> str | None:
@@ -234,6 +253,9 @@ def _party(text: str, flat: str, direction: str, channel: str) -> str | None:
             return _clean_party(m.group(1))
         tries.append(_TO)
     else:
+        m = _SENT_YOU.search(flat)
+        if m and _clean_party(m.group(1)):
+            return _clean_party(m.group(1))
         tries += [_FROM, _INFO]
     for rx in tries:
         for m in rx.finditer(flat):
@@ -255,7 +277,7 @@ def _date_near(d: date | None, received: date) -> date:
 def parse_bank_message(text: str, sender: str | None = None, received: date | None = None) -> ParsedBank:
     """Read one bank message. Raises ValueError with a reason the user can act on when it isn't a transaction."""
     received = received or date.today()
-    flat = " ".join((text or "").split())
+    flat = " ".join(_APP_HINT.sub(" ", text or "").split())
     if not flat:
         raise NotATransaction("The message is empty")
     if _OTP.search(flat):
@@ -281,13 +303,15 @@ def parse_bank_message(text: str, sender: str | None = None, received: date | No
         last4 = _LAST4.search(flat)
         return ParsedBank(
             kind=KIND_BILL, amount=amount, bank=bank, channel=CH_CARD_BILL,
-            last4=(last4.group(1) or last4.group(2))[-4:] if last4 else None,
+            last4=_digits(last4),
             due_date=parse_date(due.group(1)) if due else None,
             min_due=_money(min_due.group(1)) if min_due else None,
             is_credit_card=bool(re.search(r"\bcard\b", flat, re.I)),
             txn_date=received,
         )
 
+    if _PENDING.search(flat) and not re.search(r"\b(debited|credited|spent|withdrawn)\b", flat, re.I):
+        raise NotATransaction("A pending payment: it is recorded when the completed message arrives")
     if _PROMO.search(flat) and not (debit or credit):
         raise NotATransaction("An offer or advertisement, not a transaction")
     if not debit and not credit:
@@ -310,7 +334,7 @@ def parse_bank_message(text: str, sender: str | None = None, received: date | No
         channel = CH_CARD_BILL
     elif _ATM.search(flat) and direction == DEBIT:
         channel = CH_ATM
-    elif _UPI.search(flat) or VPA_RE.search(flat):
+    elif _UPI.search(flat) or VPA_RE.search(flat) or (sender and _UPI_APPS.search(sender)):
         channel = CH_UPI
     elif _CARD.search(flat):
         channel = CH_CARD
@@ -326,7 +350,7 @@ def parse_bank_message(text: str, sender: str | None = None, received: date | No
     bal = _BALANCE.search(flat)
     return ParsedBank(
         kind=KIND_TXN, amount=amount, direction=direction, channel=channel, bank=bank,
-        last4=(last4.group(1) or last4.group(2))[-4:] if last4 else None,
+        last4=_digits(last4),
         party=_party(text, flat, direction, channel) if channel != CH_CARD_BILL else None,
         vpa=vpas[-1] if direction == DEBIT and vpas else (vpas[0] if vpas else None),
         ref=ref, balance=_money(bal.group(1).lstrip("-")) if bal else None,
