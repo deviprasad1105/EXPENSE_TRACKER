@@ -14,6 +14,7 @@ const STATUS = {
   IGNORED: ['warn', 'Not recorded'],
   FAILED: ['bad', 'Couldn’t read'],
 }
+const IPHONE_GUIDE = '/upi-iphone-setup.pdf'
 const RANGES = [
   [7, '7 days'],
   [30, '30 days'],
@@ -110,6 +111,39 @@ export default function UpiTracker() {
         <StatTile label={`Received · last ${days} days`} value={money(totals.received)} icon={CallReceivedRounded} />
         <StatTile label="Payees without an alias" value={noAlias} sub={noAlias ? 'Name them to make history readable' : 'All named'} icon={ReceiptLongOutlined} />
       </div>
+
+      {settings && (
+        <details className="card upi-setup" open={!settings.has_token}>
+          <summary>
+            <h3>Record payments automatically on iPhone</h3>
+            <span className="hint">Setup guide · about 3 minutes</span>
+          </summary>
+          <div className="upi-setup-body">
+            <a href={IPHONE_GUIDE} target="_blank" rel="noreferrer" className="upi-qr" title="Open the iPhone setup guide">
+              <img src="/upi-iphone-setup-qr.png" alt="QR code that opens the iPhone UPI setup guide" width={140} height={140} />
+            </a>
+            <div>
+              <p>
+                <b>Scan this with your iPhone camera</b> to open the step-by-step guide. It sets up a Shortcuts automation that sends each bank UPI SMS
+                to Expense Tracker, so payments are recorded without you doing anything.
+              </p>
+              <ol className="upi-setup-steps">
+                <li>
+                  In <Link to="/settings#upi">Settings → UPI tracker</Link>, add your UPI ID, switch tracking on, then tap <b>Make link</b> and copy it.
+                </li>
+                <li>
+                  On the iPhone, open <b>Shortcuts → Automation → New → Message</b>, and follow the guide to send matching messages to your link.
+                </li>
+                <li>Make a small UPI payment. It appears below as <b>Recorded</b>.</li>
+              </ol>
+              <p className="hint">
+                On this phone already? <a href={IPHONE_GUIDE} target="_blank" rel="noreferrer">Open the guide (PDF)</a>. Needs iOS 17 or later and SMS
+                alerts from your bank. On Android, use any SMS-forwarding app with the same link.
+              </p>
+            </div>
+          </div>
+        </details>
+      )}
 
       <div className="grid-2">
         <div className="card">

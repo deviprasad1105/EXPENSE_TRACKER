@@ -5,6 +5,8 @@ an existing database. This adds such columns (never drops or changes anything), 
 existing rows get a value.
 """
 
+import gzip
+import json
 import logging
 
 from sqlalchemy import Engine, inspect, text
@@ -64,6 +66,14 @@ def _data_fixups(engine: Engine) -> None:
         # Categories from before 'is_added': a shown one was added by the user, a hidden one was only hidden
         conn.execute(text("UPDATE user_categories SET is_added = :yes WHERE is_added IS NULL AND is_hidden = :no").bindparams(yes=True, no=False))
         conn.execute(text("UPDATE user_categories SET is_added = :no WHERE is_added IS NULL").bindparams(no=False))
+        # Account backups from before 'email' was stored: read it from the backup so the owner can restore / erase it
+        rows = conn.execute(text("SELECT id, payload FROM data_backups WHERE kind = 'USER' AND email IS NULL")).all()
+        for backup_id, payload in rows:
+            try:
+                email = json.loads(gzip.decompress(payload))["tables"]["app_users"][0]["email"]
+            except (OSError, ValueError, KeyError, IndexError, TypeError):
+                continue
+            conn.execute(text("UPDATE data_backups SET email = :email WHERE id = :id").bindparams(email=email, id=backup_id))
 
 
 def sync_schema(engine: Engine) -> None:
