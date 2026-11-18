@@ -40,12 +40,12 @@ export default function ForgotPassword() {
         <form className="auth-card" onSubmit={submit}>
           <div>
             <h2>Forgot your password?</h2>
-            <p className="muted">Enter your username. We’ll email you a temporary password and a link to choose a new one.</p>
+            <p className="muted">Enter your username or email address. We’ll email you a temporary password and a link to choose a new one.</p>
           </div>
           {error && <Alert type="error">{error}</Alert>}
           <div className="field">
-            <label htmlFor="username">Username</label>
-            <input id="username" value={username} onChange={(e) => setUsername(e.target.value)} required autoFocus autoComplete="username" />
+            <label htmlFor="username">Username or email</label>
+            <input id="username" value={username} onChange={(e) => setUsername(e.target.value)} required autoFocus autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
           </div>
           <button className="btn block" disabled={busy}>
             <Send size={16} /> {busy ? 'Sending…' : 'Send reset email'}

@@ -4,6 +4,7 @@ import api, { errorMessage } from '../api'
 import { useAuth } from '../auth'
 import Avatar from '../components/Avatar'
 import { EmptyRow, Msg, PageHeader } from '../components/ui'
+import PasswordInput from '../components/PasswordInput'
 
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '')
 const EMPTY = { full_name: '', username: '', email: '', password: '' }
@@ -88,7 +89,7 @@ export default function Organisation() {
           </div>
           <div>
             <label>Password</label>
-            <input required type="password" minLength={8} maxLength={100} autoComplete="new-password" value={form.password} onChange={set('password')} />
+            <PasswordInput required minLength={8} maxLength={100} autoComplete="new-password" value={form.password} onChange={set('password')} />
           </div>
           <div className="form-actions span-all">
             <button className="btn" disabled={adding}>

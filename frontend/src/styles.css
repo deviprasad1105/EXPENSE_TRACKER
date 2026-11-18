@@ -1049,3 +1049,17 @@ label { font-size: 13px; font-weight: 500; color: var(--text-2); }
 .cc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .cc-form { border-top: 1px solid var(--border); padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
 @media (max-width: 420px) { .cc-grid { grid-template-columns: 1fr; } }
+
+/* Password field with a show / hide (eye) button */
+.password-input { position: relative; display: flex; min-width: 0; }
+.password-input > input { flex: 1; width: 100%; padding-right: 42px; }
+.password-toggle {
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+  display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px;
+  padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); cursor: pointer; box-shadow: none;
+}
+.password-toggle:hover:not(:disabled) { color: var(--text); background: var(--surface-2); }
+.password-toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.password-toggle:disabled { cursor: default; opacity: 0.5; }
+/* Hide Edge's own reveal button so there is only one eye */
+.password-input input::-ms-reveal { display: none; }

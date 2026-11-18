@@ -116,3 +116,9 @@ def test_username_change_and_request_need_emailed_code(client, db, make_user, ou
     assert client.post("/api/profile/username-requests", headers=h, json=req).status_code == 400
     client.post("/api/profile/otp", headers=h, json={"purpose": "USERNAME"})
     assert client.post("/api/profile/username-requests", headers=h, json={**req, "otp": outbox.last_code()}).status_code == 201
+
+
+def test_signup_code_can_be_confirmed_by_email(client, outbox):
+    _register(client)
+    email = outbox[-1][0]
+    assert client.post("/api/auth/verify-email", json={"username": email.upper(), "code": outbox.last_code()}).status_code == 200

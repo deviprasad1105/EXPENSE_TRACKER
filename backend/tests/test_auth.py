@@ -79,3 +79,41 @@ def test_security_headers(client):
     res = client.get("/api/health")
     assert res.headers["X-Content-Type-Options"] == "nosniff"
     assert res.headers["X-Frame-Options"] == "DENY"
+
+
+def test_login_with_email_any_case(client, make_user):
+    make_user("asha")
+    res = login(client, "  Asha@Example.COM ", PASSWORD)
+    assert res.status_code == 200
+    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {res.json()['access_token']}"})
+    assert me.json()["username"] == "asha"
+
+
+def test_login_with_unknown_email_or_wrong_password(client, make_user):
+    make_user("asha")
+    assert login(client, "nobody@example.com", PASSWORD).status_code == 401
+    res = login(client, "asha@example.com", "wrong-password")
+    assert res.status_code == 401 and res.json()["detail"] == "Invalid username/email or password"
+
+
+def test_wrong_passwords_by_email_count_towards_the_block(client, make_user, db):
+    user = make_user("asha")
+    for _ in range(settings.login_max_failures):
+        assert login(client, "asha@example.com", "wrong-password").status_code == 401
+    assert login(client, "asha", PASSWORD).status_code == 429
+    db.refresh(user)
+    assert user.login_blocked_until is not None
+
+
+def test_forgot_password_by_username_or_email(client, make_user, monkeypatch):
+    sent = []
+    monkeypatch.setattr("app.routers.auth.send_email", lambda to, subject, body: sent.append(to) or True)
+    make_user("asha")
+    unknown = client.post("/api/auth/forgot-password", json={"username": "nobody@example.com"})
+    assert unknown.status_code == 200 and sent == []
+    by_email = client.post("/api/auth/forgot-password", json={"username": "ASHA@example.com"})
+    # Same answer either way, so it can't be used to find out which emails have accounts
+    assert by_email.json() == unknown.json()
+    assert sent == ["asha@example.com"]
+    assert client.post("/api/auth/forgot-password", json={"username": "asha"}).status_code == 200
+    assert sent == ["asha@example.com", "asha@example.com"]

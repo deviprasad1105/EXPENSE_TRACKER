@@ -5,6 +5,7 @@ import { useAuth } from '../auth'
 import Avatar from '../components/Avatar'
 import OtpField from '../components/OtpField'
 import { Alert, Msg, PageHeader } from '../components/ui'
+import PasswordInput from '../components/PasswordInput'
 
 const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '')
 const STATUS_CLS = { PENDING: 'warn', APPROVED: 'ok', REJECTED: 'bad' }
@@ -220,7 +221,7 @@ export default function Profile() {
             </div>
             <div>
               <label>Confirm with your password</label>
-              <input type="password" value={uname.password} onChange={(e) => setUname({ ...uname, password: e.target.value })} required autoComplete="current-password" />
+              <PasswordInput value={uname.password} onChange={(e) => setUname({ ...uname, password: e.target.value })} required autoComplete="current-password" />
             </div>
             <div className="span-all">
               <OtpField value={uname.otp} onChange={(otp) => setUname((u) => ({ ...u, otp }))} send={sendCode('USERNAME')} />
@@ -309,15 +310,15 @@ export default function Profile() {
         <div className="form-grid">
           <div>
             <label>Current password</label>
-            <input type="password" value={pw.current_password} onChange={(e) => setPw({ ...pw, current_password: e.target.value })} required autoComplete="current-password" />
+            <PasswordInput value={pw.current_password} onChange={(e) => setPw({ ...pw, current_password: e.target.value })} required autoComplete="current-password" />
           </div>
           <div>
             <label>New password</label>
-            <input type="password" value={pw.new_password} onChange={(e) => setPw({ ...pw, new_password: e.target.value })} minLength={8} required autoComplete="new-password" />
+            <PasswordInput value={pw.new_password} onChange={(e) => setPw({ ...pw, new_password: e.target.value })} minLength={8} required autoComplete="new-password" />
           </div>
           <div>
             <label>Confirm new password</label>
-            <input type="password" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} minLength={8} required autoComplete="new-password" />
+            <PasswordInput value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} minLength={8} required autoComplete="new-password" />
           </div>
           <div className="span-all">
             <OtpField value={pw.otp} onChange={(otp) => setPw((p) => ({ ...p, otp }))} send={sendCode('PASSWORD')} />
@@ -355,7 +356,7 @@ export default function Profile() {
             </div>
             <div>
               <label>Confirm with your password</label>
-              <input type="password" value={del.password} onChange={(e) => setDel({ ...del, password: e.target.value })} required autoComplete="current-password" />
+              <PasswordInput value={del.password} onChange={(e) => setDel({ ...del, password: e.target.value })} required autoComplete="current-password" />
             </div>
             <div className="span-all form-actions">
               <button className="btn danger">

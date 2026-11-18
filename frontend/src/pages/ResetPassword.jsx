@@ -4,6 +4,7 @@ import { CheckCircle2, KeyRound } from 'lucide-react'
 import api, { errorMessage } from '../api'
 import AuthShell from '../components/AuthShell'
 import { Alert } from '../components/ui'
+import PasswordInput from '../components/PasswordInput'
 
 export default function ResetPassword() {
   const [params] = useSearchParams()
@@ -72,11 +73,11 @@ export default function ResetPassword() {
             </div>
             <div className="field">
               <label>New password</label>
-              <input type="password" value={form.new_password} onChange={set('new_password')} minLength={8} required autoComplete="new-password" />
+              <PasswordInput value={form.new_password} onChange={set('new_password')} minLength={8} required autoComplete="new-password" />
             </div>
             <div className="field">
               <label>Confirm new password</label>
-              <input type="password" value={form.confirm} onChange={set('confirm')} minLength={8} required autoComplete="new-password" />
+              <PasswordInput value={form.confirm} onChange={set('confirm')} minLength={8} required autoComplete="new-password" />
             </div>
             <button className="btn block">
               <KeyRound size={16} /> Change password
