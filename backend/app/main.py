@@ -16,7 +16,7 @@ from .deps import FEATURE_ACCOUNTING, FEATURE_EXPENSE, FEATURE_SUBSCRIPTION, FEA
 from .migrate import sync_schema
 from .models import ROLE_ADMIN, STATUS_APPROVED, JobRun, User
 from .routers import (
-    accounts, admin, aliases, auth, budgets, categories, cron, daily_items, dashboard, expenses, funds, notifications, org, profile, reports,
+    accounts, admin, aliases, auth, autotrack, budgets, categories, cron, daily_items, dashboard, expenses, funds, notifications, org, profile, reports,
     shares, splits, subscriptions, upi,
 )
 from .security import hash_password
@@ -151,6 +151,9 @@ app.include_router(accounting.router, dependencies=[Depends(require_feature(FEAT
 app.include_router(upi.router, dependencies=[Depends(require_feature(FEATURE_UPI))])
 # The forwarding link signs nobody in: its secret token names the user, and it checks their plan itself
 app.include_router(upi.hook_router)
+app.include_router(autotrack.router, dependencies=[Depends(require_feature(FEATURE_UPI))])
+# The phone sends with its own token (no sign-in session), and its plan is checked there
+app.include_router(autotrack.device_router)
 accounting.register_error_handler(app)
 
 

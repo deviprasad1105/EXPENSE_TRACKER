@@ -25,6 +25,7 @@ import ImportRecords from './pages/Import'
 import ImportHistory from './pages/ImportHistory'
 import ImportPurge from './pages/ImportPurge'
 import UpiTracker from './pages/UpiTracker'
+import AutoTracking from './pages/AutoTracking'
 import Vouchers from './accounting/Vouchers'
 import Ledgers from './accounting/Ledgers'
 import AccountingReports from './accounting/Reports'
@@ -99,6 +100,7 @@ export default function App() {
         <Route path="splits" element={<Feature name="split"><Splits /></Feature>} />
         <Route path="splits/:groupId" element={<Feature name="split"><SplitGroup /></Feature>} />
         <Route path="upi" element={<Feature name="upi"><UpiTracker /></Feature>} />
+        <Route path="auto-tracking" element={<Feature name="upi"><AutoTracking /></Feature>} />
         <Route path="subscriptions" element={<Feature name="subscription"><Subscriptions /></Feature>} />
         <Route path="accounting/vouchers" element={<Feature name="accounting"><Vouchers /></Feature>} />
         <Route path="accounting/ledgers" element={<Feature name="accounting"><Ledgers /></Feature>} />

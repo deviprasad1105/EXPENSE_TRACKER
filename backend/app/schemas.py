@@ -467,6 +467,87 @@ class UpiActivityOut(BaseModel):
     days: list[UpiDay]
 
 
+# ---------- auto-tracking (bank SMS / notifications) ----------
+class AutoTrackSettingsIn(BaseModel):
+    enabled: bool
+    mode: Literal["REVIEW", "AUTO"] = "REVIEW"
+    since: date | None = None
+
+
+class AutoTrackSettingsOut(BaseModel):
+    enabled: bool
+    mode: str
+    since: date | None
+    device_linked: bool
+    device_hint: str | None
+    pending: int = 0
+    failed: int = 0
+    last_received_at: datetime | None = None
+
+
+class DeviceTokenOut(BaseModel):
+    token: str
+
+
+class BankMessageIn(BaseModel):
+    sender: str | None = Field(default=None, max_length=80)
+    body: str = Field(min_length=1, max_length=2000)
+    # When the phone received it: milliseconds since 1970 (what Android gives), or a date-time
+    received_ms: int | None = None
+    received_at: datetime | None = None
+    source: Literal["SMS", "NOTIFICATION", "PASTE"] = "PASTE"
+
+
+class BankMessagesIn(BaseModel):
+    messages: list[BankMessageIn] = Field(min_length=1, max_length=500)
+
+
+class BankMessageOut(ORM):
+    id: int
+    received_at: datetime
+    source: str
+    sender: str | None
+    body: str
+    status: str
+    reason: str | None
+    kind: str | None
+    direction: str | None
+    channel: str | None
+    amount: Decimal | None
+    bank: str | None
+    last4: str | None
+    party: str | None
+    ref: str | None
+    balance: Decimal | None
+    txn_date: date | None
+    due_date: date | None
+    min_due: Decimal | None
+    suggestion: str | None
+    name: str | None
+    category: str | None
+    account_id: int | None
+    to_account_id: int | None
+    expense_id: int | None
+    fund_id: int | None
+    transfer_id: int | None
+
+
+class BankBatchOut(BaseModel):
+    results: list[BankMessageOut]
+    # How many of each status this batch produced (messages already received before count as "SEEN")
+    counts: dict[str, int]
+
+
+class BankAcceptIn(BaseModel):
+    suggestion: Literal["EXPENSE", "INCOME", "TRANSFER"] | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    category: str | None = Field(default=None, max_length=50)
+    account_id: int | None = None
+    to_account_id: int | None = None
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    txn_date: date | None = None
+
+
 # ---------- sharing ----------
 class ShareIn(BaseModel):
     viewer_username: str

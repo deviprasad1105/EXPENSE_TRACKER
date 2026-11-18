@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import api from './api'
+import { unlinkPhone } from './autotrack'
 
 const AuthContext = createContext(null)
 
@@ -71,6 +72,8 @@ export function AuthProvider({ children }) {
   }
 
   const logout = () => {
+    // The phone stops sending bank messages for this account once it signs out
+    unlinkPhone().catch(() => {})
     localStorage.removeItem('token')
     sessionStorage.removeItem('tour-seen')
     setUser(null)
