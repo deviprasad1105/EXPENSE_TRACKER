@@ -103,8 +103,14 @@ npm run apk           # or: a debug build for testing (frontend/android/app/buil
 
 **The app carries its own copy of the screens**, built into the APK; only its data comes from the live API. So a web change
 reaches the app only when a new APK is published: **after merging web changes, run `npm run publish:apk` and commit
-`mobile-app/` and `frontend/app-version.json`.** The app checks `mobile-app/version.json` when it opens and shows
-"A new version of the app is available" with a download button, so phones catch up.
+`mobile-app/` and `frontend/app-version.json`.** The app checks `mobile-app/version.json` when it opens (and when it
+comes back to the front) and offers the update: **Update now** downloads the APK inside the app and opens Android's
+installer (Android asks once to allow installs from Expense Tracker; apps before 1.4 download it in the browser).
+New users always download the latest APK from `mobile-app/`.
+
+To make older apps update before they can be used (after a change they can't work with), publish with
+`npm run publish:apk -- --require` (every older version) or `-- --min=5` (versions below 5). They then show
+"Update required" over the whole app, including the sign-in page. Otherwise the previous minimum is kept.
 
 **Signing:** release APKs are signed with one key so updates install over the old app. The key is never in this public
 repository: it lives in `~/.android-keys/` (`expense-tracker-release.jks` plus `keystore.properties` with `storeFile`,

@@ -1142,3 +1142,27 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 @media (max-width: 600px) {
   .setting-block .setting-row { flex-direction: column; align-items: flex-start; gap: 12px; }
 }
+
+/* Android app: new version available (banner) / update required (covers the app) */
+.app-update-banner {
+  position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 90;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 14px 44px 14px 16px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); border-left: 4px solid var(--primary);
+  border-radius: 14px; box-shadow: 0 18px 40px -16px rgba(30, 27, 75, .45);
+}
+.app-update-close { position: absolute; top: 8px; right: 8px; }
+.app-update-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.app-update-hint { font-size: 13px; color: var(--muted); flex-basis: 100%; }
+.app-update-note { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+.app-update-note.error { color: var(--danger); }
+.app-update-blocker {
+  position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 24px;
+  background: linear-gradient(160deg, #1e1b4b 0%, #262067 45%, #312e81 100%);
+}
+.app-update-card {
+  width: 100%; max-width: 420px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 14px;
+  background: var(--surface); color: var(--text); border-radius: 24px; padding: 32px 24px; box-shadow: 0 30px 60px -30px rgba(0, 0, 0, .6);
+}
+.app-update-card h2 { margin: 0; font-size: 24px; }
+.app-update-card p { margin: 0; color: var(--text-2); }
+.app-update-card .app-update-actions { justify-content: center; }

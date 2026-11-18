@@ -7,6 +7,12 @@
  *   2. Builds the web app for Android, copies it into the native project (cap sync) and runs Gradle assembleRelease.
  *   3. Copies the APK to mobile-app/ExpenseTracker.apk and writes mobile-app/version.json.
  *
+ * Installed apps read mobile-app/version.json when they open and offer the update ("Later" allowed). To make older
+ * apps update before they can be used (e.g. after a change the old app can't work with):
+ *   npm run publish:apk -- --require      every older version must update
+ *   npm run publish:apk -- --min=5        versions below 5 must update
+ * Without these, the previous minimum is kept.
+ *
  * Needs the release signing key: ~/.android-keys/keystore.properties (or EXPENSE_TRACKER_KEYSTORE), see mobile-app/README.md.
  * Run it after merging web changes, so the app shows the same features as the website. Then commit mobile-app/.
  */
@@ -44,6 +50,22 @@ if (!fs.existsSync(apk)) {
   console.error(`The signed APK wasn't made (${apk} is missing). Check the signing key settings.`)
   process.exit(1)
 }
+// The oldest version still allowed: --require (this one), --min=N, else what was published before
+let minVersionCode = 0
+try {
+  minVersionCode = Number(JSON.parse(fs.readFileSync(path.join(outDir, 'version.json'), 'utf8')).minVersionCode) || 0
+} catch {
+  // First publish with a minimum
+}
+const minArg = process.argv.find((a) => a.startsWith('--min='))
+if (process.argv.includes('--require')) minVersionCode = version.versionCode
+else if (minArg) minVersionCode = Number(minArg.slice(6))
+if (!(minVersionCode >= 0 && minVersionCode <= version.versionCode)) {
+  console.error(`--min must be between 0 and ${version.versionCode}`)
+  process.exit(1)
+}
+
 fs.copyFileSync(apk, path.join(outDir, 'ExpenseTracker.apk'))
-fs.writeFileSync(path.join(outDir, 'version.json'), JSON.stringify(version, null, 2) + '\n')
-console.log(`\nPublished mobile-app/ExpenseTracker.apk (${version.versionName}). Commit mobile-app/ and frontend/app-version.json.`)
+fs.writeFileSync(path.join(outDir, 'version.json'), JSON.stringify({ ...version, minVersionCode }, null, 2) + '\n')
+console.log(`\nPublished mobile-app/ExpenseTracker.apk (${version.versionName}).` +
+  (minVersionCode ? ` Versions below ${minVersionCode} must update.` : '') + ' Commit mobile-app/ and frontend/app-version.json.')

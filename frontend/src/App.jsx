@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { canUseSplits, hasFeature, useAuth } from './auth'
+import AppUpdateGate from './components/AppUpdateGate'
 import Layout from './components/Layout'
 import Login from './pages/Login'
 import Register from './pages/Register'
@@ -75,6 +76,8 @@ function NoFeatures() {
 
 export default function App() {
   return (
+    <>
+    <AppUpdateGate />
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
@@ -133,5 +136,6 @@ export default function App() {
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </>
   )
 }
