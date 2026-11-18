@@ -8,6 +8,24 @@ export const SITE_ORIGIN = isApp ? import.meta.env.VITE_SITE_URL : window.locati
 
 // The Android app, kept in the repository's mobile-app/ folder (public, so anyone can download it)
 export const APP_DOWNLOAD_URL = 'https://github.com/deviprasad1105/EXPENSE_TRACKER/raw/main/mobile-app/ExpenseTracker.apk'
+// Published next to the APK by `npm run publish:apk`: the newest app's version
+const APP_LATEST_URL = 'https://raw.githubusercontent.com/deviprasad1105/EXPENSE_TRACKER/main/mobile-app/version.json'
+// This build's version (frontend/app-version.json)
+// eslint-disable-next-line no-undef
+export const APP_VERSION = __APP_VERSION__
+
+/** Inside the app: the newer published version ({ versionCode, versionName }), or null when this one is current. */
+export async function newerAppVersion() {
+  if (!isApp) return null
+  try {
+    const res = await fetch(`${APP_LATEST_URL}?t=${Date.now()}`, { cache: 'no-store' })
+    if (!res.ok) return null
+    const latest = await res.json()
+    return Number(latest.versionCode) > APP_VERSION.versionCode ? latest : null
+  } catch {
+    return null
+  }
+}
 
 const api = axios.create({ baseURL: `${isApp ? SITE_ORIGIN : ''}/api` })
 

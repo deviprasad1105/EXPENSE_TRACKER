@@ -35,7 +35,7 @@ import TuneOutlined from '@mui/icons-material/TuneOutlined'
 import UploadFileOutlined from '@mui/icons-material/UploadFileOutlined'
 import VisibilityOutlined from '@mui/icons-material/VisibilityOutlined'
 import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded'
-import api, { APP_DOWNLOAD_URL, isApp, todayISO } from '../api'
+import api, { APP_DOWNLOAD_URL, isApp, newerAppVersion, todayISO } from '../api'
 import { AutoTrack } from '../autotrack'
 import { canUseSplits, hasFeature, useAuth } from '../auth'
 import Avatar from './Avatar'
@@ -113,6 +113,17 @@ export default function Layout() {
     window.addEventListener('autotrackRoute', go)
     return () => window.removeEventListener('autotrackRoute', go)
   }, [navigate])
+
+  // Android app: is a newer app published? The website is always current; the app only changes when reinstalled
+  const [appUpdate, setAppUpdate] = useState(null)
+  useEffect(() => {
+    if (!isApp || sessionStorage.getItem('app-update-hidden')) return
+    newerAppVersion().then(setAppUpdate)
+  }, [])
+  const hideAppUpdate = () => {
+    sessionStorage.setItem('app-update-hidden', '1')
+    setAppUpdate(null)
+  }
 
   // Welcome tour: once per login session until the user ticks "Don't show again"
   useEffect(() => {
@@ -433,6 +444,16 @@ export default function Layout() {
         </header>
 
         <div className="content">
+          {appUpdate && (
+            <div className="alert info banner app-update">
+              <span className="grow">
+                <b>A new version of the app ({appUpdate.versionName}) is available</b> with the latest features. Download it and install it
+                over this one: you stay signed in.
+              </span>
+              <a className="btn small" href={APP_DOWNLOAD_URL}>Download</a>
+              <button className="icon-btn nudge-close" onClick={hideAppUpdate} title="Later" aria-label="Later">×</button>
+            </div>
+          )}
           {/* The page shows this notice right after its header */}
           <PageBannerContext.Provider
             value={
