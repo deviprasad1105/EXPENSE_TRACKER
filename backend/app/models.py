@@ -165,6 +165,37 @@ class Account(Base):
     is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+    # Credit cards only (Credit Cards page): the limit, the day of the month the statement is made and the bill is due,
+    # and how many days before the due date to remind (0 = only on the day)
+    credit_limit: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    statement_day: Mapped[int | None] = mapped_column(Integer)
+    due_day: Mapped[int | None] = mapped_column(Integer)
+    remind_days: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    remind_on: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class CardBill(Base):
+    """A credit card's bill: what is due and by when. From the card's statement SMS (auto-tracking), typed in, or
+    estimated from the card's due day and what it owes when no statement has come.
+
+    Paid when payments into the card since the statement cover it, or when the user marks it paid."""
+
+    __tablename__ = "card_bills"
+    __table_args__ = (UniqueConstraint("account_id", "due_date", name="uq_card_bill_account_due"),)
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    statement_date: Mapped[date | None] = mapped_column(Date)
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    total_due: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    min_due: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    # SMS (a statement message), MANUAL (typed in) or ESTIMATE (from the due day; replaced when the statement comes)
+    source: Mapped[str] = mapped_column(String(10), nullable=False)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Reminders already sent for this bill: BEFORE, TODAY, OVERDUE (comma-separated), so each goes once
+    reminded: Mapped[str | None] = mapped_column(String(30))
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
 
 
 class AccountTransfer(Base):

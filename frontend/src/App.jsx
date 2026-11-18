@@ -27,6 +27,7 @@ import ImportHistory from './pages/ImportHistory'
 import ImportPurge from './pages/ImportPurge'
 import UpiTracker from './pages/UpiTracker'
 import AutoTracking from './pages/AutoTracking'
+import CreditCards from './pages/CreditCards'
 import Vouchers from './accounting/Vouchers'
 import Ledgers from './accounting/Ledgers'
 import AccountingReports from './accounting/Reports'
@@ -94,6 +95,7 @@ export default function App() {
         <Route path="expenses" element={<Feature name="expense"><Expenses /></Feature>} />
         <Route path="items" element={<Feature name="expense"><DailyItems /></Feature>} />
         <Route path="funds" element={<Feature name="expense"><Funds /></Feature>} />
+        <Route path="cards" element={<Feature name="expense"><CreditCards /></Feature>} />
         <Route path="reports" element={<Feature name="expense"><Reports /></Feature>} />
         <Route path="sharing" element={<Feature name="expense"><Sharing /></Feature>} />
         <Route path="import" element={<Feature name="expense"><ImportRecords /></Feature>} />

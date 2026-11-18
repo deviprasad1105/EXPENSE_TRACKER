@@ -18,7 +18,8 @@ const KIND = {
   SUBSCRIPTION_ENDED: { icon: Repeat, action: ['/subscriptions', 'Open'] },
   SECURITY: { icon: ShieldAlert, action: ['/settings', 'Security'] },
   BUDGET_ALERT: { icon: Gauge, action: ['/', 'See dashboard'] },
-  BILL_DUE: { icon: CalendarX2, action: ['/auto-tracking', 'See bills'] },
+  BILL_DUE: { icon: CalendarX2, action: ['/cards', 'See cards'] },
+  CARD_DUE: { icon: CalendarX2, action: ['/cards', 'Pay'] },
   INFO: { icon: Info },
 }
 

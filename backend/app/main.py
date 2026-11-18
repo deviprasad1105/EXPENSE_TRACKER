@@ -16,10 +16,11 @@ from .deps import FEATURE_ACCOUNTING, FEATURE_EXPENSE, FEATURE_SUBSCRIPTION, FEA
 from .migrate import sync_schema
 from .models import ROLE_ADMIN, STATUS_APPROVED, JobRun, User
 from .routers import (
-    accounts, admin, aliases, auth, autotrack, budgets, categories, cron, daily_items, dashboard, expenses, funds, notifications, org, profile,
-    recover, reports, shares, splits, subscriptions, upi,
+    accounts, admin, aliases, auth, autotrack, budgets, cards, categories, cron, daily_items, dashboard, expenses, funds, notifications,
+    org, profile, recover, reports, shares, splits, subscriptions, upi,
 )
 from .security import hash_password
+from .services.cards import card_reminder_job
 from .services.reminders import daily_reminder_job
 from .services.subscriptions import subscription_job
 from .timeutil import now_local
@@ -95,6 +96,11 @@ async def lifespan(app: FastAPI):
         id="daily_reminder",
     )
     scheduler.add_job(
+        card_reminder_job,
+        CronTrigger(hour=settings.reminder_hour, minute=settings.reminder_minute, timezone=settings.timezone),
+        id="card_reminders",
+    )
+    scheduler.add_job(
         subscription_job,
         CronTrigger(minute=settings.subscription_job_minute, timezone=settings.timezone),
         id="subscriptions",
@@ -143,7 +149,7 @@ app.add_middleware(
 for r in (auth, recover, admin, org, profile, notifications, splits, cron):
     app.include_router(r.router)
 # Expense tracking is a feature the admin grants per user
-for r in (expenses, daily_items, funds, dashboard, reports, shares, accounts, budgets, aliases, categories):
+for r in (expenses, daily_items, funds, dashboard, reports, shares, accounts, budgets, aliases, categories, cards):
     app.include_router(r.router, dependencies=[Depends(require_feature(FEATURE_EXPENSE))])
 app.include_router(importer.router, dependencies=[Depends(require_feature(FEATURE_EXPENSE))])
 app.include_router(subscriptions.router, dependencies=[Depends(require_feature(FEATURE_SUBSCRIPTION))])
