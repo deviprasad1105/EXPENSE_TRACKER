@@ -261,3 +261,49 @@ def test_dismiss_and_income(client, db, asha):
     assert client.post(f"/api/autotrack/messages/{other['id']}/dismiss", headers=headers(asha)).json()["status"] == "DISMISSED"
     assert client.post(f"/api/autotrack/messages/{other['id']}/accept", json={}, headers=headers(asha)).status_code == 400
     assert db.scalars(select(BankMessage).where(BankMessage.status == "PENDING")).all() == []
+
+
+# ---------- UPI app notifications (PhonePe, Google Pay, Paytm) ----------
+@pytest.mark.parametrize("text, direction, amount, party, last4", [
+    ("Payment Successful: Payment of ₹10 to Ravi Kumar was successful", DEBIT, "10", "Ravi Kumar", None),
+    ("Payment Successful: Your payment of ₹1 to Sri Lakshmi Stores is successful", DEBIT, "1", "Sri Lakshmi Stores", None),
+    ("PhonePe: Payment to Swiggy of ₹230 successful", DEBIT, "230", "Swiggy", None),
+    ("Payment Complete: Your ₹10 payment to RAVI KUMAR has been completed", DEBIT, "10", "RAVI KUMAR", None),
+    ("₹1 Payment Successful: to Sri Lakshmi Stores", DEBIT, "1", "Sri Lakshmi Stores", None),
+    ("Money sent!: ₹ 10 sent to Ravi Kumar successfully", DEBIT, "10", "Ravi Kumar", None),
+    ("₹10 paid to RAVI KUMAR: Paid via HDFC Bank - 1234", DEBIT, "10", "RAVI KUMAR", "1234"),
+    ("Paid ₹45 to Chai Point: From Bank of Baroda ••4321", DEBIT, "45", "Chai Point", "4321"),
+    ("Ravi Kumar sent you ₹500", CREDIT, "500", "Ravi Kumar", None),
+    ("Payment received: Received ₹500 from Ravi Kumar", CREDIT, "500", "Ravi Kumar", None),
+])
+def test_reads_upi_app_notifications(text, direction, amount, party, last4):
+    got = parse_bank_message(text, "PhonePe", R)
+    assert (got.direction, got.amount, got.party, got.last4, got.channel) == (direction, Decimal(amount), party, last4, CH_UPI)
+
+
+def test_upi_app_payment_uses_the_only_bank_account(client, db, asha):
+    _settings(client, asha, mode="AUTO")
+    note = {"sender": "PhonePe", "source": "NOTIFICATION", "body": "Payment Successful: Payment of ₹10 to Ravi Kumar was successful"}
+    msg = _send(client, asha, note)["results"][0]
+    assert msg["status"] == "CREATED" and msg["account_id"] == asha.ids["Axis Bank"] and msg["name"] == "Ravi Kumar"
+    e = db.get(Expense, msg["expense_id"])
+    assert (e.amount, e.account_id) == (Decimal("10"), asha.ids["Axis Bank"])
+
+
+def test_upi_app_payment_asks_which_account_when_there_are_several(client, asha):
+    client.post("/api/accounts", json={"name": "SBI", "kind": "SAVINGS"}, headers=headers(asha))
+    _settings(client, asha, mode="AUTO")
+    note = {"sender": "PhonePe", "source": "NOTIFICATION", "body": "PhonePe: Payment to Swiggy of ₹230 successful"}
+    msg = _send(client, asha, note)["results"][0]
+    assert msg["status"] == "PENDING" and "Which account" in msg["reason"]
+
+
+@pytest.mark.parametrize("text", [
+    "Get ₹100 cashback on your next payment",
+    "PhonePe: Pay your electricity bill of ₹540 now",
+    "Recharge now! Plans starting at ₹199 for your next payment",
+    "Your payment of ₹99 is pending. We will update you shortly",
+])
+def test_skips_upi_app_offers_and_pending_payments(text):
+    with pytest.raises(NotATransaction):
+        parse_bank_message(text, "PhonePe", R)

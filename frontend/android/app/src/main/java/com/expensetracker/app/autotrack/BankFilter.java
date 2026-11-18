@@ -12,7 +12,7 @@ public final class BankFilter {
     private static final Pattern AMOUNT = Pattern.compile("(?i)(rs\\.?|inr|₹)\\s*[\\d,]+");
     private static final Pattern MONEY_WORD = Pattern.compile(
         "(?i)\\b(debited|credited|spent|withdrawn|paid|sent|received|deposited|refund|reversed|purchase|txn|transaction|"
-            + "deducted|charged|due|statement|transferred|used\\s+(for|at))\\b");
+            + "deducted|charged|due|statement|transferred|used\\s+(for|at)|payments?|paying|sent\\s+you)\\b");
     private static final Pattern SECRET = Pattern.compile(
         "(?i)\\b(otp|one[\\s-]?time\\s+password|verification\\s+code|passcode|password|cvv|mpin|pin\\s+is)\\b");
 

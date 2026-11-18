@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ArchiveRestore, AtSign, Check, DatabaseBackup, Download, Eraser, Eye, Lock, MailWarning, Search, Settings2, Trash2, Unlock, UserX, Users, X } from 'lucide-react'
+import { ArchiveRestore, AtSign, Check, DatabaseBackup, Download, Eraser, Eye, Lock, MailWarning, Search, Settings2, ShieldCheck, ShieldOff, Trash2, Unlock, UserX, Users, X } from 'lucide-react'
 import api, { download, errorMessage } from '../api'
 import { useAuth } from '../auth'
 import Avatar from '../components/Avatar'
@@ -58,6 +58,15 @@ export default function Admin() {
     const reason = window.prompt(`Lock @${u.username}? They will be signed out and cannot sign in until unlocked.\n\nReason (shown to them on sign-in, optional):`, '')
     if (reason === null) return
     act(() => api.post(`/admin/users/${u.id}/lock`, { reason: reason || null }), `@${u.username} locked`)
+  }
+
+  const resetMfa = (u) => {
+    const reason = window.prompt(
+      `Turn off two-step sign-in for @${u.username}? Use this when they've lost their phone and their recovery codes.\n\nThey are signed out, can sign in with their password, and get an email.\n\nReason (optional):`,
+      '',
+    )
+    if (reason === null) return
+    act(() => api.post(`/admin/users/${u.id}/mfa/reset`, { reason: reason || null }), `Two-step sign-in turned off for @${u.username}`)
   }
 
   const clearData = (u) => {
@@ -211,6 +220,11 @@ export default function Admin() {
                             <Lock size={11} /> locked
                           </span>
                         )}
+                        {u.mfa_enabled && (
+                          <span className="badge info" title="Two-step sign-in (authenticator app) is on">
+                            <ShieldCheck size={11} /> 2-step
+                          </span>
+                        )}{' '}
                         {u.org_locked && !u.is_locked && (
                           <span className="badge bad" title={`Their organisation admin @${byId[u.org_admin_id]?.username} is locked`}>
                             <Lock size={11} /> org locked
@@ -338,6 +352,11 @@ export default function Admin() {
                                 <Lock size={14} />
                               </button>
                             ))}
+                          {u.id !== me.id && u.mfa_enabled && (
+                            <button className="btn ghost small" title="Turn off two-step sign-in (lost phone)" onClick={() => resetMfa(u)}>
+                              <ShieldOff size={14} />
+                            </button>
+                          )}
                           <button className="btn ghost small" title="Delete all their data (backed up)" onClick={() => clearData(u)} style={{ color: 'var(--warning)' }}>
                             <Eraser size={14} />
                           </button>

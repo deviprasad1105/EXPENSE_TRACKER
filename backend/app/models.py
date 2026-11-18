@@ -89,6 +89,14 @@ class User(Base):
     # Self-registered accounts must confirm their email with a one-time code before an admin can approve them.
     # Accounts that existed before this check, and ones made by an admin or org admin, count as verified.
     email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Two-step sign-in with an authenticator app (services/mfa.py). Secrets are stored encrypted; recovery codes as
+    # comma-separated hashes, each removed once used. mfa_last_step stops a code being used twice.
+    mfa_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    mfa_secret: Mapped[str | None] = mapped_column(String(255))
+    mfa_pending_secret: Mapped[str | None] = mapped_column(String(255))
+    mfa_enabled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    mfa_last_step: Mapped[int | None] = mapped_column(Integer)
+    mfa_recovery_hashes: Mapped[str | None] = mapped_column(String(1000))
 
     manager: Mapped["User | None"] = relationship(
         remote_side="User.id", back_populates="reports", foreign_keys="User.manager_id"
@@ -541,7 +549,7 @@ class AccountDeletionRequest(Base):
 
 
 class PasswordReset(Base):
-    """A forgot-password request: a temporary password + one-time link sent by email."""
+    """A forgot-password request: a temporary password sent by email. It signs in once, then a new password is chosen."""
 
     __tablename__ = "password_resets"
 

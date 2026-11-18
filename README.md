@@ -261,9 +261,9 @@ Most changes are web changes: deploy them to Vercel as usual, then rebuild the A
   cancel it until then. Admins handle these under Administration → Deletion requests.
   **Username**: you can change it yourself once every `USERNAME_LOCK_DAYS` (15) days. Inside that window you raise
   a request, and an admin approves or rejects it. An approved change restarts your 15 days.
-- **Forgot password**: enter your username to get an email with a **temporary password** and a reset link
-  (valid 60 minutes, single use, disabled after 5 wrong tries). On the link page you enter the temporary password
-  and choose a new one. **At most 2 resets per 15 days.** Without SMTP settings the emails are saved to
+- **Forgot password**: enter your username or email to get an email with a **temporary password** (no link;
+  valid 60 minutes, single use). Sign in with it on the website or in the app, and you're asked to choose a new
+  password. Signing in with your old password instead makes the temporary one expire. **At most 2 resets per 15 days.** Without SMTP settings the emails are saved to
   `backend/mail_outbox/*.eml`, so you can test locally.
 - **Staying signed in**: a page refresh keeps you signed in, on the same page and viewing the same person. You are
   only signed out when your token is rejected (expired after `JWT_EXPIRE_MINUTES`, or invalid). If the backend is

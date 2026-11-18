@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://dev_dr_expense:YOUR_PASSWORD@localhost:5445/dev_dr_expense"
 
     jwt_secret: str = DEFAULT_JWT_SECRET
+    # Encrypts authenticator-app secrets (two-step sign-in). Empty: derived from JWT_SECRET. Changing it (or
+    # JWT_SECRET while this is empty) turns two-step sign-in off for everyone, who then set it up again.
+    mfa_key: str = ""
+    # How long after the password the authenticator code may be entered
+    mfa_login_minutes: int = 5
     jwt_expire_minutes: int = 720
 
     admin_username: str = "admin"

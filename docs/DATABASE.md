@@ -58,6 +58,12 @@ Everyone who can log in, plus their role, approval state, reporting line and pre
 | `ask_account` | SMALLINT | 1 = expense entry asks which account paid (default). 0 = everything goes to the primary account. |
 | `background_updated_at` | DATE, nullable | When the custom background picture last changed. `NULL` means the default background. |
 | `email_verified` | SMALLINT | 0 = signed up but hasn't entered the emailed code yet: can't sign in, and the admin can't approve. Accounts from before this check, and ones an admin or org admin creates, are 1. |
+| `mfa_enabled` | SMALLINT | 1 = two-step sign-in is on: after the password, signing in needs the 6-digit code from an authenticator app (or a recovery code). Each user turns it on in Settings → Security; an admin can turn it off for them. |
+| `mfa_secret` | VARCHAR2(255), nullable | The authenticator app's secret key, encrypted with `MFA_KEY` (or a key derived from `JWT_SECRET`). Changing that key makes every stored secret unreadable, which turns two-step sign-in off in practice. |
+| `mfa_pending_secret` | VARCHAR2(255), nullable | A new secret during setup, until the first code from the app confirms it. |
+| `mfa_enabled_at` | DATE, nullable | When two-step sign-in was turned on. |
+| `mfa_last_step` | INTEGER, nullable | The 30-second time step of the last code used, so a code can't be used twice. |
+| `mfa_recovery_hashes` | VARCHAR2(1000), nullable | Comma-separated hashes of the unused recovery codes (10 are made at a time; each is removed once used). |
 
 **How it works**
 - **Registration and approval:** registration creates a `PENDING` row, and every admin gets a notification.
@@ -138,31 +144,32 @@ them as a notification. Deleting the account any other way while a request is pe
 `APPROVED`. The rows stay as a record.
 
 ## PASSWORD_RESETS
-Forgot-password requests. Each row is one email containing a temporary password and a one-time link.
+Forgot-password requests. Each row is one email containing a temporary password (no link).
 
 | Column | Type | Meaning |
 |---|---|---|
 | `id` | INTEGER, PK | |
 | `user_id` | INTEGER, FK → `app_users.id` | Whose password is being reset. Indexed. |
-| `token_hash` | VARCHAR2(64), unique | SHA-256 of the secret in the emailed link. The link itself is never stored. |
+| `token_hash` | VARCHAR2(64), unique | Random value kept for the unique key. Older versions emailed a link whose secret this hashed; links are no longer sent. |
 | `temp_password_hash` | VARCHAR2(200) | bcrypt hash of the emailed temporary password. |
 | `created_at` | DATE | When the reset was requested. Used for the 2-per-15-days limit. |
-| `expires_at` | DATE | `created_at` + `RESET_TOKEN_MINUTES` (60). Set to "now" when superseded or disabled. |
-| `used_at` | DATE, nullable | When the password was changed with it. A link works only once. |
-| `failed_attempts` | INTEGER | Wrong temporary passwords entered. At 5 the link is disabled. |
+| `expires_at` | DATE | `created_at` + `RESET_TOKEN_MINUTES` (60). Set to "now" when superseded, or when the user signs in with their old password. |
+| `used_at` | DATE, nullable | When a new password was chosen after signing in with it. It works only once. |
+| `failed_attempts` | INTEGER | No longer used: wrong passwords at sign-in count towards the account's sign-in block (`app_users.failed_logins`). |
 | `requested_ip` | VARCHAR2(45) | IP that asked for the reset (IPv4 or IPv6), for auditing. |
 
 **How it works**
-1. *Forgot password?* on the login page asks for a username. The page always shows the same message, so it cannot
-   be used to find out which usernames exist.
+1. *Forgot password?* on the login page asks for a username or email. The page always shows the same message, so it
+   cannot be used to find out which accounts exist.
 2. If the account exists and is approved, and it has had fewer than `RESET_MAX_PER_WINDOW` (2) resets in the last
-   `RESET_WINDOW_DAYS` (15) days, a row is created and an email is sent with the temporary password and a link to
-   `/reset-password?token=…`. Any older unused link for that user stops working. If the limit is reached, no
-   row is created and the email explains when another reset is possible.
-3. On the link page the user enters the temporary password and a new password. The new password is saved,
-   `used_at` is set, and a `SECURITY` notification plus a confirmation email are sent.
-4. Until then the old password keeps working. The temporary password **cannot** be used to sign in, only on the
-   reset page.
+   `RESET_WINDOW_DAYS` (15) days, a row is created and an email is sent with the temporary password (no link). Any
+   older unused temporary password for that user stops working. If the limit is reached, no row is created and the
+   email explains when another reset is possible.
+3. The user signs in (web or app) with their username or email and the temporary password. After the authenticator
+   code (when two-step sign-in is on), they must choose a new password before they get a session. The new password is
+   saved, `used_at` is set, every other device is signed out, and a `SECURITY` notification plus a confirmation email
+   are sent.
+4. Until then the old password keeps working. Signing in with it makes the temporary password expire.
 
 Every request counts towards the limit, whether or not it was completed, so the reset email can't be used to spam
 someone's inbox. Without SMTP settings, emails are saved as `.eml` files in `backend/mail_outbox/`.
@@ -317,7 +324,7 @@ In-app notifications (the bell).
 | `APPROVAL` | every admin | A new user registered. |
 | `USERNAME_REQUEST` | admins / the user | A username request was raised, approved or rejected. |
 | `SHARE` | the viewer | Someone shared their data with them. |
-| `SECURITY` | the user | The password was reset with a forgot-password link, or sign-in was blocked after too many wrong passwords. |
+| `SECURITY` | the user | The password was changed after signing in with a temporary password, sign-in was blocked after too many wrong passwords or codes, or two-step sign-in changed. |
 | `SUBSCRIPTION_DUE` | the user | A subscription renews within its `remind_days_before` (once per charge; also emailed). |
 | `SUBSCRIPTION_CHARGED` | the user | A subscription's charge date arrived and the charge was recorded. |
 | `SUBSCRIPTION_ENDED` | the user | A subscription passed its end date and was paused. |
