@@ -15,8 +15,13 @@ The app works with the same accounts and data as the website: sign in with your 
 
 ## Update
 
-Download the newer APK and install it over the old one. You stay signed in, and your data is on the server, so
-nothing is lost.
+When a newer version is published, the app says **"A new version of the app is available"** at the top. Tap
+**Download** and install it over the old one. You stay signed in, and your data is on the server, so nothing is lost.
+
+**Coming from version 1.1 or older?** Version 1.2 is signed with a new key, so Android won't install it over the old
+app ("App not installed" or "package conflicts"). Uninstall Expense Tracker once, then install the new APK and sign in
+again. Later updates install over it normally. If you used auto-tracking, turn on SMS and notification access again
+in the app.
 
 ## Good to know
 
@@ -24,5 +29,6 @@ nothing is lost.
 - Reports and exports open the share sheet: save them to Files or Drive, or open them in Excel or a PDF viewer.
 - iPhone: there is no iPhone app yet. Open the website in Safari and use **Share → Add to Home Screen**.
 
-For developers: the README in the repository root explains how to build a new APK (`npm run apk` in `frontend/`).
-After building, copy `frontend/android/app/build/outputs/apk/debug/app-debug.apk` here as `ExpenseTracker.apk`.
+For developers: after merging web changes, run `npm run publish:apk` in `frontend/`. It raises the version, builds a
+signed APK and puts it here with `version.json`; then commit this folder and `frontend/app-version.json`. It needs the
+release signing key (see "Android app" in the README in the repository root).

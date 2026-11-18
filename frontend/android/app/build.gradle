@@ -1,5 +1,14 @@
 apply plugin: 'com.android.application'
 
+// One version for the app and the web code's update check: frontend/app-version.json
+def appVersion = new groovy.json.JsonSlurper().parse(file("../../app-version.json"))
+
+// Release signing key, kept OUT of the repository (it is public). Default: ~/.android-keys/keystore.properties
+// with storeFile, storePassword, keyAlias, keyPassword. Override with the EXPENSE_TRACKER_KEYSTORE environment variable.
+def keystorePropsFile = file(System.getenv("EXPENSE_TRACKER_KEYSTORE") ?: "${System.getProperty('user.home')}/.android-keys/keystore.properties")
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) keystorePropsFile.withInputStream { keystoreProps.load(it) }
+
 android {
     namespace "com.expensetracker.app"
     compileSdk rootProject.ext.compileSdkVersion
@@ -7,8 +16,8 @@ android {
         applicationId "com.expensetracker.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 3
-        versionName "1.2"
+        versionCode appVersion.versionCode
+        versionName appVersion.versionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +25,20 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (keystoreProps['storeFile']) {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
+            // Without the key file the release build is unsigned (and can't be installed): see mobile-app/README.md
+            if (keystoreProps['storeFile']) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
