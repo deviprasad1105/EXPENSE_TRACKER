@@ -139,6 +139,7 @@ def create_backup(
         kind=kind,
         user_id=user.id,
         username=user.username,
+        email=user.email if kind == KIND_USER else None,
         summary=summary,
         reason=reason,
         row_count=sum(len(rows) for rows in tables.values()),
@@ -155,8 +156,10 @@ def load_backup(backup: DataBackup) -> dict:
 
 
 # ---------- restore ----------
-def restore_backup(db: Session, backup: DataBackup, admin: User) -> dict:
-    """Put the backed-up rows back. Rows that already exist are left alone. Returns counts per table."""
+def restore_backup(db: Session, backup: DataBackup, restored_by: str) -> dict:
+    """Put the backed-up rows back. Rows that already exist are left alone. Returns counts per table.
+
+    `restored_by` is the admin's username, or a note that the account's owner restored it themselves."""
     if backup.restored_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "This backup has already been restored")
     doc = load_backup(backup)
@@ -251,5 +254,5 @@ def restore_backup(db: Session, backup: DataBackup, admin: User) -> dict:
             member.guest_name = None
 
     backup.restored_at = now_local()
-    backup.restored_by = admin.username
+    backup.restored_by = restored_by[:50]
     return counts

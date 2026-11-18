@@ -6,6 +6,7 @@ from sqlalchemy import delete, exists, or_, select, update
 from sqlalchemy.orm import Session, defer
 
 from ..accounting.lifecycle import delete_books
+from ..config import settings
 from ..database import get_db
 from ..deps import require_admin, would_create_cycle
 from ..importer.models import ImportBatch, ImportChoice, ImportRecord
@@ -377,7 +378,7 @@ def download_backup(backup_id: int, admin: User = Depends(require_admin), db: Se
 @router.post("/backups/{backup_id}/restore")
 def restore(backup_id: int, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     backup = _get_backup(db, backup_id)
-    counts = restore_backup(db, backup, admin)
+    counts = restore_backup(db, backup, admin.username)
     db.commit()
     return {"message": f"Restored {sum(counts.values())} rows for @{backup.username}", "restored": counts}
 
@@ -490,6 +491,8 @@ def approve_deletion_request(
         email,
         "Your Expense Tracker account has been deleted",
         f"Hi {name},\n\nAs you asked, your Expense Tracker account @{req.username} and all its data have been deleted.{note}\n\n"
+        "A backup is kept. Using a code sent to this email you can bring the account back, or erase that backup for "
+        f"good, here:\n{settings.frontend_url.rstrip('/')}/recover-account\n\n"
         "If you didn't ask for this, reply to this email or contact an administrator as soon as possible.\n",
     )
     return req

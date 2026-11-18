@@ -503,6 +503,9 @@ class PasswordReset(Base):
 OTP_SIGNUP = "SIGNUP"
 OTP_PASSWORD = "PASSWORD"
 OTP_USERNAME = "USERNAME"
+# Codes for a deleted account, sent to the email it used: bring it back, or erase its backup for good
+OTP_RESTORE = "RESTORE"
+OTP_PURGE = "PURGE"
 
 
 class EmailOtp(Base):
@@ -514,6 +517,24 @@ class EmailOtp(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
     purpose: Mapped[str] = mapped_column(String(10), nullable=False)
     # HMAC-SHA256 of the code; the code itself is only in the email
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime)
+    failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class RecoveryOtp(Base):
+    """A one-time code for a deleted account, sent to the email address the account used.
+
+    Not linked to app_users (the account no longer exists): the code is tied to the email address instead."""
+
+    __tablename__ = "recovery_otps"
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    email: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    # RESTORE or PURGE
+    purpose: Mapped[str] = mapped_column(String(10), nullable=False)
     code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
@@ -543,6 +564,8 @@ class DataBackup(Base):
     # Not foreign keys: the user may no longer exist
     user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     username: Mapped[str] = mapped_column(String(50), nullable=False)
+    # The account's email (account backups only), so its owner can restore or erase it with an emailed code
+    email: Mapped[str | None] = mapped_column(String(120), index=True)
     summary: Mapped[str] = mapped_column(String(500), nullable=False)
     reason: Mapped[str | None] = mapped_column(String(500))
     row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

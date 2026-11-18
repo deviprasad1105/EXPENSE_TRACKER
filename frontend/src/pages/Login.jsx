@@ -69,6 +69,9 @@ export default function Login() {
         <p className="muted" style={{ textAlign: 'center', margin: 0 }}>
           Don’t have an account? <Link to="/register">Create one</Link>
         </p>
+        <p className="muted small" style={{ textAlign: 'center', margin: 0 }}>
+          Deleted your account? <Link to="/recover-account">Restore it or erase its data</Link>
+        </p>
       </form>
     </AuthShell>
   )

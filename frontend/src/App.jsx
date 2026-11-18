@@ -18,6 +18,7 @@ import Settings from './pages/Settings'
 import ForgotPassword from './pages/ForgotPassword'
 import VerifyEmail from './pages/VerifyEmail'
 import ResetPassword from './pages/ResetPassword'
+import RecoverAccount from './pages/RecoverAccount'
 import Splits from './pages/Splits'
 import SplitGroup from './pages/SplitGroup'
 import Subscriptions from './pages/Subscriptions'
@@ -80,6 +81,7 @@ export default function App() {
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/reset-password" element={<ResetPassword />} />
+      <Route path="/recover-account" element={<RecoverAccount />} />
       <Route
         element={
           <Protected>
