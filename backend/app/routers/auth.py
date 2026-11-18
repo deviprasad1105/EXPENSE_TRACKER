@@ -25,6 +25,8 @@ from ..ratelimit import RateLimiter
 from ..schemas import (
     AccessibleUser,
     ForgotPasswordIn,
+    LoginOut,
+    MfaLoginIn,
     OtpSentOut,
     RegisterIn,
     ResendSignupOtpIn,
@@ -33,8 +35,8 @@ from ..schemas import (
     UserOut,
     VerifyEmailIn,
 )
-from ..security import create_access_token, hash_password, verify_password
-from ..services import otp
+from ..security import create_access_token, create_mfa_ticket, decode_mfa_ticket, hash_password, verify_password
+from ..services import mfa, otp
 from ..services.mailer import send_email
 from ..timeutil import now_local
 from .profile import account_exists
@@ -159,23 +161,18 @@ def resend_email_code(data: ResendSignupOtpIn, request: Request, db: Session = D
     return OtpSentOut(message=f"We emailed a new code to {user.email}.", expires_at=expires, expires_in_seconds=otp.seconds_left(expires))
 
 
-@router.post("/login", response_model=TokenOut)
-def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    if not login_limiter.hit(_client_ip(request)):
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many sign-in attempts. Wait a minute and try again.")
-    # The form field is called 'username' (OAuth2), but it takes the username or the email address
-    user = find_by_login(db, form.username)
+def _check_not_blocked(user: User | None) -> None:
     now = now_local()
     if user and user.login_blocked_until and user.login_blocked_until > now:
         minutes = max(1, -(-int((user.login_blocked_until - now).total_seconds()) // 60))
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
-            f"Too many wrong passwords for this account. Try again in {minutes} minute(s) or reset your password.",
+            f"Too many wrong passwords or codes for this account. Try again in {minutes} minute(s) or reset your password.",
         )
-    if not verify_password(form.password, user.password_hash if user else None):
-        if user:
-            _record_failed_login(db, user, request)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username/email or password")
+
+
+def _check_can_sign_in(user: User) -> None:
+    """Refuse accounts that can't sign in right now (checked after the password, so it reveals nothing to others)."""
     if user.status == STATUS_PENDING and not user.email_verified:
         raise HTTPException(status.HTTP_403_FORBIDDEN, VERIFY_EMAIL_MESSAGE)
     if user.status == STATUS_PENDING:
@@ -187,10 +184,54 @@ def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: Ses
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"Your account has been locked by an administrator.{reason}")
     if user.org_locked:
         raise HTTPException(status.HTTP_403_FORBIDDEN, ORG_LOCKED_MESSAGE)
+
+
+def _signed_in(db: Session, user: User) -> LoginOut:
     if user.failed_logins or user.login_blocked_until:
         user.failed_logins, user.login_blocked_until = 0, None
-        db.commit()
-    return TokenOut(access_token=create_access_token(user.id, user.token_version))
+    db.commit()
+    return LoginOut(access_token=create_access_token(user.id, user.token_version))
+
+
+@router.post("/login", response_model=LoginOut)
+def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    """With two-step sign-in on, the right password gives only `mfa_token`: send it with the code to /login/mfa."""
+    if not login_limiter.hit(_client_ip(request)):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many sign-in attempts. Wait a minute and try again.")
+    # The form field is called 'username' (OAuth2), but it takes the username or the email address
+    user = find_by_login(db, form.username)
+    _check_not_blocked(user)
+    if not verify_password(form.password, user.password_hash if user else None):
+        if user:
+            _record_failed_login(db, user, request)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username/email or password")
+    _check_can_sign_in(user)
+    if user.mfa_enabled:
+        return LoginOut(mfa_required=True, mfa_token=create_mfa_ticket(user.id, user.token_version))
+    return _signed_in(db, user)
+
+
+@router.post("/login/mfa", response_model=LoginOut)
+def login_mfa(data: MfaLoginIn, request: Request, db: Session = Depends(get_db)):
+    """Second step: the code from the authenticator app (or a recovery code). Wrong codes count like wrong passwords."""
+    if not login_limiter.hit(f"mfa:{_client_ip(request)}"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many attempts. Wait a minute and try again.")
+    ticket = decode_mfa_ticket(data.mfa_token)
+    user = db.get(User, ticket[0]) if ticket else None
+    if not user or user.token_version != ticket[1] or not user.mfa_enabled:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "This sign-in has expired. Enter your password again.")
+    _check_not_blocked(user)
+    _check_can_sign_in(user)
+    used = mfa.verify(user, data.code)
+    if not used:
+        _record_failed_login(db, user, request)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "The code is incorrect. Check that your phone's time is set automatically.")
+    if used == "RECOVERY":
+        left = mfa.recovery_left(user)
+        db.add(Notification(user_id=user.id, kind="SECURITY", message=(
+            f"A recovery code was used to sign in (from {_client_ip(request)}). {left} recovery code(s) left. "
+            "If this wasn't you, change your password and make new recovery codes in Settings → Security.")))
+    return _signed_in(db, user)
 
 
 def _record_failed_login(db: Session, user: User, request: Request):
@@ -203,7 +244,7 @@ def _record_failed_login(db: Session, user: User, request: Request):
                 user_id=user.id,
                 kind="SECURITY",
                 message=f"Sign-in was blocked for {settings.login_lock_minutes} minutes after "
-                f"{settings.login_max_failures} wrong passwords (from {_client_ip(request)}). "
+                f"{settings.login_max_failures} wrong passwords or codes (from {_client_ip(request)}). "
                 "If this wasn't you, change your password.",
             )
         )

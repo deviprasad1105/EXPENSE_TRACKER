@@ -63,12 +63,24 @@ export function AuthProvider({ children }) {
     setAccessible((list) => list.map((a) => (a.id === next.id ? { ...a, ...next } : a)))
   }
 
+  const startSession = async (token) => {
+    localStorage.setItem('token', token)
+    setLoading(true)
+    await loadMe()
+  }
+
+  /** Returns { mfaToken } when two-step sign-in is on: then call completeMfa with the code from the app. */
   const login = async (username, password) => {
     const form = new URLSearchParams({ username, password })
     const res = await api.post('/auth/login', form)
-    localStorage.setItem('token', res.data.access_token)
-    setLoading(true)
-    await loadMe()
+    if (res.data.mfa_required) return { mfaToken: res.data.mfa_token }
+    await startSession(res.data.access_token)
+    return {}
+  }
+
+  const completeMfa = async (mfaToken, code) => {
+    const res = await api.post('/auth/login/mfa', { mfa_token: mfaToken, code })
+    await startSession(res.data.access_token)
   }
 
   const logout = () => {
@@ -90,7 +102,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, serverDown, login, logout, accessible, target, params, setViewUserId, refresh: loadMe, updateUser }}
+      value={{ user, loading, serverDown, login, completeMfa, logout, accessible, target, params, setViewUserId, refresh: loadMe, updateUser }}
     >
       {children}
     </AuthContext.Provider>

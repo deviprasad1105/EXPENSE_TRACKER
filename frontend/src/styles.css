@@ -1063,3 +1063,21 @@ label { font-size: 13px; font-weight: 500; color: var(--text-2); }
 .password-toggle:disabled { cursor: default; opacity: 0.5; }
 /* Hide Edge's own reveal button so there is only one eye */
 .password-input input::-ms-reveal { display: none; }
+
+/* Two-step sign-in (authenticator app) */
+.row-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.mfa-panel { display: flex; flex-direction: column; gap: 12px; padding: 16px; margin: 4px 0 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+.mfa-panel p { margin: 0; }
+.mfa-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 14px; }
+.mfa-qr-row { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.mfa-qr { background: #fff; padding: 8px; border-radius: 12px; border: 1px solid var(--border); }
+.mfa-key { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; min-width: 0; }
+.mfa-secret { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; letter-spacing: .04em; padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+.mfa-recovery { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.mfa-recovery code { display: block; text-align: center; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; padding: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.mfa-code-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 20px; letter-spacing: .3em; text-align: center; }
+.link-button { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: var(--primary-text, var(--primary)); font: inherit; cursor: pointer; box-shadow: none; }
+.link-button:hover { text-decoration: underline; }
+@media (max-width: 600px) {
+  .setting-block .setting-row { flex-direction: column; align-items: flex-start; gap: 12px; }
+}

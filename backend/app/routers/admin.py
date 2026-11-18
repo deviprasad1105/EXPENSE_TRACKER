@@ -56,7 +56,7 @@ from ..schemas import (
     UsernameRequestOut,
 )
 from ..security import hash_password
-from ..services import otp
+from ..services import mfa, otp
 from ..services.mailer import send_email
 from ..services.backup import (
     KIND_USER,
@@ -351,6 +351,30 @@ def unlock_user(user_id: int, admin: User = Depends(require_admin), db: Session 
     user = _get_user(db, user_id)
     unlock_account(db, user, admin)
     db.commit()
+    return user
+
+
+@router.post("/users/{user_id}/mfa/reset", response_model=ManagedUserOut)
+def reset_user_mfa(user_id: int, data: AdminReason, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Turn two-step sign-in off for someone who lost their phone and recovery codes. They sign in with their password
+    and can set it up again. Their sessions end, and they are emailed."""
+    user = _get_user(db, user_id)
+    if user.id == admin.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Turn off your own two-step sign-in in Settings → Security")
+    if not user.mfa_enabled:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Two-step sign-in is not on for this user")
+    mfa.turn_off(user)
+    user.token_version += 1
+    reason = f" Reason: {data.reason}" if data.reason else ""
+    text = f"Two-step sign-in was turned off for your account by the administrator {admin.username}.{reason}"
+    db.add(Notification(user_id=user.id, kind="SECURITY", message=text))
+    db.commit()
+    send_email(
+        user.email,
+        "Expense Tracker: two-step sign-in was turned off",
+        f"Hi {user.full_name},\n\n{text}\n\nYou can sign in with your password and turn it on again in Settings → Security.\n"
+        "If you didn't ask for this, contact an administrator straight away.\n",
+    )
     return user
 
 

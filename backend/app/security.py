@@ -28,6 +28,30 @@ def decode_access_token(token: str) -> tuple[int, int] | None:
     """(user id, token version) of a valid token. A token whose version no longer matches the user's is revoked."""
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM])
+        # A two-step sign-in ticket only proves the password: it is never a session
+        if payload.get("typ") == MFA_TICKET:
+            return None
+        return int(payload["sub"]), int(payload.get("ver", 0))
+    except (jwt.PyJWTError, KeyError, ValueError):
+        return None
+
+
+MFA_TICKET = "mfa"
+
+
+def create_mfa_ticket(user_id: int, token_version: int) -> str:
+    """Issued after the password when two-step sign-in is on: sent back with the authenticator code."""
+    now = datetime.now(timezone.utc)
+    payload = {"sub": str(user_id), "ver": token_version, "typ": MFA_TICKET, "iat": now,
+               "exp": now + timedelta(minutes=settings.mfa_login_minutes)}
+    return jwt.encode(payload, settings.jwt_secret, algorithm=ALGORITHM)
+
+
+def decode_mfa_ticket(token: str) -> tuple[int, int] | None:
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM])
+        if payload.get("typ") != MFA_TICKET:
+            return None
         return int(payload["sub"]), int(payload.get("ver", 0))
     except (jwt.PyJWTError, KeyError, ValueError):
         return None
