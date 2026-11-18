@@ -24,7 +24,12 @@ const UNIT = { GOLD: 'g', CRYPTO: '', STOCK: 'shares', MUTUAL_FUND: 'units', ETF
 
 const DASH = <span className="muted">—</span>
 const amt = (v) => (v == null ? DASH : money(v))
-const units = (h) => (h.units == null ? DASH : `${Number(h.units).toLocaleString('en-IN', { maximumFractionDigits: 6 })} ${UNIT[h.kind] ?? ''}`.trim())
+const units = (h) => {
+  if (h.units == null) return DASH
+  const n = Number(h.units)
+  const label = UNIT[h.kind] ?? ''
+  return `${n.toLocaleString('en-IN', { maximumFractionDigits: 6 })} ${n === 1 && label.endsWith('s') ? label.slice(0, -1) : label}`.trim()
+}
 
 function Gain({ gain, pct, block }) {
   if (gain == null) return DASH
@@ -45,6 +50,22 @@ export default function Investments({ embedded = false }) {
   const canWrite = target?.writable !== false
   const [data, setData] = useState(null)
   const [editing, setEditing] = useState(null) // null, 'new' or a holding
+  // What is folded away (everything is open by default): a holding's id (the lines under it), `t:KIND` (a type in the
+  // breakdown), `g:KIND` (a type's section) and `alloc` (the breakdown). Remembered in this browser only.
+  const [folded, setFolded] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(FOLD_KEY) || '{}') || {}
+    } catch {
+      return {}
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(FOLD_KEY, JSON.stringify(folded))
+    } catch {
+      /* private window: just not remembered */
+    }
+  }, [folded])
   const [msg, setMsg] = useState(null)
 
   const load = useCallback(() => api.get('/investments', { params }).then((r) => setData(r.data)), [params])
@@ -65,10 +86,25 @@ export default function Investments({ embedded = false }) {
     }
   }
 
-  const held = (data?.holdings || []).filter((h) => h.is_active)
-  const sold = (data?.holdings || []).filter((h) => !h.is_active)
+  const all = data?.holdings || []
+  // Lines that are part of another (e.g. stocks under their broker's total), by parent
+  const kids = {}
+  for (const h of all) if (h.parent_id != null) (kids[h.parent_id] ||= []).push(h)
+  const top = all.filter((h) => h.parent_id == null)
+  const held = top.filter((h) => h.is_active)
+  const sold = top.filter((h) => !h.is_active)
+  const listed = all.length - top.length
   const value = Number(data?.current_value || 0)
   const diff = data?.accounts_balance != null ? value - Number(data.accounts_balance) : null
+  const tree = { kids, folded, toggle: (id) => setFolded({ ...folded, [id]: !folded[id] }) }
+  const foldAll = () => {
+    const all = { alloc: false }
+    for (const g of data?.groups || []) all[`t:${g.kind}`] = all[`g:${g.kind}`] = true
+    for (const id of Object.keys(kids)) all[id] = true
+    all['g:SOLD'] = true
+    setFolded(all)
+  }
+  const anyFolded = Object.values(folded).some(Boolean)
 
   return (
     <div>
@@ -94,6 +130,7 @@ export default function Investments({ embedded = false }) {
       {editing && (
         <HoldingForm
           h={editing === 'new' ? null : editing}
+          parents={top.filter((p) => editing === 'new' || (p.id !== editing.id && !kids[editing.id]))}
           run={run}
           params={params}
           close={() => setEditing(null)}
@@ -102,7 +139,13 @@ export default function Investments({ embedded = false }) {
 
       {data && (
         <div className="tiles">
-          <StatTile hero label="Current value" value={money(value)} sub={`${held.length} holding(s)${data.unvalued ? ` · ${data.unvalued} without a value` : ''}`} icon={ShowChartRounded} />
+          <StatTile
+            hero
+            label="Current value"
+            value={money(value)}
+            sub={`${held.length} holding(s)${listed ? ` · ${listed} listed under them` : ''}${data.unvalued ? ` · ${data.unvalued} without a value` : ''}`}
+            icon={ShowChartRounded}
+          />
           <StatTile label="Invested" value={money(data.invested)} sub="Where the amount is known" icon={SavingsOutlined} />
           <StatTile
             label="Gain / loss"
@@ -128,16 +171,53 @@ export default function Investments({ embedded = false }) {
 
       {data && data.groups.length > 0 && (
         <div className="card">
-          <h3>Where your money is</h3>
-          {/* Each type, then every holding in it, with its share of the total value */}
+          <div className="row-between inv-group-head">
+            <h3 style={{ margin: 0 }}>
+              <FoldButton open={!folded.alloc} onClick={() => tree.toggle('alloc')} />
+              Where your money is
+            </h3>
+            <div className="inv-fold-all">
+              <button type="button" className="btn ghost small" onClick={() => setFolded({})} disabled={!anyFolded}>
+                Expand all
+              </button>
+              <button type="button" className="btn ghost small" onClick={foldAll}>
+                Collapse all
+              </button>
+            </div>
+          </div>
+          {/* Each type, then every holding in it (and the lines under a holding), with its share of the total value */}
+          {!folded.alloc && (
           <div className="inv-alloc" role="table" aria-label="Breakdown of investments">
             {data.groups.map((g) => {
               const pct = (v) => (value && v != null ? (Number(v) / value) * 100 : null)
               const share = pct(g.current_value)
+              const line = (h, child) => {
+                const p = pct(h.current_value)
+                const n = kids[h.id]?.length
+                return (
+                  <div key={h.id} className={`inv-alloc-row ${child ? 'inv-alloc-child' : 'inv-alloc-item'}`} role="row">
+                    <span className="inv-alloc-name">
+                      {n ? <FoldButton open={!folded[h.id]} onClick={() => tree.toggle(h.id)} /> : null}
+                      {h.name}
+                      {h.platform && !child && <span className="hint"> · {h.platform}</span>}
+                      {child && h.kind !== g.kind && <span className="hint"> · {ONE[h.kind]}</span>}
+                      {child && h.units != null && <span className="hint"> · {units(h)}</span>}
+                    </span>
+                    <div className="progress thin" title={p == null ? 'No current value' : `${p.toFixed(1)}%`}>
+                      <i style={{ width: `${p || 0}%`, background: 'var(--primary)', opacity: 0.55 }} />
+                    </div>
+                    <span className="num">
+                      {h.current_value != null ? money(h.current_value) : h.invested != null ? <span className="hint">cost {money(h.invested)}</span> : DASH}
+                    </span>
+                    <span className="num muted">{p == null ? '—' : `${p.toFixed(1)}%`}</span>
+                  </div>
+                )
+              }
               return (
                 <div key={g.kind} className="inv-alloc-group" role="rowgroup">
                   <div className="inv-alloc-row inv-alloc-type" role="row">
                     <span className="strong">
+                      <FoldButton open={!folded[`t:${g.kind}`]} onClick={() => tree.toggle(`t:${g.kind}`)} />
                       {KINDS[g.kind]} <span className="muted">· {g.count}</span>
                     </span>
                     <div className="progress" title={`${share.toFixed(1)}%`}>
@@ -146,28 +226,15 @@ export default function Investments({ embedded = false }) {
                     <span className="num strong">{money(g.current_value)}</span>
                     <span className="num strong">{share.toFixed(1)}%</span>
                   </div>
-                  {held
-                    .filter((h) => h.kind === g.kind)
-                    .map((h) => {
-                      const p = pct(h.current_value)
-                      return (
-                        <div key={h.id} className="inv-alloc-row inv-alloc-item" role="row">
-                          <span className="inv-alloc-name">
-                            {h.name}
-                            {h.platform && <span className="hint"> · {h.platform}</span>}
-                          </span>
-                          <div className="progress thin" title={p == null ? 'No current value' : `${p.toFixed(1)}%`}>
-                            <i style={{ width: `${p || 0}%`, background: 'var(--primary)', opacity: 0.55 }} />
-                          </div>
-                          <span className="num">{amt(h.current_value)}</span>
-                          <span className="num muted">{p == null ? '—' : `${p.toFixed(1)}%`}</span>
-                        </div>
-                      )
-                    })}
+                  {!folded[`t:${g.kind}`] &&
+                    held
+                      .filter((h) => h.kind === g.kind)
+                      .flatMap((h) => [line(h, false), ...(folded[h.id] ? [] : (kids[h.id] || []).map((c) => line(c, true)))])}
                 </div>
               )
             })}
           </div>
+          )}
         </div>
       )}
 
@@ -182,31 +249,71 @@ export default function Investments({ embedded = false }) {
       )}
 
       {data?.groups.map((g) => (
-        <Group key={g.kind} title={KINDS[g.kind]} g={g} rows={held.filter((h) => h.kind === g.kind)} canWrite={canWrite} setEditing={setEditing} run={run} />
+        <Group key={g.kind} id={`g:${g.kind}`} title={KINDS[g.kind]} g={g} rows={held.filter((h) => h.kind === g.kind)} tree={tree} canWrite={canWrite} setEditing={setEditing} run={run} />
       ))}
-      {sold.length > 0 && <Group title="Sold" rows={sold} canWrite={canWrite} setEditing={setEditing} run={run} />}
+      {sold.length > 0 && <Group id="g:SOLD" title="Sold" rows={sold} tree={tree} canWrite={canWrite} setEditing={setEditing} run={run} />}
     </div>
   )
 }
 
-function Group({ title, g, rows, canWrite, setEditing, run }) {
-  const hasUnits = rows.some((h) => h.units != null)
-  const sub = (h) => [!g && ONE[h.kind], h.platform, h.symbol, h.valued_on && `value as of ${niceDate(h.valued_on)}`].filter(Boolean).join(' · ')
+const FOLD_KEY = 'investments-folded'
+
+function FoldButton({ open, onClick }) {
+  return (
+    <button type="button" className="inv-fold" onClick={onClick} aria-expanded={open} aria-label={open ? 'Collapse' : 'Expand'} title={open ? 'Collapse' : 'Expand'}>
+      {open ? '▾' : '▸'}
+    </button>
+  )
+}
+
+function Group({ id, title, g, rows, tree, canWrite, setEditing, run }) {
+  const { kids, folded, toggle } = tree
+  // Each top-level row, then (unless folded) the lines under it
+  const lines = rows.flatMap((h) => [{ h, child: false }, ...(folded[h.id] ? [] : (kids[h.id] || []).map((c) => ({ h: c, child: true })))])
+  const hasUnits = lines.some(({ h }) => h.units != null)
+  const sub = (h, child) =>
+    [(!g || (child && h.kind !== g.kind)) && ONE[h.kind], !child && h.platform, h.symbol, h.valued_on && `value as of ${niceDate(h.valued_on)}`, !h.is_active && 'sold']
+      .filter(Boolean)
+      .join(' · ')
+  const count = (h) => kids[h.id]?.length || 0
   const actions = (h) =>
     canWrite && (
       <>
         <button className="btn ghost small" onClick={() => setEditing(h)}>
           Edit
         </button>
-        <button className="btn ghost small" onClick={() => window.confirm(`Delete ${h.name}?`) && run(() => api.delete(`/investments/${h.id}`), `${h.name} deleted.`)}>
+        <button
+          className="btn ghost small"
+          onClick={() =>
+            window.confirm(count(h) ? `Delete ${h.name} and the ${count(h)} holding(s) under it?` : `Delete ${h.name}?`) &&
+            run(() => api.delete(`/investments/${h.id}`), `${h.name} deleted.`)
+          }
+        >
           Delete
         </button>
       </>
     )
+  const name = (h, child) => (
+    <>
+      <div className={child ? '' : 'strong'}>
+        {!child && count(h) ? <FoldButton open={!folded[h.id]} onClick={() => toggle(h.id)} /> : null}
+        {h.name}
+        {!child && count(h) ? (
+          <button type="button" className="link-button inv-fold-label" onClick={() => toggle(h.id)}>
+            {folded[h.id] ? `show ${count(h)}` : `hide ${count(h)}`}
+          </button>
+        ) : null}
+      </div>
+      {sub(h, child) && <div className="hint">{sub(h, child)}</div>}
+      {h.note && <div className="hint inv-note">{h.note}</div>}
+    </>
+  )
+  const open = !folded[id]
   return (
     <div className="card">
-      <div className="row-between inv-group-head">
+      <div className={`row-between ${open ? 'inv-group-head' : ''}`}>
         <h3 style={{ margin: 0 }}>
+          <FoldButton open={open} onClick={() => toggle(id)} />
           {title} <span className="muted">· {rows.length}</span>
         </h3>
         {g && (
@@ -216,6 +323,8 @@ function Group({ title, g, rows, canWrite, setEditing, run }) {
           </div>
         )}
       </div>
+      {open && (
+      <>
       <div className="table-wrap inv-table-wrap">
         <table className="table inv-table">
           <thead>
@@ -230,13 +339,9 @@ function Group({ title, g, rows, canWrite, setEditing, run }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((h) => (
-              <tr key={h.id}>
-                <td>
-                  <div className="strong">{h.name}</div>
-                  <div className="hint">{sub(h)}</div>
-                  {h.note && <div className="hint inv-note">{h.note}</div>}
-                </td>
+            {lines.map(({ h, child }) => (
+              <tr key={h.id} className={child ? 'inv-child' : count(h) ? 'inv-parent' : undefined}>
+                <td>{name(h, child)}</td>
                 {hasUnits && <td className="num">{units(h)}</td>}
                 {hasUnits && <td className="num">{amt(h.avg_cost)}</td>}
                 <td className="num">{amt(h.invested)}</td>
@@ -255,13 +360,10 @@ function Group({ title, g, rows, canWrite, setEditing, run }) {
       </div>
       {/* Phones: one block per holding instead of the table */}
       <div className="inv-list">
-        {rows.map((h) => (
-          <div key={h.id} className="inv-item">
+        {lines.map(({ h, child }) => (
+          <div key={h.id} className={`inv-item ${child ? 'inv-child' : ''}`}>
             <div className="inv-item-top">
-              <div>
-                <div className="strong">{h.name}</div>
-                <div className="hint">{sub(h)}</div>
-              </div>
+              <div>{name(h, child)}</div>
               <div className="inv-item-value">
                 <div className="strong">{amt(h.current_value)}</div>
                 <Gain gain={h.gain} pct={h.gain_percent} block />
@@ -285,18 +387,19 @@ function Group({ title, g, rows, canWrite, setEditing, run }) {
                 </span>
               )}
             </div>
-            {h.note && <div className="hint">{h.note}</div>}
             {canWrite && <div className="inv-item-actions">{actions(h)}</div>}
           </div>
         ))}
       </div>
+      </>
+      )}
     </div>
   )
 }
 
-const FIELDS = ['kind', 'name', 'platform', 'symbol', 'units', 'invested', 'current_value', 'valued_on', 'note']
+const FIELDS = ['kind', 'name', 'platform', 'symbol', 'units', 'invested', 'current_value', 'valued_on', 'note', 'parent_id']
 
-function HoldingForm({ h, run, params, close }) {
+function HoldingForm({ h, parents, run, params, close }) {
   const [f, setF] = useState(() => ({
     ...Object.fromEntries(FIELDS.map((k) => [k, h?.[k] ?? ''])),
     kind: h?.kind || 'MUTUAL_FUND',
@@ -306,6 +409,7 @@ function HoldingForm({ h, run, params, close }) {
   const submit = async (e) => {
     e.preventDefault()
     const body = Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v === '' ? null : v]))
+    body.parent_id = body.parent_id == null ? null : Number(body.parent_id)
     const ok = await run(
       () => (h ? api.put(`/investments/${h.id}`, body) : api.post('/investments', body, { params })),
       `${f.name} ${h ? 'updated' : 'added'}.`,
@@ -354,6 +458,18 @@ function HoldingForm({ h, run, params, close }) {
         <div>
           <label>Value as of</label>
           <input type="date" value={f.valued_on} onChange={set('valued_on')} />
+        </div>
+        <div>
+          <label>Part of</label>
+          <select value={f.parent_id ?? ''} onChange={set('parent_id')}>
+            <option value="">Nothing (counts on its own)</option>
+            {parents.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <span className="hint">E.g. a stock under its broker’s total: shown under it and not counted again.</span>
         </div>
         <div style={{ gridColumn: '1 / -1' }}>
           <label>Note</label>

@@ -94,3 +94,54 @@ def test_feature_off_and_backup(client, make_user, db):
     _add(client, headers(user), kind="ETF", name="LIC Gold ETF FoF", invested="12999")
     assert [r["name"] for r in snapshot_user_data(db, user.id)["holdings"]] == ["LIC Gold ETF FoF"]
     assert db.scalar(select(Holding.user_id)) == user.id
+
+
+def test_lines_under_a_parent_are_listed_but_not_counted(client, make_user, db):
+    h = headers(make_user("asha", expense=True))
+    groww = _add(client, h, kind="STOCK", name="Groww", platform="Groww", invested="1000", current_value="1500")
+    bse = _add(client, h, kind="STOCK", name="BSE", units="2", invested="600", parent_id=groww["id"])
+    etf = _add(client, h, kind="ETF", name="Silver ETF", units="5", invested="100", current_value="120", parent_id=groww["id"])
+    assert bse["parent_id"] == groww["id"] and Decimal(bse["avg_cost"]) == 300
+
+    page = _page(client, h)
+    # Only the parent counts: its figures already include the lines under it
+    assert Decimal(page["invested"]) == 1000 and Decimal(page["current_value"]) == 1500 and Decimal(page["gain"]) == 500
+    assert [g["kind"] for g in page["groups"]] == ["STOCK"] and page["groups"][0]["count"] == 1
+    assert len(page["holdings"]) == 3 and page["unvalued"] == 0
+
+    # One level only, same user only
+    assert client.post("/api/investments", json={"kind": "STOCK", "name": "x", "parent_id": bse["id"]}, headers=h).status_code == 400
+    body = {"kind": "STOCK", "name": "Groww", "parent_id": etf["id"]}
+    assert client.put(f"/api/investments/{groww['id']}", json=body, headers=h).status_code == 400
+    assert client.put(f"/api/investments/{groww['id']}", json={**body, "parent_id": groww["id"]}, headers=h).status_code == 400
+    other = headers(make_user("ravi", expense=True))
+    assert client.post("/api/investments", json={"kind": "STOCK", "name": "x", "parent_id": groww["id"]}, headers=other).status_code == 400
+
+    # Taking a line out from under its parent makes it count on its own
+    r = client.put(f"/api/investments/{etf['id']}", json={"kind": "ETF", "name": "Silver ETF", "units": "5", "invested": "100",
+                                                         "current_value": "120"}, headers=h)
+    assert r.status_code == 200 and r.json()["parent_id"] is None
+    assert Decimal(_page(client, h)["current_value"]) == 1620
+
+    # Deleting the parent deletes the lines under it
+    assert client.delete(f"/api/investments/{groww['id']}", headers=h).status_code == 204
+    assert [x["name"] for x in _page(client, h)["holdings"]] == ["Silver ETF"]
+
+
+def test_restore_puts_parents_back_before_their_lines(client, make_user, db):
+    from app.services.backup import restore_backup, create_backup, snapshot_user_data
+    from app.models import User
+    user = make_user("asha", expense=True)
+    h = headers(user)
+    parent = _add(client, h, kind="STOCK", name="Groww", current_value="10")
+    _add(client, h, kind="STOCK", name="BSE", parent_id=parent["id"])
+    tables = snapshot_user_data(db, user.id)
+    tables["holdings"].reverse()  # child first, as a database might return them
+    backup = create_backup(db, "USER_DATA", user, user, tables, "test")
+    db.commit()
+    assert client.delete(f"/api/investments/{parent['id']}", headers=h).status_code == 204
+    db.expire_all()
+    restore_backup(db, backup, "test")
+    db.commit()
+    names = {x["name"]: x for x in _page(client, h)["holdings"]}
+    assert names["BSE"]["parent_id"] == names["Groww"]["id"] and Decimal(_page(client, h)["current_value"]) == 10

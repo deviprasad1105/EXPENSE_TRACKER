@@ -532,6 +532,7 @@ Only `kind` and `name` are required; every figure is kept only when the user kno
 | `invested`, `current_value` | NUMBER(14,2), nullable | Amount put in and what it is worth on `valued_on` (DATE, nullable). |
 | `note` | VARCHAR2(300), nullable | Free text. |
 | `is_active` | NUMBER(1) | 0 once sold: still listed, but left out of the totals. |
+| `parent_id` | INTEGER, nullable | The top-level line this one is part of, e.g. a stock under its broker's total. Shown under it and left out of the totals (the parent's figures include it). One level only; deleting the parent deletes these. No database foreign key; the API checks it. Indexed. |
 
 The page works out the average cost and price per unit only when `units` is known, and a gain only when both
 `invested` and `current_value` are. It compares the holdings' value with the balance of the user's `INVESTMENT`

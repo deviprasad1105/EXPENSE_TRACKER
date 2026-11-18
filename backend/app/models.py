@@ -230,6 +230,10 @@ class Holding(Base):
     note: Mapped[str | None] = mapped_column(String(300))
     # False once sold; kept for the record
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # The line this one is part of (e.g. a stock under its broker's total). Such lines are shown under their parent and
+    # left out of the totals, because the parent's figures already include them. One level only. No database foreign
+    # key (the column may be added to an existing table); the API keeps it pointing at the same user's top-level line.
+    parent_id: Mapped[int | None] = mapped_column(Integer, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local, onupdate=now_local)
 
