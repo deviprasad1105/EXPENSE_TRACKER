@@ -15,8 +15,13 @@ The app works with the same accounts and data as the website: sign in with your 
 
 ## Update
 
-When a newer version is published, the app says **"A new version of the app is available"** at the top. Tap
-**Download** and install it over the old one. You stay signed in, and your data is on the server, so nothing is lost.
+When a newer version is published, the app says **"New version … is available"** when you open it. Tap
+**Update now**: the app downloads it and opens Android's installer; tap **Update**. The first time, Android asks you
+to allow installs from Expense Tracker (**Allow from this source**). You stay signed in, and your data is on the
+server, so nothing is lost. Versions before 1.4 download the update in the browser instead; install it over the old app.
+
+Sometimes an update is **required** (the old version can't work with the website any more): the app then shows
+"Update required" and can only be used after updating.
 
 **Coming from version 1.1 or older?** Version 1.2 is signed with a new key, so Android won't install it over the old
 app ("App not installed" or "package conflicts"). Uninstall Expense Tracker once, then install the new APK and sign in
