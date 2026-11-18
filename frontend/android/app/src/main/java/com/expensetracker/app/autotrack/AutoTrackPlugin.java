@@ -52,6 +52,25 @@ public class AutoTrackPlugin extends Plugin {
         return o;
     }
 
+    @Override
+    public void load() {
+        rebindListener();
+    }
+
+    /**
+     * After the app is updated (or killed by the system) Android can leave the notification listener unbound while
+     * "Notification access" still shows as on, and then no notification arrives. Ask Android to connect it again.
+     */
+    private void rebindListener() {
+        if (Build.VERSION.SDK_INT < 24 || !AutoTrackStore.notificationsOn(getContext()) || !notificationAccess()) return;
+        try {
+            android.service.notification.NotificationListenerService.requestRebind(
+                new ComponentName(getContext(), BankNotificationListener.class));
+        } catch (RuntimeException ignored) {
+            // Already bound, or access was just taken away
+        }
+    }
+
     private boolean notificationAccess() {
         String flat = Settings.Secure.getString(getContext().getContentResolver(), "enabled_notification_listeners");
         if (flat == null) return false;
@@ -114,6 +133,7 @@ public class AutoTrackPlugin extends Plugin {
         AutoTrackStore.configure(getContext(), call.getString("apiBase"), clear ? null : token,
             Boolean.TRUE.equals(call.getBoolean("enabled", false)), Boolean.TRUE.equals(call.getBoolean("sms", true)),
             Boolean.TRUE.equals(call.getBoolean("notifications", false)), clear || token != null);
+        rebindListener();
         call.resolve(statusObject());
     }
 
