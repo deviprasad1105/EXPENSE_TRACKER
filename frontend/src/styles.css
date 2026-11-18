@@ -1134,8 +1134,14 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 .inv-table td { vertical-align: top; }
 .inv-note { max-width: 420px; white-space: normal; }
 .inv-actions { white-space: nowrap; }
-.inv-alloc { display: flex; flex-direction: column; gap: 10px; }
-.inv-alloc-row { display: grid; grid-template-columns: 110px 1fr 130px 52px; align-items: center; gap: 12px; }
+.inv-alloc { display: flex; flex-direction: column; gap: 14px; }
+.inv-alloc-group { display: flex; flex-direction: column; }
+.inv-alloc-row { display: grid; grid-template-columns: minmax(0, 1fr) 180px 130px 56px; align-items: center; gap: 12px; padding: 7px 10px; }
+.inv-alloc-type { background: var(--surface-2); border-radius: var(--radius-sm); }
+.inv-alloc-item { padding-left: 28px; font-size: 14px; border-bottom: 1px solid var(--border); }
+.inv-alloc-item:last-child { border-bottom: 0; }
+.inv-alloc-name { min-width: 0; overflow-wrap: anywhere; }
+.progress.thin { height: 6px; }
 .inv-group-head { margin-bottom: 12px; align-items: flex-start; }
 .inv-list { display: none; }
 .inv-item { border-top: 1px solid var(--border); padding: 12px 0; display: flex; flex-direction: column; gap: 6px; }
@@ -1146,8 +1152,9 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 @media (max-width: 640px) {
   .inv-table-wrap { display: none; }
   .inv-list { display: block; }
-  .inv-alloc-row { grid-template-columns: 84px 1fr 52px; }
-  .inv-alloc-row > .strong { display: none; }
+  .inv-alloc-row { grid-template-columns: minmax(0, 1fr) auto 48px; padding: 7px 8px; }
+  .inv-alloc-row > .progress { display: none; }
+  .inv-alloc-item { padding-left: 18px; }
 }
 
 /* Two-step sign-in (authenticator app) */

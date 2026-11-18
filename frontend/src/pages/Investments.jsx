@@ -129,17 +129,41 @@ export default function Investments({ embedded = false }) {
       {data && data.groups.length > 0 && (
         <div className="card">
           <h3>Where your money is</h3>
-          <div className="inv-alloc">
+          {/* Each type, then every holding in it, with its share of the total value */}
+          <div className="inv-alloc" role="table" aria-label="Breakdown of investments">
             {data.groups.map((g) => {
-              const share = value ? (Number(g.current_value) / value) * 100 : 0
+              const pct = (v) => (value && v != null ? (Number(v) / value) * 100 : null)
+              const share = pct(g.current_value)
               return (
-                <div key={g.kind} className="inv-alloc-row">
-                  <span>{KINDS[g.kind]}</span>
-                  <div className="progress" title={`${share.toFixed(1)}%`}>
-                    <i style={{ width: `${share}%`, background: 'var(--primary)' }} />
+                <div key={g.kind} className="inv-alloc-group" role="rowgroup">
+                  <div className="inv-alloc-row inv-alloc-type" role="row">
+                    <span className="strong">
+                      {KINDS[g.kind]} <span className="muted">· {g.count}</span>
+                    </span>
+                    <div className="progress" title={`${share.toFixed(1)}%`}>
+                      <i style={{ width: `${share}%`, background: 'var(--primary)' }} />
+                    </div>
+                    <span className="num strong">{money(g.current_value)}</span>
+                    <span className="num strong">{share.toFixed(1)}%</span>
                   </div>
-                  <span className="num strong">{money(g.current_value)}</span>
-                  <span className="num muted">{share.toFixed(1)}%</span>
+                  {held
+                    .filter((h) => h.kind === g.kind)
+                    .map((h) => {
+                      const p = pct(h.current_value)
+                      return (
+                        <div key={h.id} className="inv-alloc-row inv-alloc-item" role="row">
+                          <span className="inv-alloc-name">
+                            {h.name}
+                            {h.platform && <span className="hint"> · {h.platform}</span>}
+                          </span>
+                          <div className="progress thin" title={p == null ? 'No current value' : `${p.toFixed(1)}%`}>
+                            <i style={{ width: `${p || 0}%`, background: 'var(--primary)', opacity: 0.55 }} />
+                          </div>
+                          <span className="num">{amt(h.current_value)}</span>
+                          <span className="num muted">{p == null ? '—' : `${p.toFixed(1)}%`}</span>
+                        </div>
+                      )
+                    })}
                 </div>
               )
             })}
