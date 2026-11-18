@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
-import { ArrowLeft, KeyRound, LogIn, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, KeyRound, Lock, LogIn, Mail, ShieldCheck } from 'lucide-react'
 import { errorMessage } from '../api'
 import { useAuth } from '../auth'
 import AuthShell from '../components/AuthShell'
 import { Alert } from '../components/ui'
+import Logo from '../components/Logo'
 import PasswordInput from '../components/PasswordInput'
 
 export default function Login() {
@@ -173,7 +174,8 @@ export default function Login() {
   return (
     <AuthShell>
       <form className="auth-card" onSubmit={submit}>
-        <div>
+        <div className="auth-head">
+          <Logo size={64} />
           <h2>Welcome back</h2>
           <p className="muted">Sign in to your account to continue.</p>
         </div>
@@ -190,25 +192,30 @@ export default function Login() {
         )}
         <div className="field">
           <label htmlFor="username">Username or email <span className="req" aria-hidden="true">*</span></label>
-          <input id="username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required autoFocus autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="Your username or email address" />
+          <div className="icon-input">
+            <span className="icon-input-icon"><Mail size={20} /></span>
+            <input id="username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required autoFocus autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="Your username or email address" />
+          </div>
         </div>
         <div className="field">
           <div className="row-between">
             <label htmlFor="password">Password <span className="req" aria-hidden="true">*</span></label>
-            <Link to="/forgot-password" className="small">
+            <Link to="/forgot-password">
               Forgot password?
             </Link>
           </div>
-          <PasswordInput id="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required autoComplete="current-password" />
+          <PasswordInput id="password" icon={<Lock size={20} />} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required autoComplete="current-password" placeholder="Your password" />
         </div>
         <button className="btn block" disabled={busy}>
-          <LogIn size={16} /> {busy ? 'Signing in…' : 'Sign in'}
+          <LogIn size={18} /> {busy ? 'Signing in…' : 'Sign In'}
         </button>
-        <p className="muted" style={{ textAlign: 'center', margin: 0 }}>
-          Don’t have an account? <Link to="/register">Create one</Link>
+        <p className="auth-divider">
+          <span>
+            Don’t have an account? <Link to="/register">Create one</Link>
+          </span>
         </p>
-        <p className="muted small" style={{ textAlign: 'center', margin: 0 }}>
-          Deleted your account? <Link to="/recover-account">Restore it or erase its data</Link>
+        <p className="auth-foot">
+          Deleted your account? <Link to="/recover-account">Restore it</Link> or <Link to="/recover-account?action=PURGE">erase its data</Link>
         </p>
       </form>
     </AuthShell>
