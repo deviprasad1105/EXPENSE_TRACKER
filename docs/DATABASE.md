@@ -187,6 +187,27 @@ for once every `OTP_RESEND_SECONDS` (30). An unconfirmed sign-up whose code has 
 or email: registering again with either replaces it. Admins are notified about a new sign-up only once its email
 is confirmed.
 
+## RECOVERY_OTPS
+
+One-time codes for a **deleted** account, sent to the email address it used (Sign in → "Deleted your account?").
+With the code its owner either restores the account from its backup (`RESTORE`), or permanently deletes every
+backup of it (`PURGE`). Not linked to `app_users`, since the account no longer exists: the code is tied to the
+email address. To find the account, account backups (`data_backups.kind = 'USER'`) keep the account's `email`;
+backups taken before that column existed get it filled in from the backup itself at startup.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | INTEGER, PK | |
+| `email` | VARCHAR2(120) | The deleted account's email, lower-case. Indexed. |
+| `purpose` | VARCHAR2(10) | `RESTORE` or `PURGE`. A code works only for the action it was sent for. |
+| `code_hash` | VARCHAR2(64) | HMAC-SHA256 of the code (keyed with `JWT_SECRET`). |
+| `created_at` / `expires_at` | DATE | Valid as long as password / username codes (`otp_account_minutes`). |
+| `used_at` | DATE, nullable | When the code was accepted. A code works once. |
+| `failed_attempts` | INTEGER | Wrong codes entered. At `OTP_MAX_ATTEMPTS` (5) the code is disabled. |
+
+Asking for a code gives the same answer whether or not a deleted account used that email. Restoring is refused if
+the username or email now belongs to another account. Admins get a notification for every restore or erase.
+
 ## APP_SETTINGS
 
 App-wide settings the admin changes in the app (Admin → Settings), as key / value rows.
