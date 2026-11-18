@@ -16,8 +16,11 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, resolve_target
-from ..models import Account, Holding, User
-from ..schemas import HOLDING_KINDS, HoldingGroup, HoldingIn, HoldingOut, InvestmentsOut
+from ..models import Account, Holding, InvestmentLink, User
+from ..schemas import (
+    HOLDING_KINDS, HoldingGroup, HoldingIn, HoldingOut, InvestActionIn, InvestActionOut, InvestmentsOut, PendingInvestmentsOut,
+)
+from ..services import investments as inv
 from ..services.accounts import balances
 from ..timeutil import today_local
 
@@ -130,3 +133,63 @@ def delete_holding(holding_id: int, viewer: User = Depends(get_current_user), db
     db.execute(delete(Holding).where(Holding.parent_id == h.id))
     db.delete(h)
     db.commit()
+
+
+# ---------- payments waiting to be added (a SIP, money sent to a broker...) ----------
+def _ids(text: str | None) -> list[int] | None:
+    if text is None:
+        return None
+    try:
+        return [int(x) for x in text.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "ids must be numbers separated by commas") from None
+
+
+@router.get("/pending", response_model=PendingInvestmentsOut)
+def list_pending(user_id: int | None = None, expense_ids: str | None = None, transfer_ids: str | None = None,
+                 viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Expenses that look like buying an investment and transfers into an Investment account, not yet added or skipped,
+    after the holdings' latest valuation date. With expense_ids / transfer_ids: only those (what was just saved)."""
+    target = resolve_target(db, viewer, user_id)
+    since, items = inv.pending(db, target.user.id, today_local(), _ids(expense_ids), _ids(transfer_ids))
+    return PendingInvestmentsOut(since=since, items=items)
+
+
+@router.post("/pending/{source}/{source_id}", response_model=InvestActionOut)
+def settle_pending(source: str, source_id: int, data: InvestActionIn, viewer: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    """Add a payment to a holding (ADD), as a new holding (NEW), or mark it as not an investment (SKIP)."""
+    source = source.upper()
+    if source not in (inv.SRC_EXPENSE, inv.SRC_TRANSFER):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Payment not found")
+    found = inv.find_payment(db, source, source_id)
+    if not found:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Payment not found")
+    owner, day, amount = found
+    resolve_target(db, viewer, owner, write=True)
+    if db.scalar(select(InvestmentLink.id).where(InvestmentLink.user_id == owner, InvestmentLink.source == source,
+                                                 InvestmentLink.source_id == source_id)) is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This payment has already been dealt with")
+
+    holding = None
+    if data.action == "ADD":
+        holding = db.get(Holding, data.holding_id) if data.holding_id else None
+        if not holding or holding.user_id != owner:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose the investment to add it to")
+        inv.buy(db, holding, amount, data.units)
+    elif data.action == "NEW":
+        if not data.holding:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Give the new investment a type and name")
+        _check_parent(db, owner, data.holding.parent_id)
+        fields = data.holding.model_dump()
+        # Just bought: what was paid is both the cost and (for now) the value
+        fields.update(invested=amount, current_value=amount, valued_on=day, is_active=True)
+        holding = Holding(user_id=owner, **fields)
+        db.add(holding)
+        if holding.parent_id:
+            inv.add_money(db.get(Holding, holding.parent_id), amount)
+        db.flush()
+    db.add(InvestmentLink(user_id=owner, source=source, source_id=source_id, amount=amount,
+                          holding_id=holding.id if holding else None))
+    db.commit()
+    return InvestActionOut(holding=holding_out(holding) if holding else None)

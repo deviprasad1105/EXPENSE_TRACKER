@@ -42,6 +42,7 @@ import Avatar from './Avatar'
 import Tour from './Tour'
 import Logo from './Logo'
 import QuickAdd from './QuickAdd'
+import InvestPromptHost from './InvestPrompt'
 import AddRounded from '@mui/icons-material/AddRounded'
 import MoreHorizRounded from '@mui/icons-material/MoreHorizRounded'
 import { PageBannerContext, PageIconContext } from './ui'
@@ -477,6 +478,8 @@ export default function Layout() {
         </button>
       </nav>
       {quickAdd && <QuickAdd onClose={() => setQuickAdd(false)} />}
+      {/* After a SIP / money sent to a broker is saved: add it to an investment? */}
+      <InvestPromptHost />
       {tourOpen && <Tour onClose={closeTour} canSwitch={canSwitch} />}
     </div>
   )

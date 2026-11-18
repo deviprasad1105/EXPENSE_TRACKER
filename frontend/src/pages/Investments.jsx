@@ -8,18 +8,10 @@ import TrendingUpRounded from '@mui/icons-material/TrendingUpRounded'
 import api, { errorMessage, money, niceDate } from '../api'
 import { useAuth } from '../auth'
 import { Msg, PageHeader, StatTile } from '../components/ui'
+import { InvestDialog } from '../components/InvestPrompt'
+import { useRecordsChanged } from '../components/QuickAdd'
+import { KINDS, ONE } from '../investmentKinds'
 
-export const KINDS = {
-  MUTUAL_FUND: 'Mutual funds',
-  STOCK: 'Shares',
-  ETF: 'ETFs',
-  CRYPTO: 'Crypto',
-  GOLD: 'Gold',
-  BOND: 'Bonds',
-  DEPOSIT: 'Deposits',
-  OTHER: 'Other',
-}
-const ONE = { MUTUAL_FUND: 'Mutual fund', STOCK: 'Share', ETF: 'ETF', CRYPTO: 'Crypto', GOLD: 'Gold', BOND: 'Bond', DEPOSIT: 'Deposit', OTHER: 'Other' }
 const UNIT = { GOLD: 'g', CRYPTO: '', STOCK: 'shares', MUTUAL_FUND: 'units', ETF: 'units' }
 
 const DASH = <span className="muted">—</span>
@@ -68,10 +60,23 @@ export default function Investments({ embedded = false }) {
   }, [folded])
   const [msg, setMsg] = useState(null)
 
-  const load = useCallback(() => api.get('/investments', { params }).then((r) => setData(r.data)), [params])
+  // Payments that look like buying an investment (a SIP, money sent to a broker), not added yet
+  const [pending, setPending] = useState(null)
+  const [adding, setAdding] = useState(null)
+
+  const load = useCallback(
+    () =>
+      Promise.all([api.get('/investments', { params }), api.get('/investments/pending', { params })]).then(([r, p]) => {
+        setData(r.data)
+        setPending(p.data)
+      }),
+    [params],
+  )
   useEffect(() => {
     load().catch((e) => setMsg({ type: 'error', text: errorMessage(e) }))
   }, [load])
+  // Added or skipped from the dialog after saving an expense elsewhere
+  useRecordsChanged(useCallback(() => load().catch(() => {}), [load]))
 
   const run = async (fn, ok) => {
     setMsg(null)
@@ -102,6 +107,7 @@ export default function Investments({ embedded = false }) {
     for (const g of data?.groups || []) all[`t:${g.kind}`] = all[`g:${g.kind}`] = true
     for (const id of Object.keys(kids)) all[id] = true
     all['g:SOLD'] = true
+    all.pending = true
     setFolded(all)
   }
   const anyFolded = Object.values(folded).some(Boolean)
@@ -166,6 +172,47 @@ export default function Investments({ embedded = false }) {
             }
             icon={AccountBalanceOutlined}
           />
+        </div>
+      )}
+
+      {adding && <InvestDialog item={adding} onDone={() => setAdding(null)} onClose={() => setAdding(null)} />}
+
+      {pending?.items.length > 0 && (
+        <div className="card inv-pending">
+          <div className={`row-between ${folded.pending ? '' : 'inv-group-head'}`}>
+            <h3 style={{ margin: 0 }}>
+              <FoldButton open={!folded.pending} onClick={() => tree.toggle('pending')} />
+              Waiting to be added <span className="muted">· {pending.items.length}</span>
+            </h3>
+            <span className="hint">Payments since {niceDate(pending.since)} that look like buying an investment</span>
+          </div>
+          {!folded.pending &&
+            pending.items.map((p) => (
+              <div key={`${p.source}-${p.id}`} className="inv-pending-row">
+                <div className="inv-pending-what">
+                  <div>{p.label}</div>
+                  <div className="hint">
+                    {niceDate(p.date)}
+                    {p.account ? ` · from ${p.account}` : ''}
+                    {p.source === 'TRANSFER' ? ' · transfer' : ''}
+                  </div>
+                </div>
+                <span className="strong inv-pending-amount">{money(p.amount)}</span>
+                {canWrite && (
+                  <>
+                    <button className="btn small" onClick={() => setAdding(p)}>
+                      Add…
+                    </button>
+                    <button
+                      className="btn ghost small"
+                      onClick={() => run(() => api.post(`/investments/pending/${p.source.toLowerCase()}/${p.id}`, { action: 'SKIP' }), 'Marked as not an investment.')}
+                    >
+                      Not an investment
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
         </div>
       )}
 

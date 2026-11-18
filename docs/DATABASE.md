@@ -538,6 +538,23 @@ The page works out the average cost and price per unit only when `units` is know
 `invested` and `current_value` are. It compares the holdings' value with the balance of the user's `INVESTMENT`
 accounts, which is what the rest of the app counts. Holdings don't post to the accounts.
 
+### INVESTMENT_LINKS
+A payment that looked like buying an investment and has been dealt with on the Investments page, so it is asked about once.
+Unique per (`user_id`, `source`, `source_id`).
+
+| Column | Type | Meaning |
+|---|---|---|
+| `source`, `source_id` | VARCHAR2(8), INTEGER | `EXPENSE` or `TRANSFER` and that row's id (no foreign key: the payment may be deleted later). |
+| `holding_id` | INTEGER, nullable | The holding it was added to; empty when the user said it isn't an investment. |
+| `amount` | NUMBER(12,2) | The payment's amount at the time. |
+
+A payment **looks like an investment** when it is an expense whose category, name, note or bank payee mentions a SIP,
+mutual fund, shares, ETF, IPO, crypto, digital gold or a broker / registrar (Groww, Zerodha, Nuvama, CAMS, KFintech,
+NSE / Indian Clearing, BSE StAR MF…) and not a fee or charge, or a transfer into an `INVESTMENT` account from another
+kind. Only payments after the holdings' latest `valued_on` (at most 60 days back) wait: earlier ones are already in
+the values. Adding one to a holding raises its `invested` (and `units`, and `current_value` if it has one) by the
+amount, and its parent's too; a new holding starts with the amount as both cost and value.
+
 ### ACCOUNT_TRANSFERS
 Money moved between two of the user's own accounts (`from_account_id` → `to_account_id`, `amount`,
 `transfer_date`, `note`). Not income and not spending, so it never changes the available balance or budgets.

@@ -1146,6 +1146,16 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 .inv-fold { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-right: 6px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: pointer; box-shadow: none; font-size: 16px; line-height: 1; vertical-align: middle; }
 .inv-fold:hover { background: var(--surface-3); color: var(--text); }
 .inv-fold-all { display: flex; gap: 4px; flex-wrap: wrap; }
+/* Add to your investments? (after saving a SIP / money sent to a broker) */
+.invest-prompt { display: flex; flex-direction: column; gap: 14px; }
+.invest-prompt .segmented { align-self: flex-start; }
+.invest-prompt-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.invest-prompt-actions .spacer { flex: 1; }
+.invest-prompt .error-text, .inv-pending .error-text { color: var(--danger); margin: 0; }
+.inv-pending-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.inv-pending-row:first-child { border-top: 0; }
+.inv-pending-what { flex: 1; min-width: 200px; }
+.inv-pending-amount { font-variant-numeric: tabular-nums; }
 .inv-fold-label { margin-left: 8px; font-size: 12px; font-weight: 400; }
 .inv-table tr.inv-parent td { border-bottom: 0; }
 .inv-table tr.inv-child td { padding-top: 6px; padding-bottom: 6px; font-size: 13px; background: var(--surface-2); }

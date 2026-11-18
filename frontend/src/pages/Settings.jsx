@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { checkInvestments } from '../components/InvestPrompt'
 import { Link, useLocation } from 'react-router-dom'
 import AccountBalanceOutlined from '@mui/icons-material/AccountBalanceOutlined'
 import AddRounded from '@mui/icons-material/AddRounded'
@@ -242,7 +243,12 @@ function Accounts({ user, save }) {
   const submitTransfer = async (e) => {
     e.preventDefault()
     const body = { ...transfer, from_account_id: Number(transfer.from_account_id), to_account_id: Number(transfer.to_account_id), amount: Number(transfer.amount), note: transfer.note || null }
-    if (await run(() => api.post('/accounts/transfers', body), 'Transfer recorded.')) setTransfer(null)
+    let saved = null
+    if (await run(async () => (saved = (await api.post('/accounts/transfers', body)).data), 'Transfer recorded.')) {
+      setTransfer(null)
+      // Money sent to an Investment account (e.g. a broker): ask what it bought
+      if (saved?.id) checkInvestments({ transferIds: [saved.id] })
+    }
   }
 
   const remove = (a) =>

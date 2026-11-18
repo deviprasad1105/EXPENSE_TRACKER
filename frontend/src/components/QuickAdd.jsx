@@ -73,8 +73,9 @@ export default function QuickAdd({ onClose }) {
     if (!(Number(amount) > 0)) return setError('Enter the amount')
     setBusy(true)
     try {
+      let r = null
       if (kind === 'out') {
-        await api.post('/expenses', {
+        r = await api.post('/expenses', {
           expense_date: day, item_name: what.trim() || category, category, quantity: 1, amount: Number(amount), is_extra: true,
           account_id: accountId ?? null,
         }, { params })
@@ -82,6 +83,8 @@ export default function QuickAdd({ onClose }) {
         await api.post('/funds', { fund_date: day, amount: Number(amount), source: what.trim() || source, account_id: accountId ?? null }, { params })
       }
       announceChange()
+      // A SIP / money sent to a broker: ask whether to add it to an investment
+      if (r) window.dispatchEvent(new CustomEvent('investment-check', { detail: { expenseIds: [r.data.id] } }))
       setSaved({ kind, amount: Number(amount), label: what.trim() || (kind === 'out' ? category : source) })
       setAmount('')
       setWhat('')
