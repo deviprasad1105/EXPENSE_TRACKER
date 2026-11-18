@@ -39,7 +39,8 @@ function Gain({ gain, pct, block }) {
   )
 }
 
-export default function Investments() {
+/** Holdings page; `embedded` when shown as a tab of Financial Reports (no page title of its own). */
+export default function Investments({ embedded = false }) {
   const { params, target } = useAuth()
   const canWrite = target?.writable !== false
   const [data, setData] = useState(null)
@@ -71,13 +72,23 @@ export default function Investments() {
 
   return (
     <div>
-      <PageHeader title="Investments" subtitle="Your mutual funds, shares, crypto, gold and more, with whatever details you know.">
-        {canWrite && (
+      {(() => {
+        const add = canWrite && (
           <button className="btn" onClick={() => setEditing('new')}>
             <AddRounded fontSize="small" /> Add investment
           </button>
-        )}
-      </PageHeader>
+        )
+        return embedded ? (
+          <div className="row-between inv-embedded-head">
+            <p className="muted" style={{ margin: 0 }}>Your mutual funds, shares, crypto, gold and more, with whatever details you know.</p>
+            {add}
+          </div>
+        ) : (
+          <PageHeader title="Investments" subtitle="Your mutual funds, shares, crypto, gold and more, with whatever details you know.">
+            {add}
+          </PageHeader>
+        )
+      })()}
       <Msg msg={msg} />
 
       {editing && (

@@ -1065,6 +1065,7 @@ label { font-size: 13px; font-weight: 500; color: var(--text-2); }
 .password-input input::-ms-reveal { display: none; }
 
 /* Investments page */
+.inv-embedded-head { gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
 .inv-up { color: var(--success); }
 .inv-down { color: var(--danger); }
 .inv-pct { font-size: 12px; }

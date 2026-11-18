@@ -5,6 +5,7 @@ import { Msg, PageHeader } from '../components/ui'
 import { ExportButtons, FySelect, LedgerOptions, TYPE_LABEL, useBooks, useLoad } from './common'
 import { BalanceSheetView, CashFlowView, JournalView, LedgerView, ProfitLossView, TradingView, TrialBalanceView } from './ReportViews'
 import DateInput from '../components/DateInput'
+import Investments from '../pages/Investments'
 
 export const REPORTS = [
   ['journal', 'Journal'],
@@ -14,6 +15,8 @@ export const REPORTS = [
   ['profit-loss', 'Profit & Loss'],
   ['balance-sheet', 'Balance Sheet'],
   ['cash-flow', 'Cash Flow'],
+  // Holdings (mutual funds, shares, crypto, gold...), not a report from the books
+  ['investments', 'Investments'],
 ]
 const RANGED = new Set(['journal', 'ledger', 'trial-balance'])
 const TO_DATE = new Set(['trading', 'profit-loss', 'cash-flow'])
@@ -39,7 +42,7 @@ export default function AccountingReports() {
   }, [year?.fy])
 
   const query = (() => {
-    if (!year) return null
+    if (!year || tab === 'investments') return null
     if (tab === 'balance-sheet') return { as_of: asOf }
     if (TO_DATE.has(tab)) return { fy: year.fy, end: range.end || undefined }
     const q = { fy: year.fy, start: range.start || undefined, end: range.end || undefined }
@@ -81,71 +84,77 @@ export default function AccountingReports() {
           </button>
         ))}
       </div>
-      <Msg msg={msg} />
-      {settings.error && <Msg msg={{ type: 'error', text: settings.error }} />}
+      {tab === 'investments' ? (
+        <Investments embedded />
+      ) : (
+        <>
+          <Msg msg={msg} />
+          {settings.error && <Msg msg={{ type: 'error', text: settings.error }} />}
 
-      <div className="card flush">
-        <div className="toolbar">
-          {tab === 'balance-sheet' ? (
-            <label className="filters">
-              As at <DateInput value={asOf} max={todayISO()} onChange={(e) => setAsOf(e.target.value)} />
-            </label>
-          ) : (
-            <>
-              {s && <FySelect years={s.years} value={fy ?? s.current_fy} onChange={setFy} />}
-              {RANGED.has(tab) && (
+          <div className="card flush">
+            <div className="toolbar">
+              {tab === 'balance-sheet' ? (
                 <label className="filters">
-                  From <DateInput value={range.start} min={year?.start} max={year?.end} onChange={(e) => setRange({ ...range, start: e.target.value })} />
+                  As at <DateInput value={asOf} max={todayISO()} onChange={(e) => setAsOf(e.target.value)} />
                 </label>
+              ) : (
+                <>
+                  {s && <FySelect years={s.years} value={fy ?? s.current_fy} onChange={setFy} />}
+                  {RANGED.has(tab) && (
+                    <label className="filters">
+                      From <DateInput value={range.start} min={year?.start} max={year?.end} onChange={(e) => setRange({ ...range, start: e.target.value })} />
+                    </label>
+                  )}
+                  <label className="filters">
+                    {RANGED.has(tab) ? 'to' : 'Up to'} <DateInput value={range.end} min={year?.start} max={year?.end} onChange={(e) => setRange({ ...range, end: e.target.value })} />
+                  </label>
+                </>
               )}
-              <label className="filters">
-                {RANGED.has(tab) ? 'to' : 'Up to'} <DateInput value={range.end} min={year?.start} max={year?.end} onChange={(e) => setRange({ ...range, end: e.target.value })} />
-              </label>
-            </>
-          )}
-          {tab === 'ledger' && (
-            <select value={ledgerId} onChange={(e) => { setLedgerId(e.target.value); setSearch({ r: 'ledger', ledger: e.target.value }) }} aria-label="Ledger">
-              <option value="">Choose a ledger…</option>
-              <LedgerOptions ledgers={ledgers.data} groups={meta.data?.groups} />
-            </select>
-          )}
-          {tab === 'journal' && (
-            <select value={voucherType} onChange={(e) => setVoucherType(e.target.value)} aria-label="Voucher type">
-              <option value="">All vouchers</option>
-              {Object.entries(TYPE_LABEL).map(([k, l]) => (
-                <option key={k} value={k}>{l}</option>
-              ))}
-            </select>
-          )}
-          {tab === 'trial-balance' && (
-            <div className="segmented">
-              <button className={tbView === 'grouped' ? 'on' : ''} onClick={() => setTbView('grouped')}>Grouped</button>
-              <button className={tbView === 'ledgers' ? 'on' : ''} onClick={() => setTbView('ledgers')}>Ledger-wise</button>
+              {tab === 'ledger' && (
+                <select value={ledgerId} onChange={(e) => { setLedgerId(e.target.value); setSearch({ r: 'ledger', ledger: e.target.value }) }} aria-label="Ledger">
+                  <option value="">Choose a ledger…</option>
+                  <LedgerOptions ledgers={ledgers.data} groups={meta.data?.groups} />
+                </select>
+              )}
+              {tab === 'journal' && (
+                <select value={voucherType} onChange={(e) => setVoucherType(e.target.value)} aria-label="Voucher type">
+                  <option value="">All vouchers</option>
+                  {Object.entries(TYPE_LABEL).map(([k, l]) => (
+                    <option key={k} value={k}>{l}</option>
+                  ))}
+                </select>
+              )}
+              {tab === 'trial-balance' && (
+                <div className="segmented">
+                  <button className={tbView === 'grouped' ? 'on' : ''} onClick={() => setTbView('grouped')}>Grouped</button>
+                  <button className={tbView === 'ledgers' ? 'on' : ''} onClick={() => setTbView('ledgers')}>Ledger-wise</button>
+                </div>
+              )}
+              <span className="spacer" />
+              {query && data && (
+                <ExportButtons url={`/accounting/reports/${tab}`} params={{ ...params, ...query }} name={tab} onError={(text) => setMsg({ type: 'error', text })} />
+              )}
             </div>
-          )}
-          <span className="spacer" />
-          {query && data && (
-            <ExportButtons url={`/accounting/reports/${tab}`} params={{ ...params, ...query }} name={tab} onError={(text) => setMsg({ type: 'error', text })} />
-          )}
-        </div>
-        <div className="report-body">
-          {tab === 'ledger' && !ledgerId && <p className="muted">Choose a ledger to see its entries.</p>}
-          {report.error && <Msg msg={{ type: 'error', text: report.error }} />}
-          {report.loading && !data && <p className="muted">Loading…</p>}
-          {data && (
-            <>
-              <div className="report-title">
-                <h2>{REPORTS.find(([k]) => k === tab)[1]}</h2>
-                <span className="muted">{data.period}</span>
-              </div>
-              {data.closing_stock_missing ? (
-                <Msg msg={{ type: 'warn', text: 'Closing stock for this year hasn’t been entered (Accounting settings → Stock). It is taken as zero.' }} />
-              ) : null}
-              {view}
-            </>
-          )}
-        </div>
-      </div>
+            <div className="report-body">
+              {tab === 'ledger' && !ledgerId && <p className="muted">Choose a ledger to see its entries.</p>}
+              {report.error && <Msg msg={{ type: 'error', text: report.error }} />}
+              {report.loading && !data && <p className="muted">Loading…</p>}
+              {data && (
+                <>
+                  <div className="report-title">
+                    <h2>{REPORTS.find(([k]) => k === tab)[1]}</h2>
+                    <span className="muted">{data.period}</span>
+                  </div>
+                  {data.closing_stock_missing ? (
+                    <Msg msg={{ type: 'warn', text: 'Closing stock for this year hasn’t been entered (Accounting settings → Stock). It is taken as zero.' }} />
+                  ) : null}
+                  {view}
+                </>
+              )}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

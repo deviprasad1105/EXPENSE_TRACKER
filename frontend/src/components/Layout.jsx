@@ -7,7 +7,6 @@ import AdminPanelSettingsOutlined from '@mui/icons-material/AdminPanelSettingsOu
 import AssessmentOutlined from '@mui/icons-material/AssessmentOutlined'
 import SmsOutlined from '@mui/icons-material/SmsOutlined'
 import CreditCardOutlined from '@mui/icons-material/CreditCardOutlined'
-import ShowChartOutlined from '@mui/icons-material/ShowChartOutlined'
 import AutoAwesomeOutlined from '@mui/icons-material/AutoAwesomeOutlined'
 import BusinessOutlined from '@mui/icons-material/BusinessOutlined'
 import CallSplitOutlined from '@mui/icons-material/CallSplitOutlined'
@@ -265,7 +264,6 @@ export default function Layout() {
             ['/items', 'My Daily Items', ChecklistOutlined, 'nav-items'],
             ['/funds', 'Balance', AccountBalanceWalletOutlined, 'nav-funds'],
             ['/cards', 'Credit Cards', CreditCardOutlined, 'nav-cards'],
-            ['/investments', 'Investments', ShowChartOutlined, 'nav-investments'],
             ['/reports', 'Reports', AssessmentOutlined, 'nav-reports'],
             ['/import', 'Import Records', UploadFileOutlined, 'nav-import'],
             ['/sharing', 'Team & Sharing', GroupsOutlined, 'nav-sharing'],
