@@ -7,3 +7,8 @@ frontend/dist/
 backend/mail_outbox/
 backend/*.db
 backend/*.db-journal
+
+# Android release signing key: never in this (public) repository
+*.jks
+*.keystore
+keystore.properties

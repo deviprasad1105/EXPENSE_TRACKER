@@ -97,16 +97,26 @@ You need JDK 17 and the Android SDK (Android Studio, or the command-line tools w
 
 ```bash
 cd frontend
-npm run apk        # web build for Android + cap sync + Gradle
+npm run publish:apk   # raise the version, build a SIGNED release APK, copy it to mobile-app/ (then commit mobile-app/)
+npm run apk           # or: a debug build for testing (frontend/android/app/build/outputs/apk/debug/app-debug.apk)
 ```
 
-The APK is written to `frontend/android/app/build/outputs/apk/debug/app-debug.apk`. Share it directly; on the phone allow
-"Install unknown apps" once for the app it was opened from. Install a newer APK over the old one to update; signed-in users
-stay signed in. Inside the app, report and export downloads open the Android share sheet (save to Files or Drive, or open
+**The app carries its own copy of the screens**, built into the APK; only its data comes from the live API. So a web change
+reaches the app only when a new APK is published: **after merging web changes, run `npm run publish:apk` and commit
+`mobile-app/` and `frontend/app-version.json`.** The app checks `mobile-app/version.json` when it opens and shows
+"A new version of the app is available" with a download button, so phones catch up.
+
+**Signing:** release APKs are signed with one key so updates install over the old app. The key is never in this public
+repository: it lives in `~/.android-keys/` (`expense-tracker-release.jks` plus `keystore.properties` with `storeFile`,
+`storePassword`, `keyAlias`, `keyPassword`), or wherever `EXPENSE_TRACKER_KEYSTORE` points. Anyone who publishes the app
+needs a copy, shared privately. Losing it means everyone has to uninstall and reinstall once with a new key.
+
+Share the APK directly; on the phone allow "Install unknown apps" once for the app it was opened from. Install a newer
+APK over the old one to update; signed-in users stay signed in. Inside the app, report and export downloads open the Android share sheet (save to Files or Drive, or open
 in Excel or a PDF viewer). Icons and splash screens come from `frontend/assets/`; regenerate them with
 `npx @capacitor/assets generate --android`.
 
-Most changes are web changes: deploy them to Vercel as usual, then rebuild the APK so the app gets them too.
+Most changes are web changes: deploy them to Vercel as usual, then run `npm run publish:apk` so the app gets them too.
 
 ## Features
 
