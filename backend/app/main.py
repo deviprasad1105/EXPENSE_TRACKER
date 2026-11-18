@@ -16,8 +16,8 @@ from .deps import FEATURE_ACCOUNTING, FEATURE_EXPENSE, FEATURE_SUBSCRIPTION, FEA
 from .migrate import sync_schema
 from .models import ROLE_ADMIN, STATUS_APPROVED, JobRun, User
 from .routers import (
-    accounts, admin, aliases, auth, budgets, categories, cron, daily_items, dashboard, expenses, funds, notifications, org, profile, recover,
-    reports, shares, splits, subscriptions, upi,
+    accounts, admin, aliases, auth, autotrack, budgets, categories, cron, daily_items, dashboard, expenses, funds, notifications, org, profile,
+    recover, reports, shares, splits, subscriptions, upi,
 )
 from .security import hash_password
 from .services.reminders import daily_reminder_job
