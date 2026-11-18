@@ -138,6 +138,17 @@ class ResendSignupOtpIn(BaseModel):
     username: str = Field(min_length=1, max_length=50)
 
 
+class RecoverCodeIn(BaseModel):
+    """The owner of a deleted account asks for a code to restore it, or to erase its data for good."""
+
+    email: EmailStr
+    action: Literal["RESTORE", "PURGE"]
+
+
+class RecoverConfirmIn(RecoverCodeIn):
+    code: str = Field(min_length=1, max_length=10)
+
+
 class OtpSettings(BaseModel):
     signup_minutes: int = Field(ge=1, le=60)
     account_minutes: int = Field(ge=1, le=60)
