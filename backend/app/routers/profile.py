@@ -38,7 +38,7 @@ from ..schemas import (
     UserOut,
 )
 from ..security import create_access_token, hash_password, verify_password
-from ..services import otp
+from ..services import mfa, otp
 from ..timeutil import now_local
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
@@ -132,11 +132,16 @@ def send_change_code(data: OtpRequestIn, user: User = Depends(get_current_user),
 
 @router.post("/password", response_model=TokenOut)
 def change_password(data: PasswordChange, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Needs the current password and the emailed code. Signs out every other device; the response carries a new
+    """Needs the current password and a code: from the authenticator app when two-step sign-in is on, else emailed. Signs out every other device; the response carries a new
     token for this one."""
     if not verify_password(data.current_password, user.password_hash):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect")
-    otp.consume(db, user, OTP_PASSWORD, data.otp)
+    if user.mfa_enabled:
+        # Two-step sign-in on: the code from the authenticator app instead of an emailed one
+        if not mfa.verify(user, data.otp, allow_recovery=False):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "The code from your authenticator app is incorrect")
+    else:
+        otp.consume(db, user, OTP_PASSWORD, data.otp)
     user.password_hash = hash_password(data.new_password)
     user.token_version += 1
     db.commit()

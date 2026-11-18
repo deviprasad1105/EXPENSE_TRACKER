@@ -69,19 +69,25 @@ export function AuthProvider({ children }) {
     await loadMe()
   }
 
-  /** Returns { mfaToken } when two-step sign-in is on: then call completeMfa with the code from the app. */
-  const login = async (username, password) => {
-    const form = new URLSearchParams({ username, password })
-    const res = await api.post('/auth/login', form)
-    if (res.data.mfa_required) return { mfaToken: res.data.mfa_token }
-    await startSession(res.data.access_token)
+  // What a sign-in step returned: a session, or the next step ({ mfaToken } or { passwordToken })
+  const nextStep = async (data) => {
+    if (data.mfa_required) return { mfaToken: data.mfa_token }
+    if (data.password_change_required) return { passwordToken: data.password_token }
+    await startSession(data.access_token)
     return {}
   }
 
-  const completeMfa = async (mfaToken, code) => {
-    const res = await api.post('/auth/login/mfa', { mfa_token: mfaToken, code })
-    await startSession(res.data.access_token)
+  /** Two-step sign-in on: returns { mfaToken } (then call completeMfa). Signed in with a temporary password from
+   * "Forgot password?": returns { passwordToken } (then call setNewPassword). */
+  const login = async (username, password) => {
+    const form = new URLSearchParams({ username, password })
+    return nextStep((await api.post('/auth/login', form)).data)
   }
+
+  const completeMfa = async (mfaToken, code) => nextStep((await api.post('/auth/login/mfa', { mfa_token: mfaToken, code })).data)
+
+  const setNewPassword = async (passwordToken, newPassword) =>
+    nextStep((await api.post('/auth/login/new-password', { password_token: passwordToken, new_password: newPassword })).data)
 
   const logout = () => {
     // The phone stops sending bank messages for this account once it signs out
@@ -102,7 +108,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, serverDown, login, completeMfa, logout, accessible, target, params, setViewUserId, refresh: loadMe, updateUser }}
+      value={{ user, loading, serverDown, login, completeMfa, setNewPassword, logout, accessible, target, params, setViewUserId, refresh: loadMe, updateUser }}
     >
       {children}
     </AuthContext.Provider>

@@ -302,7 +302,11 @@ export default function Profile() {
         <div className="card-head">
           <div>
             <h3>Password</h3>
-            <p>Use at least 8 characters. We email you a code to confirm the change. Changing it signs you out on every other device.</p>
+            <p>
+              Use at least 8 characters.{' '}
+              {user.mfa_enabled ? 'Confirm the change with the code from your authenticator app.' : 'We email you a code to confirm the change.'}{' '}
+              Changing it signs you out on every other device.
+            </p>
           </div>
           <Lock size={20} className="muted" />
         </div>
@@ -321,7 +325,15 @@ export default function Profile() {
             <PasswordInput value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} minLength={8} required autoComplete="new-password" />
           </div>
           <div className="span-all">
-            <OtpField value={pw.otp} onChange={(otp) => setPw((p) => ({ ...p, otp }))} send={sendCode('PASSWORD')} />
+            {user.mfa_enabled ? (
+              <div className="field" style={{ maxWidth: 240 }}>
+                <label>Code from your authenticator app</label>
+                <input className="mfa-code-input" value={pw.otp} onChange={(e) => setPw({ ...pw, otp: e.target.value.replace(/\D/g, '').slice(0, 6) })}
+                  inputMode="numeric" autoComplete="one-time-code" placeholder="123456" maxLength={6} required />
+              </div>
+            ) : (
+              <OtpField value={pw.otp} onChange={(otp) => setPw((p) => ({ ...p, otp }))} send={sendCode('PASSWORD')} />
+            )}
           </div>
         </div>
         <div className="form-actions">

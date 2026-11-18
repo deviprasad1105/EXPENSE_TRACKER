@@ -521,7 +521,7 @@ class AccountDeletionRequest(Base):
 
 
 class PasswordReset(Base):
-    """A forgot-password request: a temporary password + one-time link sent by email."""
+    """A forgot-password request: a temporary password sent by email. It signs in once, then a new password is chosen."""
 
     __tablename__ = "password_resets"
 

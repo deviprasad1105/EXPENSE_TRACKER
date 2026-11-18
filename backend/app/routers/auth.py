@@ -30,12 +30,14 @@ from ..schemas import (
     OtpSentOut,
     RegisterIn,
     ResendSignupOtpIn,
-    ResetPasswordIn,
+    NewPasswordIn,
     TokenOut,
     UserOut,
     VerifyEmailIn,
 )
-from ..security import create_access_token, create_mfa_ticket, decode_mfa_ticket, hash_password, verify_password
+from ..security import (
+    MFA_TICKET, NEW_PASSWORD_TICKET, create_access_token, create_ticket, decode_ticket, hash_password, verify_password,
+)
 from ..services import mfa, otp
 from ..services.mailer import send_email
 from ..timeutil import now_local
@@ -193,22 +195,78 @@ def _signed_in(db: Session, user: User) -> LoginOut:
     return LoginOut(access_token=create_access_token(user.id, user.token_version))
 
 
+def _active_temp_password(db: Session, user: User) -> PasswordReset | None:
+    """The temporary password from 'Forgot password?' that still works (only the newest one does)."""
+    return db.scalar(
+        select(PasswordReset)
+        .where(PasswordReset.user_id == user.id, PasswordReset.used_at.is_(None), PasswordReset.expires_at > now_local())
+        .order_by(PasswordReset.created_at.desc(), PasswordReset.id.desc())
+        .limit(1)
+    )
+
+
+def _expire_temp_passwords(db: Session, user: User) -> None:
+    now = now_local()
+    db.execute(
+        update(PasswordReset)
+        .where(PasswordReset.user_id == user.id, PasswordReset.used_at.is_(None), PasswordReset.expires_at > now)
+        .values(expires_at=now)
+    )
+
+
+def _after_password(db: Session, user: User, reset: PasswordReset | None = None) -> LoginOut:
+    """The password step passed. Next comes the authenticator code (two-step sign-in on), then a new password (when
+    a temporary password was used), else a session."""
+    rid = {"rid": reset.id} if reset else {}
+    if user.mfa_enabled:
+        db.commit()
+        return LoginOut(mfa_required=True, mfa_token=create_ticket(MFA_TICKET, user.id, user.token_version, settings.mfa_login_minutes, **rid))
+    return _after_code(db, user, reset)
+
+
+def _after_code(db: Session, user: User, reset: PasswordReset | None) -> LoginOut:
+    if reset:
+        db.commit()
+        return LoginOut(
+            password_change_required=True,
+            password_token=create_ticket(NEW_PASSWORD_TICKET, user.id, user.token_version, NEW_PASSWORD_MINUTES, rid=reset.id),
+        )
+    return _signed_in(db, user)
+
+
+def _reset_from_ticket(db: Session, user: User, ticket: dict) -> PasswordReset | None:
+    """The temporary password a ticket was issued for, if it still works."""
+    reset = db.get(PasswordReset, ticket.get("rid")) if ticket.get("rid") else None
+    if not reset or reset.user_id != user.id or reset.used_at or reset.expires_at <= now_local():
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Your temporary password has expired. Use 'Forgot password?' to get a new one.")
+    return reset
+
+
 @router.post("/login", response_model=LoginOut)
 def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    """With two-step sign-in on, the right password gives only `mfa_token`: send it with the code to /login/mfa."""
+    """Sign in with the password, or with a temporary password from 'Forgot password?'.
+
+    - Two-step sign-in on: the response has only `mfa_token`; send it with the code to /login/mfa.
+    - Temporary password: the response (after the code, if two-step is on) has only `password_token`; send it with
+      the new password to /login/new-password. Signing in with the old password instead makes the temporary one expire.
+    """
     if not login_limiter.hit(_client_ip(request)):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many sign-in attempts. Wait a minute and try again.")
     # The form field is called 'username' (OAuth2), but it takes the username or the email address
     user = find_by_login(db, form.username)
     _check_not_blocked(user)
-    if not verify_password(form.password, user.password_hash if user else None):
-        if user:
-            _record_failed_login(db, user, request)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username/email or password")
-    _check_can_sign_in(user)
-    if user.mfa_enabled:
-        return LoginOut(mfa_required=True, mfa_token=create_mfa_ticket(user.id, user.token_version))
-    return _signed_in(db, user)
+    if verify_password(form.password, user.password_hash if user else None):
+        _check_can_sign_in(user)
+        # They remembered it: a temporary password sent meanwhile stops working
+        _expire_temp_passwords(db, user)
+        return _after_password(db, user)
+    reset = _active_temp_password(db, user) if user else None
+    if reset and verify_password(form.password, reset.temp_password_hash):
+        _check_can_sign_in(user)
+        return _after_password(db, user, reset)
+    if user:
+        _record_failed_login(db, user, request)
+    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username/email or password")
 
 
 @router.post("/login/mfa", response_model=LoginOut)
@@ -216,12 +274,13 @@ def login_mfa(data: MfaLoginIn, request: Request, db: Session = Depends(get_db))
     """Second step: the code from the authenticator app (or a recovery code). Wrong codes count like wrong passwords."""
     if not login_limiter.hit(f"mfa:{_client_ip(request)}"):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many attempts. Wait a minute and try again.")
-    ticket = decode_mfa_ticket(data.mfa_token)
-    user = db.get(User, ticket[0]) if ticket else None
-    if not user or user.token_version != ticket[1] or not user.mfa_enabled:
+    ticket = decode_ticket(data.mfa_token, MFA_TICKET)
+    user = db.get(User, ticket["sub"]) if ticket else None
+    if not user or user.token_version != ticket["ver"] or not user.mfa_enabled:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "This sign-in has expired. Enter your password again.")
     _check_not_blocked(user)
     _check_can_sign_in(user)
+    reset = _reset_from_ticket(db, user, ticket) if ticket.get("rid") else None
     used = mfa.verify(user, data.code)
     if not used:
         _record_failed_login(db, user, request)
@@ -231,7 +290,34 @@ def login_mfa(data: MfaLoginIn, request: Request, db: Session = Depends(get_db))
         db.add(Notification(user_id=user.id, kind="SECURITY", message=(
             f"A recovery code was used to sign in (from {_client_ip(request)}). {left} recovery code(s) left. "
             "If this wasn't you, change your password and make new recovery codes in Settings → Security.")))
-    return _signed_in(db, user)
+    return _after_code(db, user, reset)
+
+
+@router.post("/login/new-password", response_model=LoginOut)
+def login_new_password(data: NewPasswordIn, db: Session = Depends(get_db)):
+    """Last step after signing in with a temporary password: choose a new password. Signs out every other device."""
+    ticket = decode_ticket(data.password_token, NEW_PASSWORD_TICKET)
+    user = db.get(User, ticket["sub"]) if ticket else None
+    if not user or user.token_version != ticket["ver"]:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "This sign-in has expired. Sign in again with your temporary password.")
+    reset = _reset_from_ticket(db, user, ticket)
+    _check_can_sign_in(user)
+    if verify_password(data.new_password, reset.temp_password_hash):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose a new password, not the temporary one")
+    user.password_hash = hash_password(data.new_password)
+    user.token_version += 1
+    reset.used_at = now_local()
+    _expire_temp_passwords(db, user)
+    db.add(Notification(user_id=user.id, kind="SECURITY", message="Your password was changed after signing in with a temporary password."))
+    out = _signed_in(db, user)
+    send_email(
+        user.email,
+        "Expense Tracker: your password was changed",
+        f"Hi {user.full_name},\n\nThe password for '{user.username}' was just changed after signing in with a temporary "
+        "password. You've been signed out on your other devices.\n"
+        "If this wasn't you, contact your administrator immediately.\n",
+    )
+    return out
 
 
 def _record_failed_login(db: Session, user: User, request: Request):
@@ -282,20 +368,18 @@ def list_accessible_users(user: User = Depends(get_current_user), db: Session = 
 
 # ---------- forgot password ----------
 FORGOT_MESSAGE = (
-    "If an account matches that username or email, we've emailed its owner a temporary password and a reset link. "
-    "Check your inbox. The link expires soon."
+    "If an account matches that username or email, we've emailed its owner a temporary password. "
+    "Sign in with it within 1 hour, then choose a new password."
 )
-MAX_TEMP_PASSWORD_ATTEMPTS = 5
 _TEMP_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
-
-
-def _token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
+# How long the "choose a new password" step may take after signing in with a temporary password
+NEW_PASSWORD_MINUTES = 15
 
 
 @router.post("/forgot-password")
 def forgot_password(data: ForgotPasswordIn, request: Request, db: Session = Depends(get_db)):
-    """Email a temporary password and a one-time reset link.
+    """Email a temporary password (no link). It signs in once, within RESET_TOKEN_MINUTES, and then a new password must
+    be chosen. Signing in with the old password instead makes it expire.
 
     `username` takes the username or the account's email address.
     The response is the same whether or not the account exists, so it can't be used to discover accounts.
@@ -326,19 +410,15 @@ def forgot_password(data: ForgotPasswordIn, request: Request, db: Session = Depe
         )
         return {"message": FORGOT_MESSAGE}
 
-    # Only the newest reset link stays valid
-    db.execute(
-        update(PasswordReset)
-        .where(PasswordReset.user_id == user.id, PasswordReset.used_at.is_(None), PasswordReset.expires_at > now)
-        .values(expires_at=now)
-    )
-    token = secrets.token_urlsafe(32)
+    # Only the newest temporary password works
+    _expire_temp_passwords(db, user)
     temp_password = "".join(secrets.choice(_TEMP_ALPHABET) for _ in range(10))
     expires = now + timedelta(minutes=settings.reset_token_minutes)
     db.add(
         PasswordReset(
             user_id=user.id,
-            token_hash=_token_hash(token),
+            # Kept for the table's unique key; links are no longer sent
+            token_hash=hashlib.sha256(secrets.token_bytes(32)).hexdigest(),
             temp_password_hash=hash_password(temp_password),
             created_at=now,
             expires_at=expires,
@@ -348,68 +428,17 @@ def forgot_password(data: ForgotPasswordIn, request: Request, db: Session = Depe
     db.commit()
 
     left = settings.reset_max_per_window - len(recent) - 1
-    link = f"{settings.frontend_url.rstrip('/')}/reset-password?token={token}"
     send_email(
         user.email,
-        "Expense Tracker: reset your password",
+        "Expense Tracker: your temporary password",
         f"Hi {user.full_name},\n\n"
         f"We received a request to reset the password for '{user.username}'.\n\n"
         f"Temporary password: {temp_password}\n\n"
-        f"Open this link and enter the temporary password to choose a new password:\n{link}\n\n"
-        f"The link and temporary password expire at {expires:%d %b %Y %H:%M} and work only once.\n"
+        "Sign in to Expense Tracker (on the website or in the app) with your username or email and this temporary "
+        "password. You'll then choose a new password.\n\n"
+        f"It works once, until {expires:%d %b %Y %H:%M}.\n"
+        "Remembered your password? Just sign in with it as usual: the temporary password then stops working.\n"
         f"You can request {left} more reset(s) in the next {settings.reset_window_days} days.\n\n"
         "If you didn't ask for this, ignore this email. Your current password still works.\n",
     )
     return {"message": FORGOT_MESSAGE}
-
-
-def _active_reset(db: Session, token: str) -> PasswordReset:
-    reset = db.scalar(select(PasswordReset).where(PasswordReset.token_hash == _token_hash(token)))
-    if (
-        not reset
-        or reset.used_at
-        or reset.expires_at <= now_local()
-        or reset.user.status != STATUS_APPROVED
-        or reset.user.is_locked
-        or reset.user.org_locked
-    ):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This reset link is invalid or has expired. Request a new one.")
-    return reset
-
-
-@router.get("/reset-password/{token}")
-def check_reset_token(token: str, db: Session = Depends(get_db)):
-    reset = _active_reset(db, token)
-    return {"username": reset.user.username, "expires_at": reset.expires_at}
-
-
-@router.post("/reset-password")
-def reset_password(data: ResetPasswordIn, db: Session = Depends(get_db)):
-    reset = _active_reset(db, data.token)
-    if not verify_password(data.temp_password, reset.temp_password_hash):
-        reset.failed_attempts += 1
-        if reset.failed_attempts >= MAX_TEMP_PASSWORD_ATTEMPTS:
-            reset.expires_at = now_local()
-            db.commit()
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Too many wrong attempts. This link is now disabled.")
-        db.commit()
-        left = MAX_TEMP_PASSWORD_ATTEMPTS - reset.failed_attempts
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Temporary password is incorrect ({left} attempt(s) left)")
-    if data.new_password == data.temp_password:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose a new password, not the temporary one")
-
-    user = reset.user
-    user.password_hash = hash_password(data.new_password)
-    # Sign out every device, and clear any sign-in block from wrong passwords
-    user.token_version += 1
-    user.failed_logins, user.login_blocked_until = 0, None
-    reset.used_at = now_local()
-    db.add(Notification(user_id=user.id, kind="SECURITY", message="Your password was reset using a forgot-password link."))
-    db.commit()
-    send_email(
-        user.email,
-        "Expense Tracker: your password was changed",
-        f"Hi {user.full_name},\n\nThe password for '{user.username}' was just changed using a reset link.\n"
-        "If this wasn't you, contact your administrator immediately.\n",
-    )
-    return {"message": "Password changed. You can now sign in with your new password."}

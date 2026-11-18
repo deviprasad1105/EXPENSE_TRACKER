@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
-import { ArrowLeft, LogIn, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, KeyRound, LogIn, ShieldCheck } from 'lucide-react'
 import { errorMessage } from '../api'
 import { useAuth } from '../auth'
 import AuthShell from '../components/AuthShell'
@@ -8,7 +8,7 @@ import { Alert } from '../components/ui'
 import PasswordInput from '../components/PasswordInput'
 
 export default function Login() {
-  const { user, login, completeMfa } = useAuth()
+  const { user, login, completeMfa, setNewPassword } = useAuth()
   const navigate = useNavigate()
   const [form, setForm] = useState({ username: '', password: '' })
   const [error, setError] = useState('')
@@ -18,6 +18,23 @@ export default function Login() {
   const [mfaToken, setMfaToken] = useState(null)
   const [code, setCode] = useState('')
   const [useRecovery, setUseRecovery] = useState(false)
+  // Signed in with a temporary password: a new password must be chosen
+  const [passwordToken, setPasswordToken] = useState(null)
+  const [newPw, setNewPw] = useState({ password: '', confirm: '' })
+
+  // A step returned { mfaToken } or { passwordToken }, or signed in
+  const goNext = (res) => {
+    if (res.mfaToken) {
+      setMfaToken(res.mfaToken)
+      setCode('')
+    } else if (res.passwordToken) {
+      setMfaToken(null)
+      setPasswordToken(res.passwordToken)
+      setNewPw({ password: '', confirm: '' })
+    } else {
+      navigate('/')
+    }
+  }
 
   if (user) return <Navigate to="/" replace />
 
@@ -27,13 +44,7 @@ export default function Login() {
     setError('')
     setNeedsCode(false)
     try {
-      const res = await login(form.username, form.password)
-      if (res.mfaToken) {
-        setMfaToken(res.mfaToken)
-        setCode('')
-        return
-      }
-      navigate('/')
+      goNext(await login(form.username, form.password))
     } catch (err) {
       setError(errorMessage(err))
       setNeedsCode(err?.response?.status === 403 && /confirm your email/i.test(errorMessage(err)))
@@ -47,8 +58,7 @@ export default function Login() {
     setBusy(true)
     setError('')
     try {
-      await completeMfa(mfaToken, code.trim())
-      navigate('/')
+      goNext(await completeMfa(mfaToken, code.trim()))
     } catch (err) {
       setError(errorMessage(err))
       // The ticket expired or the account was blocked: start again from the password
@@ -59,11 +69,64 @@ export default function Login() {
     }
   }
 
+  const submitNewPassword = async (e) => {
+    e.preventDefault()
+    if (newPw.password !== newPw.confirm) return setError('The new passwords do not match')
+    setBusy(true)
+    setError('')
+    try {
+      goNext(await setNewPassword(passwordToken, newPw.password))
+    } catch (err) {
+      setError(errorMessage(err))
+      // The temporary password expired meanwhile: start again
+      if (err?.response?.status === 401) setPasswordToken(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const backToPassword = () => {
     setMfaToken(null)
+    setPasswordToken(null)
     setError('')
     setUseRecovery(false)
     setForm({ ...form, password: '' })
+  }
+
+  if (passwordToken) {
+    return (
+      <AuthShell>
+        <form className="auth-card" onSubmit={submitNewPassword}>
+          <div>
+            <KeyRound size={36} color="var(--primary)" />
+            <h2>Choose a new password</h2>
+            <p className="muted">
+              You signed in with a temporary password. Choose a new password to continue. You’ll be signed out on your other devices.
+            </p>
+          </div>
+          {error && <Alert type="error">{error}</Alert>}
+          <div className="field">
+            <label htmlFor="new-password">New password</label>
+            <PasswordInput id="new-password" value={newPw.password} onChange={(e) => setNewPw({ ...newPw, password: e.target.value })}
+              minLength={8} maxLength={100} required autoFocus autoComplete="new-password" />
+            <span className="muted small">At least 8 characters.</span>
+          </div>
+          <div className="field">
+            <label htmlFor="confirm-password">Confirm new password</label>
+            <PasswordInput id="confirm-password" value={newPw.confirm} onChange={(e) => setNewPw({ ...newPw, confirm: e.target.value })}
+              minLength={8} maxLength={100} required autoComplete="new-password" />
+          </div>
+          <button className="btn block" disabled={busy}>
+            <KeyRound size={16} /> {busy ? 'Saving…' : 'Save and sign in'}
+          </button>
+          <p className="muted small" style={{ textAlign: 'center', margin: 0 }}>
+            <button type="button" className="link-button" onClick={backToPassword}>
+              <ArrowLeft size={14} /> Back to sign in
+            </button>
+          </p>
+        </form>
+      </AuthShell>
+    )
   }
 
   if (mfaToken) {
