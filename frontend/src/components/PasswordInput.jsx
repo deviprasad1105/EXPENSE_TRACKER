@@ -3,13 +3,15 @@ import { Eye, EyeOff } from 'lucide-react'
 
 /**
  * A password field with an eye button that shows or hides what was typed.
- * Takes the same props as <input>. `type` is set by the toggle, and `className` / `style` go on the wrapper.
+ * Takes the same props as <input>, plus `icon` (shown in front). `type` is set by the toggle, and `className` / `style`
+ * go on the wrapper.
  */
-export default function PasswordInput({ className = '', style, disabled, ...props }) {
+export default function PasswordInput({ className = '', style, disabled, icon, ...props }) {
   const [shown, setShown] = useState(false)
   const label = shown ? 'Hide password' : 'Show password'
   return (
-    <div className={`password-input ${className}`.trim()} style={style}>
+    <div className={`password-input ${icon ? 'icon-input' : ''} ${className}`.trim()} style={style}>
+      {icon && <span className="icon-input-icon">{icon}</span>}
       <input {...props} disabled={disabled} type={shown ? 'text' : 'password'} spellCheck={false} autoCapitalize="off" autoCorrect="off" />
       <button
         type="button"
