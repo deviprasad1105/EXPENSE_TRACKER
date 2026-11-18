@@ -797,11 +797,13 @@ CREATE TABLE holdings (
 	valued_on DATE, 
 	note VARCHAR(300), 
 	is_active BOOLEAN NOT NULL, 
+	parent_id INTEGER, 
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL, 
 	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(user_id) REFERENCES app_users (id) ON DELETE CASCADE
 );
+CREATE INDEX ix_holdings_parent_id ON holdings (parent_id);
 CREATE INDEX ix_holdings_user_id ON holdings (user_id);
 
 -- Auto-tracking: bank SMS / app notifications sent by the phone app

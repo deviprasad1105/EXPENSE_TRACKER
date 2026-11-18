@@ -595,6 +595,8 @@ class HoldingIn(BaseModel):
     valued_on: date | None = None
     note: str | None = Field(default=None, max_length=300)
     is_active: bool = True
+    # Part of another line (e.g. a stock under its broker's total): shown under it, not counted in the totals
+    parent_id: int | None = None
 
 
 class HoldingOut(ORM):
@@ -609,6 +611,7 @@ class HoldingOut(ORM):
     valued_on: date | None
     note: str | None
     is_active: bool
+    parent_id: int | None
     # Worked out only when the figures behind them are known
     avg_cost: Decimal | None = None
     price: Decimal | None = None

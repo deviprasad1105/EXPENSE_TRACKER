@@ -2,13 +2,16 @@
 
 Units, amount invested and current value are optional. Totals add up only the figures that are known, and a gain is
 worked out only for holdings with both the amount invested and the current value.
+
+A holding can be part of another (`parent_id`), e.g. each stock under its broker's total line. Those are listed under
+their parent but left out of every total, since the parent's figures already include them.
 """
 
 from collections import defaultdict
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -67,7 +70,8 @@ def list_investments(user_id: int | None = None, viewer: User = Depends(get_curr
     rows = [holding_out(h) for h in db.scalars(select(Holding).where(Holding.user_id == uid))]
     order = {k: i for i, k in enumerate(HOLDING_KINDS)}
     rows.sort(key=lambda r: (not r.is_active, order.get(r.kind, 99), -(r.current_value or r.invested or 0), r.name.lower()))
-    held = [r for r in rows if r.is_active]
+    # Lines that are part of another are in their parent's figures already
+    held = [r for r in rows if r.is_active and r.parent_id is None]
 
     by_kind: dict[str, list[HoldingOut]] = defaultdict(list)
     for r in held:
@@ -85,10 +89,24 @@ def list_investments(user_id: int | None = None, viewer: User = Depends(get_curr
     )
 
 
+def _check_parent(db: Session, user_id: int, parent_id: int | None, holding: Holding | None = None) -> None:
+    """The parent must be the same user's top-level line, and a line with lines under it can't go under another."""
+    if parent_id is None:
+        return
+    parent = db.get(Holding, parent_id)
+    if not parent or parent.user_id != user_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The investment it is part of wasn't found")
+    if parent.parent_id is not None or (holding and parent.id == holding.id):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "It can only be part of a top-level investment")
+    if holding and db.scalar(select(Holding.id).where(Holding.parent_id == holding.id).limit(1)) is not None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This investment has others under it, so it can't go under another")
+
+
 @router.post("", response_model=HoldingOut, status_code=201)
 def add_holding(data: HoldingIn, user_id: int | None = None, viewer: User = Depends(get_current_user),
                 db: Session = Depends(get_db)):
     target = resolve_target(db, viewer, user_id, write=True)
+    _check_parent(db, target.user.id, data.parent_id)
     h = Holding(user_id=target.user.id, **data.model_dump())
     db.add(h)
     db.commit()
@@ -98,6 +116,7 @@ def add_holding(data: HoldingIn, user_id: int | None = None, viewer: User = Depe
 @router.put("/{holding_id}", response_model=HoldingOut)
 def update_holding(holding_id: int, data: HoldingIn, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
     h = _holding(db, viewer, holding_id)
+    _check_parent(db, h.user_id, data.parent_id, h)
     for key, value in data.model_dump().items():
         setattr(h, key, value)
     db.commit()
@@ -106,5 +125,8 @@ def update_holding(holding_id: int, data: HoldingIn, viewer: User = Depends(get_
 
 @router.delete("/{holding_id}", status_code=204)
 def delete_holding(holding_id: int, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    db.delete(_holding(db, viewer, holding_id))
+    """Deletes the lines under it too (they are part of it)."""
+    h = _holding(db, viewer, holding_id)
+    db.execute(delete(Holding).where(Holding.parent_id == h.id))
+    db.delete(h)
     db.commit()

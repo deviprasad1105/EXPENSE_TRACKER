@@ -198,6 +198,9 @@ def restore_backup(db: Session, backup: DataBackup, restored_by: str) -> dict:
         if skip_books and model in BACKUP_MODELS:
             continue
         rows = tables.get(model.__tablename__, [])
+        if model is Holding:  # parents before the lines under them
+            rows = sorted(rows, key=lambda r: r.get("parent_id") is not None)
+            backed_up = {r["id"] for r in rows}
         added = 0
         for data in rows:
             data = dict(data)
@@ -213,6 +216,9 @@ def restore_backup(db: Session, backup: DataBackup, restored_by: str) -> dict:
             if model is AccountTransfer and not (exists(Account, data["from_account_id"]) and exists(Account, data["to_account_id"])):
                 continue
             if model is CardBill and not exists(Account, data["account_id"]):
+                continue
+            # A line under a parent that is gone would be counted twice: leave it out
+            if model is Holding and data.get("parent_id") and data["parent_id"] not in backed_up                     and not exists(Holding, data["parent_id"]):
                 continue
             if model is Expense:
                 if data.get("created_by") and not exists(User, data["created_by"]):
