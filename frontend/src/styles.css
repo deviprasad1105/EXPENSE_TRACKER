@@ -356,8 +356,7 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 .auth-card .btn.block { height: 52px; border-radius: 12px; font-size: 16px; font-weight: 600; }
 .auth-divider { display: flex; align-items: center; gap: 14px; color: var(--muted); margin: 4px 0 0; font-size: 15px; }
 .auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
-.auth-divider a, .auth-foot a { font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
-.auth-foot { text-align: center; color: var(--text-2); margin: 0; font-size: 15px; }
+.auth-divider a { font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 
 /* An input with an icon in front (and the password eye behind) */
 .icon-input { position: relative; display: flex; min-width: 0; }
@@ -429,6 +428,8 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 }
 .modal.wide { width: min(820px, 100%); }
 .modal .form-actions { margin-top: 16px; }
+.deleted-choice { display: flex; flex-direction: column; gap: 8px; }
+.deleted-choice .hint { margin: -2px 0 8px; text-align: center; }
 
 /* ---------- split bills ---------- */
 .group-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-bottom: 20px; }

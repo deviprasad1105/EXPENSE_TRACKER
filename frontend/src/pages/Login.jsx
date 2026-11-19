@@ -214,9 +214,6 @@ export default function Login() {
             Don’t have an account? <Link to="/register">Create one</Link>
           </span>
         </p>
-        <p className="auth-foot">
-          Deleted your account? <Link to="/recover-account">Restore it</Link> or <Link to="/recover-account?action=PURGE">erase its data</Link>
-        </p>
       </form>
     </AuthShell>
   )

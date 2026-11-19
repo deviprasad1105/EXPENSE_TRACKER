@@ -145,9 +145,20 @@ def verify_email(data: VerifyEmailIn, request: Request, db: Session = Depends(ge
     otp.consume(db, user, OTP_SIGNUP, data.code)
     user.email_verified = True
     for admin_id in db.scalars(select(User.id).where(User.role == ROLE_ADMIN)):
-        db.add(Notification(user_id=admin_id, kind="APPROVAL", message=f"New user '{user.username}' is waiting for approval"))
+        db.add(Notification(user_id=admin_id, kind="APPROVAL", message=approval_message(user.username)))
     db.commit()
-    return {"message": "Email confirmed. An admin must now approve your account before you can sign in."}
+    from .recover import offer_for_new_signup  # recover imports this module
+
+    # The code proved this person reads the email, so they may hear that a deleted account used it, and choose
+    # whether to bring it back or erase it
+    return {
+        "message": "Email confirmed. An admin must now approve your account before you can sign in.",
+        "deleted_account": offer_for_new_signup(db, user),
+    }
+
+
+def approval_message(username: str) -> str:
+    return f"New user '{username}' is waiting for approval"
 
 
 @router.post("/resend-email-code", response_model=OtpSentOut)

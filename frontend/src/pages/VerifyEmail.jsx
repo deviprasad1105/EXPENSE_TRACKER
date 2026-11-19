@@ -1,8 +1,10 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useSearchParams } from 'react-router-dom'
-import { MailCheck, ShieldCheck } from 'lucide-react'
+import { MailCheck, RotateCcw, ShieldCheck, Trash2 } from 'lucide-react'
 import api, { errorMessage } from '../api'
 import AuthShell from '../components/AuthShell'
+import Modal from '../components/Modal'
 import OtpField from '../components/OtpField'
 import { Alert } from '../components/ui'
 
@@ -14,12 +16,17 @@ export function VerifyEmailCard({ username: initialUsername = '', initial }) {
   const [done, setDone] = useState('')
   const [busy, setBusy] = useState(false)
 
+  // A deleted account used this email: offered to bring it back or erase it
+  const [deleted, setDeleted] = useState(null)
+
   const submit = async (e) => {
     e.preventDefault()
     setBusy(true)
     setError('')
     try {
-      setDone((await api.post('/auth/verify-email', { username: username.trim(), code })).data.message)
+      const data = (await api.post('/auth/verify-email', { username: username.trim(), code })).data
+      setDone(data.message)
+      setDeleted(data.deleted_account || null)
     } catch (err) {
       setError(errorMessage(err))
     } finally {
@@ -36,6 +43,16 @@ export function VerifyEmailCard({ username: initialUsername = '', initial }) {
         <Link to="/login" className="btn block">
           Back to sign in
         </Link>
+        {deleted && (
+          <DeletedAccountChoice
+            offer={deleted}
+            onClose={() => setDeleted(null)}
+            onDone={(message) => {
+              setDone(message)
+              setDeleted(null)
+            }}
+          />
+        )}
       </div>
     )
   }
@@ -69,6 +86,45 @@ export function VerifyEmailCard({ username: initialUsername = '', initial }) {
         Didn’t get it? Check your spam folder, or send a new code. <Link to="/login">Sign in</Link>
       </p>
     </form>
+  )
+}
+
+/** Signed up with the email of a deleted account: bring that account back (this sign-up is cancelled) or erase it. */
+function DeletedAccountChoice({ offer, onClose, onDone }) {
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const when = new Date(offer.deleted_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+
+  const choose = async (action) => {
+    if (action === 'PURGE' && !window.confirm(`Permanently delete all data of @${offer.username}? This cannot be undone.`)) return
+    setBusy(action)
+    setError('')
+    try {
+      onDone((await api.post('/auth/recover/after-signup', { ticket: offer.ticket, action })).data.message)
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  // On the page itself: the sign-in card would otherwise hold the backdrop inside it
+  return createPortal(
+    <Modal title="You had an account with this email" subtitle={`@${offer.username}, deleted on ${when}`} onClose={onClose}>
+      <div className="deleted-choice">
+        {error && <Alert type="error">{error}</Alert>}
+        <p className="muted">A backup of it is kept. What would you like to do?</p>
+        <button className="btn block" disabled={!!busy} onClick={() => choose('RESTORE')}>
+          <RotateCcw size={16} /> {busy === 'RESTORE' ? 'Restoring…' : `Restore @${offer.username}`}
+        </button>
+        <span className="hint">Brings it back with all its data. Sign in with its old password. This new sign-up is cancelled.</span>
+        <button className="btn block danger" disabled={!!busy} onClick={() => choose('PURGE')}>
+          <Trash2 size={16} /> {busy === 'PURGE' ? 'Erasing…' : 'Erase its data and keep my new account'}
+        </button>
+        <span className="hint">Deletes the backup for good. Your new account waits for an administrator’s approval.</span>
+      </div>
+    </Modal>,
+    document.body,
   )
 }
 

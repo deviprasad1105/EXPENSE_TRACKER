@@ -5,6 +5,9 @@ Deleting an account keeps a full backup (see services/backup.py). Whoever can re
 - PURGE: permanently delete every backup of that account, so nothing of it is left.
 
 Asking for a code never says whether a deleted account used that email, so the page can't be used to find accounts.
+
+The same choice is offered to someone who signs up again with that email, once they've entered the code that confirms
+it (so it too is only shown to whoever reads the email): restoring cancels the new sign-up.
 """
 
 from datetime import timedelta
@@ -17,20 +20,27 @@ from ..database import get_db
 from ..models import (
     OTP_RESTORE,
     ROLE_ADMIN,
+    STATUS_PENDING,
     AccountDeletionRequest,
     DataBackup,
+    EmailOtp,
     Notification,
     RecoveryOtp,
     User,
 )
-from ..schemas import OtpSentOut, RecoverCodeIn, RecoverConfirmIn
+from ..schemas import OtpSentOut, RecoverCodeIn, RecoverConfirmIn, SignupChoiceIn
+from ..security import create_ticket, decode_ticket
 from ..services import otp
 from ..services.backup import KIND_USER, restore_backup
 from ..services.mailer import send_email
 from ..timeutil import now_local
-from .auth import _client_ip, login_limiter, public_form_limiter
+from .auth import _client_ip, approval_message, login_limiter, public_form_limiter
 
 router = APIRouter(prefix="/api/auth/recover", tags=["auth"])
+
+# Proof that a new sign-up confirmed its email, sent back with the choice about the deleted account that used it
+SIGNUP_CHOICE_TICKET = "deleted-choice"
+SIGNUP_CHOICE_MINUTES = 30
 
 
 def deleted_account_backups(db: Session, email: str) -> list[DataBackup]:
@@ -76,6 +86,60 @@ def confirm(data: RecoverConfirmIn, request: Request, db: Session = Depends(get_
     if not backups:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "There is no deleted account for this email any more.")
     return _restore(db, backups[0], email) if data.action == OTP_RESTORE else _purge(db, backups, email)
+
+
+def offer_for_new_signup(db: Session, user: User) -> dict | None:
+    """After a sign-up's email code: the deleted account that used the same email, if any, and a ticket to choose."""
+    backups = deleted_account_backups(db, user.email)
+    if not backups:
+        return None
+    email = otp.normal_email(user.email)
+    return {
+        "username": backups[0].username,
+        "deleted_at": backups[0].created_at.isoformat(),
+        "ticket": create_ticket(SIGNUP_CHOICE_TICKET, user.id, user.token_version, SIGNUP_CHOICE_MINUTES, email=email),
+    }
+
+
+@router.post("/after-signup")
+def after_signup(data: SignupChoiceIn, request: Request, db: Session = Depends(get_db)):
+    if not login_limiter.hit(f"recover-signup:{_client_ip(request)}"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many attempts. Wait a minute and try again.")
+    ticket = decode_ticket(data.ticket, SIGNUP_CHOICE_TICKET)
+    user = db.get(User, ticket["sub"]) if ticket else None
+    if (
+        not user
+        or user.token_version != ticket["ver"]
+        or user.status != STATUS_PENDING
+        or not user.email_verified
+        or otp.normal_email(user.email) != ticket.get("email")
+    ):
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "This has expired. The email we sent when the account was deleted has a link to restore it or erase its data.",
+        )
+    email = ticket["email"]
+    backups = deleted_account_backups(db, email)
+    if not backups:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "There is no deleted account for this email any more.")
+    if data.action == OTP_RESTORE:
+        _drop_new_signup(db, user)
+        out = _restore(db, backups[0], email)
+        out["message"] += " Your new sign-up was cancelled."
+        return out
+    out = _purge(db, backups, email)
+    out["message"] += " Your new account is waiting for an administrator's approval."
+    return out
+
+
+def _drop_new_signup(db: Session, user: User) -> None:
+    """Cancel a sign-up that was never approved (it has no data), so the old account can have its email back.
+    Not saved unless the restore that follows succeeds."""
+    db.execute(delete(EmailOtp).where(EmailOtp.user_id == user.id))
+    db.execute(delete(Notification).where(Notification.user_id == user.id))
+    db.execute(delete(Notification).where(Notification.kind == "APPROVAL", Notification.message == approval_message(user.username)))
+    db.delete(user)
+    db.flush()
 
 
 def _restore(db: Session, backup: DataBackup, email: str) -> dict:
