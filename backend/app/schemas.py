@@ -197,6 +197,14 @@ class RecoverConfirmIn(RecoverCodeIn):
     code: str = Field(min_length=1, max_length=10)
 
 
+class SignupChoiceIn(BaseModel):
+    """Someone who just signed up and confirmed an email that a deleted account used: bring that account back
+    (the new sign-up is cancelled) or erase its data (the new sign-up goes on)."""
+
+    ticket: str = Field(min_length=1, max_length=2000)
+    action: Literal["RESTORE", "PURGE"]
+
+
 class OtpSettings(BaseModel):
     signup_minutes: int = Field(ge=1, le=60)
     account_minutes: int = Field(ge=1, le=60)
