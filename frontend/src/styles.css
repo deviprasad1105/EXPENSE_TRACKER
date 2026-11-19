@@ -1150,6 +1150,11 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 /* Add to your investments? (after saving a SIP / money sent to a broker) */
 .invest-prompt { display: flex; flex-direction: column; gap: 14px; }
 .invest-prompt .segmented { align-self: flex-start; }
+/* Bills & Subscriptions: the two tabs under the page title, and "looks paid" under a bill's due date */
+.page-tabs { margin-bottom: 16px; }
+.bill-match { margin-top: 4px; font-size: 12px; color: var(--success); display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.bill-match .link-button { font-size: 12px; font-weight: 600; }
+.bill-actions { flex-wrap: nowrap; }
 .invest-prompt-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .invest-prompt-actions .spacer { flex: 1; }
 .invest-prompt .error-text, .inv-pending .error-text { color: var(--danger); margin: 0; }

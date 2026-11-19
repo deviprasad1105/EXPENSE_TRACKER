@@ -255,7 +255,7 @@ export default function Layout() {
             ]
           : []),
         ...(split ? [['/splits', 'Split Bills', CallSplitOutlined, 'nav-splits']] : []),
-        ...(subscription ? [['/subscriptions', 'Subscriptions', EventRepeatOutlined, 'nav-subscriptions']] : []),
+        ...(subscription ? [['/subscriptions', 'Bills & Subscriptions', EventRepeatOutlined, 'nav-subscriptions']] : []),
       ],
     },
     {

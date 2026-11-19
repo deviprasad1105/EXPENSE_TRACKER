@@ -16,7 +16,7 @@ from .deps import FEATURE_ACCOUNTING, FEATURE_EXPENSE, FEATURE_SUBSCRIPTION, FEA
 from .migrate import sync_schema
 from .models import ROLE_ADMIN, STATUS_APPROVED, JobRun, User
 from .routers import (
-    accounts, admin, aliases, auth, autotrack, budgets, cards, categories, cron, daily_items, dashboard, expenses, funds, investments,
+    accounts, admin, aliases, auth, autotrack, bills, budgets, cards, categories, cron, daily_items, dashboard, expenses, funds, investments,
     mfa, notifications, org, profile, recover, reports, shares, splits, subscriptions, upi,
 )
 from .security import hash_password
@@ -153,6 +153,8 @@ for r in (expenses, daily_items, funds, dashboard, reports, shares, accounts, bu
     app.include_router(r.router, dependencies=[Depends(require_feature(FEATURE_EXPENSE))])
 app.include_router(importer.router, dependencies=[Depends(require_feature(FEATURE_EXPENSE))])
 app.include_router(subscriptions.router, dependencies=[Depends(require_feature(FEATURE_SUBSCRIPTION))])
+# Bills sit on the same page as subscriptions (Bills & Subscriptions)
+app.include_router(bills.router, dependencies=[Depends(require_feature(FEATURE_SUBSCRIPTION))])
 app.include_router(accounting.router, dependencies=[Depends(require_feature(FEATURE_ACCOUNTING))])
 app.include_router(upi.router, dependencies=[Depends(require_feature(FEATURE_UPI))])
 # The forwarding link signs nobody in: its secret token names the user, and it checks their plan itself

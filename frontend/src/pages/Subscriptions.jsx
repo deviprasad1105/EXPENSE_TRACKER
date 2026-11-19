@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { BellRing, CalendarClock, History, PauseCircle, Pencil, PlayCircle, Plus, Repeat, ScanSearch, Trash2, Wallet } from 'lucide-react'
 import api, { errorMessage, money, todayISO } from '../api'
 import { hasFeature, useAuth } from '../auth'
@@ -6,21 +7,9 @@ import Modal from '../components/Modal'
 import ReadOnlyNotice from '../components/ReadOnlyNotice'
 import { Alert, EmptyRow, Msg, PageHeader, StatTile } from '../components/ui'
 import DateInput from '../components/DateInput'
+import Bills from '../components/Bills'
+import { FREQUENCIES, UNITS, dueLabel, fmtDate, freqLabel } from '../repeatSchedule'
 
-const FREQUENCIES = [
-  ['WEEKLY', 'Weekly'],
-  ['MONTHLY', 'Monthly'],
-  ['QUARTERLY', 'Quarterly'],
-  ['HALF_YEARLY', 'Half-yearly'],
-  ['YEARLY', 'Yearly'],
-  ['CUSTOM', 'Custom'],
-]
-const UNITS = [
-  ['DAY', 'day(s)'],
-  ['WEEK', 'week(s)'],
-  ['MONTH', 'month(s)'],
-  ['YEAR', 'year(s)'],
-]
 const PAYMENT_METHODS = {
   GPAY: 'Google Pay',
   PHONEPE: 'PhonePe',
@@ -46,14 +35,6 @@ const CANCEL_HINT = {
   CARD: 'your card app or bank → standing instructions',
   NETBANKING: 'net banking → mandates / standing instructions',
 }
-
-const freqLabel = (s) => {
-  if (s.frequency !== 'CUSTOM') return FREQUENCIES.find(([k]) => k === s.frequency)?.[1] || s.frequency
-  const unit = UNITS.find(([k]) => k === s.interval_unit)?.[1].replace('(s)', s.interval_count === 1 ? '' : 's')
-  return `Every ${s.interval_count} ${unit}`
-}
-const dueLabel = (days) => (days === 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`)
-const fmtDate = (d) => (d ? new Date(d + 'T00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—')
 
 const EMPTY = {
   name: '',
@@ -85,7 +66,41 @@ const toPayload = (f) => ({
   note: f.note || null,
 })
 
+const TABS = [
+  ['subscriptions', 'Subscriptions', 'Charged automatically: Netflix, gym, AutoPay mandates…'],
+  ['bills', 'Bills', 'Paid by you when they come: electricity, mobile, rent, insurance, EMIs…'],
+]
+
+/** Bills & Subscriptions: two tabs on one page, so repeating payments are all in one place. */
 export default function Subscriptions() {
+  const [search, setSearch] = useSearchParams()
+  const tab = search.get('tab') === 'bills' ? 'bills' : 'subscriptions'
+  const header = (actions) => (
+    <>
+      <PageHeader title="Bills & Subscriptions" subtitle="Everything you pay again and again, with a reminder before each one is due.">
+        {actions}
+      </PageHeader>
+      <ReadOnlyNotice />
+      <div className="segmented page-tabs" role="tablist">
+        {TABS.map(([key, label, about]) => (
+          <button
+            key={key}
+            role="tab"
+            aria-selected={tab === key}
+            title={about}
+            className={tab === key ? 'on' : ''}
+            onClick={() => setSearch(key === 'bills' ? { tab: 'bills' } : {}, { replace: true })}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </>
+  )
+  return tab === 'bills' ? <Bills header={header} /> : <SubscriptionsTab header={header} />
+}
+
+function SubscriptionsTab({ header }) {
   const { params, target, user } = useAuth()
   const [list, setList] = useState([])
   const [summary, setSummary] = useState(null)
@@ -152,8 +167,8 @@ export default function Subscriptions() {
 
   return (
     <div>
-      <PageHeader title="Subscriptions" subtitle="Everything that charges you again and again, in one place. Get a reminder before each renewal and pause what you don't use.">
-        {writable && (
+      {header(
+        writable && (
           <>
             <button className="btn secondary" onClick={() => setImporting(true)}>
               <ScanSearch size={16} /> Find my subscriptions
@@ -162,9 +177,8 @@ export default function Subscriptions() {
               <Plus size={16} /> Add subscription
             </button>
           </>
-        )}
-      </PageHeader>
-      <ReadOnlyNotice />
+        ),
+      )}
       <Msg msg={msg} />
 
       {summary && (

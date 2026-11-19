@@ -19,6 +19,7 @@ from ..models import (
     FREQ_YEARLY,
     ROLE_ADMIN,
     STATUS_APPROVED,
+    Bill,
     Expense,
     Notification,
     Subscription,
@@ -192,7 +193,9 @@ def process_user(db: Session, user: User, today: date | None = None, email: bool
 
 
 def subscription_job():
-    """Hourly: record charges that came due and send "renews soon" reminders. Safe to run any number of times."""
+    """Hourly: record charges that came due and send "renews soon" reminders (and bills' "due soon" / "overdue" ones). Safe to run any number of times."""
+    from .bills import send_reminders as send_bill_reminders  # bills imports this module
+
     db = SessionLocal()
     try:
         now = now_local()
@@ -204,13 +207,17 @@ def subscription_job():
                 User.status == STATUS_APPROVED,
                 User.is_locked == false(),
                 or_(User.feature_subscription == true(), User.role == ROLE_ADMIN),
-                User.id.in_(select(Subscription.user_id).where(Subscription.is_active == true())),
+                or_(
+                    User.id.in_(select(Subscription.user_id).where(Subscription.is_active == true())),
+                    User.id.in_(select(Bill.user_id).where(Bill.is_active == true())),
+                ),
             )
         ).all()
         charges = reminders = 0
         for user in users:
             try:
                 c, r = process_user(db, user, today)
+                r += send_bill_reminders(db, user, today)  # bills sit on the same page
                 db.commit()
                 charges, reminders = charges + c, reminders + r
             except Exception:

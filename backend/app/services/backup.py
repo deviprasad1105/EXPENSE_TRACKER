@@ -20,6 +20,8 @@ from ..accounting.models import AccLedger, AccSettings
 from ..models import (
     Account,
     AccountTransfer,
+    Bill,
+    BillPayment,
     Budget,
     CardBill,
     Holding,
@@ -47,11 +49,12 @@ KIND_EXPENSE = "EXPENSE"
 KIND_FUND = "FUND"
 KIND_DAILY_ITEM = "DAILY_ITEM"
 KIND_SUBSCRIPTION = "SUBSCRIPTION"
+KIND_BILL = "BILL"
 
 # Restore order matters: parents before children
 MODELS = [
     User, UserAvatar, UserBackground, Account, CardBill, Holding, InvestmentLink, DailyItem, Expense, Fund, AccountTransfer, Budget, Subscription,
-    SubscriptionCharge, DataShare, Notification, UsernameChangeRequest, *BACKUP_MODELS,
+    SubscriptionCharge, Bill, BillPayment, DataShare, Notification, UsernameChangeRequest, *BACKUP_MODELS,
 ]
 BY_TABLE = {m.__tablename__: m for m in MODELS}
 
@@ -118,6 +121,8 @@ def snapshot_user_data(db: Session, user_id: int) -> dict:
             db, SubscriptionCharge,
             SubscriptionCharge.subscription_id.in_(select(Subscription.id).where(Subscription.user_id == user_id)),
         ),
+        "bills": _rows(db, Bill, Bill.user_id == user_id),
+        "bill_payments": _rows(db, BillPayment, BillPayment.user_id == user_id),
         **snapshot_books(db, _rows, user_id),
     }
 
@@ -229,6 +234,13 @@ def restore_backup(db: Session, backup: DataBackup, restored_by: str) -> dict:
                     data["daily_item_id"] = None
             if model is SubscriptionCharge:
                 if not exists(Subscription, data["subscription_id"]):
+                    continue
+                if data.get("expense_id") and not exists(Expense, data["expense_id"]):
+                    data["expense_id"] = None
+            if model is Bill and data.get("account_id") and not exists(Account, data["account_id"]):
+                data["account_id"] = None
+            if model is BillPayment:
+                if not exists(Bill, data["bill_id"]):
                     continue
                 if data.get("expense_id") and not exists(Expense, data["expense_id"]):
                     data["expense_id"] = None

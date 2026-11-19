@@ -897,6 +897,87 @@ class SubscriptionChargeOut(ORM):
     created_at: datetime
 
 
+# ---------- bills ----------
+BILL_KIND_PATTERN = "^(ELECTRICITY|MOBILE|BROADBAND|DTH|GAS|WATER|RENT|INSURANCE|EMI|SCHOOL|TAX|MAINTENANCE|OTHER)$"
+
+
+class BillIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    biller: str | None = Field(default=None, max_length=100)
+    kind: str = Field(default="OTHER", pattern=BILL_KIND_PATTERN)
+    category: str = Field(default="Bills", min_length=1, max_length=50)
+    # Leave empty when it changes every time
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    frequency: str = Field(default="MONTHLY", pattern=FREQUENCY_PATTERN)
+    interval_count: int = Field(default=1, ge=1, le=3650)
+    interval_unit: str = Field(default="MONTH", pattern="^(DAY|WEEK|MONTH|YEAR)$")
+    # The next bill's due date; later ones fall on the same day of the month
+    due_date: date
+    end_date: date | None = None
+    is_active: bool = True
+    account_id: int | None = None
+    remind_days_before: int = Field(default=3, ge=0, le=30)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class BillMatch(BaseModel):
+    """An expense that looks like the payment of a bill."""
+
+    expense_id: int
+    expense_date: date
+    item_name: str
+    amount: Decimal
+    account_id: int | None = None
+
+
+class BillOut(ORM):
+    id: int
+    user_id: int
+    name: str
+    biller: str | None
+    kind: str
+    category: str
+    amount: Decimal | None
+    frequency: str
+    interval_count: int
+    interval_unit: str
+    start_date: date
+    end_date: date | None
+    next_due_date: date | None
+    is_active: bool
+    account_id: int | None
+    remind_days_before: int
+    note: str | None
+    created_at: datetime
+    days_until: int | None = None
+    # UPCOMING, DUE_SOON (within the reminder days), OVERDUE, PAUSED or DONE (no more bills)
+    status: str = "UPCOMING"
+    last_paid_on: date | None = None
+    last_amount: Decimal | None = None
+    # An expense that looks like the payment of the bill now due, to confirm with one click
+    match: BillMatch | None = None
+
+
+class BillPayIn(BaseModel):
+    """Mark the bill now due as paid: link an expense already recorded, or log a new one."""
+
+    expense_id: int | None = None
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    paid_on: date | None = None
+    log_expense: bool = True
+    account_id: int | None = None
+
+
+class BillPaymentOut(ORM):
+    id: int
+    due_date: date
+    paid_on: date | None
+    amount: Decimal | None
+    expense_id: int | None
+    made_expense: bool
+    created_at: datetime
+
+
 class SubscriptionSmsIn(BaseModel):
     text: str = Field(min_length=10, max_length=50_000)
 
