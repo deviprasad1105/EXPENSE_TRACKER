@@ -310,7 +310,7 @@ Most changes are web changes: deploy them to Vercel as usual, then run `npm run 
     what they paid back and received. Record a payment you made or received to settle up. Only whoever
     recorded a payment can delete it.
   - Every change notifies the other group members.
-- **Subscriptions** (*Subscriptions*, plan feature): list everything that charges you again and again (Netflix, gym,
+- **Subscriptions** (*Bills & Subscriptions → Subscriptions*, plan feature): list everything that charges you again and again (Netflix, gym,
   insurance, rent, UPI AutoPay mandates) with the amount, start and optional end date, how it's paid (Google Pay,
   PhonePe, Paytm, card…) and how often: weekly, monthly, quarterly, half-yearly, yearly, or **custom** (every N days,
   weeks, months or years).
@@ -329,6 +329,15 @@ Most changes are web changes: deploy them to Vercel as usual, then run `npm run 
     expense history** for items paid at a regular interval for a similar amount. You choose which to add.
   - The admin turns it on per user under *Administration → Users → Plan*. Managers and people you shared with can
     see your subscriptions but not change them.
+- **Bills** (*Bills & Subscriptions → Bills*, same plan feature): bills you pay yourself when they come, such as
+  electricity, mobile, broadband, rent, insurance premiums and loan EMIs. Each has a next due date, how often it
+  comes, a usual amount (or none, when it changes every time) and an optional last date (the last EMI).
+  - **Reminders**: a notification and an email `N` days before the due date (3 by default), and one the day after
+    if it isn't marked paid. Nothing is charged automatically: an unpaid bill stays due and shows as overdue.
+  - **Mark paid**: links an expense already recorded (e.g. by auto-tracking), which the app finds by the bill's name
+    or biller, so it isn't counted twice; or enter the amount and date and, if ticked, it's added to your expenses.
+    When the payment is already there, the bill shows "Looks paid" with a one-click **Confirm**.
+  - **Skip** a bill when there's nothing to pay, see the **payment history**, and **undo** the latest payment.
 - **Security**: 5 wrong passwords block an account for 15 minutes (and the owner is notified), each IP address gets
   at most 20 sign-in attempts a minute, and registration and forgot-password are rate-limited. Changing or resetting
   a password and an admin lock sign out every other session at once; *Settings → Sign out of all devices* ends every session, including the current one.

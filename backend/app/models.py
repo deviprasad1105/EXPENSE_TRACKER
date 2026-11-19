@@ -883,3 +883,70 @@ class SubscriptionCharge(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
 
     subscription: Mapped[Subscription] = relationship(back_populates="charges")
+
+
+BILL_KINDS = ("ELECTRICITY", "MOBILE", "BROADBAND", "DTH", "GAS", "WATER", "RENT", "INSURANCE", "EMI", "SCHOOL", "TAX",
+              "MAINTENANCE", "OTHER")
+
+
+class Bill(Base):
+    """A bill you pay yourself when it comes (electricity, mobile, rent, insurance premium, loan EMI...).
+
+    Unlike a subscription nothing is charged automatically: `next_due_date` stays until the bill is marked paid (or
+    skipped), so an unpaid bill shows as overdue. The schedule keeps the day of `start_date` (the first due date).
+    """
+
+    __tablename__ = "bills"
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Who it is paid to (MSEDCL, Airtel, landlord, HDFC Life...): also used to spot the payment among expenses
+    biller: Mapped[str | None] = mapped_column(String(100))
+    kind: Mapped[str] = mapped_column(String(12), nullable=False, default="OTHER")
+    category: Mapped[str] = mapped_column(String(50), nullable=False, default="Bills")
+    # The usual amount; NULL when it changes every time (electricity...)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    # Same schedule fields as subscriptions
+    frequency: Mapped[str] = mapped_column(String(12), nullable=False, default=FREQ_MONTHLY)
+    interval_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    interval_unit: Mapped[str] = mapped_column(String(5), nullable=False, default="MONTH")
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # No bills after this date (the last EMI, the end of a lease); NULL: until removed
+    end_date: Mapped[date | None] = mapped_column(Date)
+    # The bill waiting to be paid; NULL once the last one is paid
+    next_due_date: Mapped[date | None] = mapped_column(Date, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # The account it is usually paid from (for the expense logged when it is marked paid)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
+    remind_days_before: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    # The due date the "due soon" / "overdue" reminder was sent for, so each is sent once
+    reminded_for: Mapped[date | None] = mapped_column(Date)
+    overdue_reminded_for: Mapped[date | None] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    payments: Mapped[list["BillPayment"]] = relationship(
+        back_populates="bill", cascade="all, delete-orphan", order_by="BillPayment.due_date.desc()"
+    )
+
+
+class BillPayment(Base):
+    """One bill marked paid: for which due date, when, how much, and the expense that records it."""
+
+    __tablename__ = "bill_payments"
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    bill_id: Mapped[int] = mapped_column(ForeignKey("bills.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    paid_on: Mapped[date | None] = mapped_column(Date)
+    # NULL when the bill was skipped (nothing to pay this time)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    expense_id: Mapped[int | None] = mapped_column(ForeignKey("expenses.id", ondelete="SET NULL"), index=True)
+    # True when marking it paid made that expense (undoing the payment then removes it)
+    made_expense: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+
+    bill: Mapped[Bill] = relationship(back_populates="payments")

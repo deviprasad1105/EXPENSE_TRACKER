@@ -435,10 +435,11 @@ Money paid back between two people.
 **Balances:** for every pair of people, the shares one owes the other (as payer) minus the reverse, minus
 payments between them. The group is settled when every pair is within one paisa.
 
-## Subscriptions
+## Subscriptions and bills
 
 ```
 APP_USERS ──< SUBSCRIPTIONS ──< SUBSCRIPTION_CHARGES ── expense_id → EXPENSES (nullable)
+APP_USERS ──< BILLS ──< BILL_PAYMENTS ── expense_id → EXPENSES (nullable)
 ```
 
 ### SUBSCRIPTIONS
@@ -474,6 +475,41 @@ recorded twice. `expense_id` points at the expense it was logged as (set to `NUL
 startup. For each active subscription it records every charge whose date has arrived, moves `next_charge_date` on,
 and sends the "renews soon" reminder. Adding or editing a subscription runs the same steps for that user at once.
 Past charges before the subscription was added are not back-filled.
+
+### BILLS
+Bills the user pays by hand when they come: electricity, mobile, broadband, rent, insurance premiums, loan EMIs. They
+are on the same page as subscriptions (*Bills & Subscriptions → Bills*) and need the same plan feature. Unlike a
+subscription nothing is charged automatically: the bill now due stays due (and shows as overdue) until it is marked
+paid or skipped.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | INTEGER, PK | |
+| `user_id` | INTEGER, FK → `app_users.id` (cascade) | Owner. |
+| `name` | VARCHAR2(100) | e.g. "Electricity". |
+| `biller` | VARCHAR2(100), nullable | Who it is paid to (MSEDCL, Airtel, landlord). Its words, and the name's, are looked for in expenses to spot the payment. |
+| `kind` | VARCHAR2(12) | `ELECTRICITY`, `MOBILE`, `BROADBAND`, `DTH`, `GAS`, `WATER`, `RENT`, `INSURANCE`, `EMI`, `SCHOOL`, `TAX`, `MAINTENANCE` or `OTHER`. |
+| `category` | VARCHAR2(50) | Category of the expense logged when it is paid (default `Bills`). |
+| `amount` | NUMBER(12,2), nullable | The usual amount. `NULL` when it changes every time. |
+| `frequency`, `interval_count`, `interval_unit` | | As in `SUBSCRIPTIONS`. |
+| `start_date` | DATE | The due date the schedule keeps the day of the month of (set from the due date entered). |
+| `end_date` | DATE, nullable | The last bill (last EMI, end of a lease). |
+| `next_due_date` | DATE, nullable | The bill waiting to be paid. `NULL` once the last one is paid. |
+| `is_active` | SMALLINT | Paused bills get no reminders. Paying the last bill sets it to 0. |
+| `account_id` | INTEGER, FK → `accounts.id` (set null), nullable | Account it is usually paid from, for the expense logged when it is paid. |
+| `remind_days_before` | INTEGER | Days before the due date to remind (0 = never). |
+| `reminded_for` / `overdue_reminded_for` | DATE, nullable | Due dates already reminded about ("due soon" / "overdue"), so each is sent once. |
+| `note`, `created_at`, `updated_at` | | |
+
+### BILL_PAYMENTS
+One row per bill marked paid or skipped: `due_date` (which bill), `paid_on` and `amount` (both `NULL` when skipped),
+`expense_id` (the expense that records it; `NULL` if none or deleted) and `made_expense` (1 when marking it paid added
+that expense, which undoing the payment then removes; 0 when an expense already recorded, e.g. by auto-tracking, was
+linked instead). An expense can be the payment of one bill only. Only the latest payment of a bill can be undone.
+
+**Reminders:** the subscription job also sends, for each active bill, a "due soon" reminder `remind_days_before` days
+ahead and an "overdue" one from the day after the due date (in-app and by email). When an expense that looks like the
+payment is found, "due soon" isn't sent and "overdue" says it looks paid instead.
 
 ## Bank accounts and budgets
 
