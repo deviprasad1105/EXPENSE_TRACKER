@@ -129,16 +129,18 @@ def _replaces(db: Session, user: User, replaces_id: int | None, also: list[int])
 
 # ---------- purge a date range (Import Records → Purge) ----------
 @router.get("/purge/preview")
-def purge_preview(start: date, end: date, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """What purging the range would remove: expenses, money received and transfers (typed or imported)."""
-    return range_purge.preview(db, user, start, end)
+def purge_preview(start: date, end: date, account_id: int | None = None, user: User = Depends(get_current_user),
+                  db: Session = Depends(get_db)):
+    """What purging the range would remove: expenses, money received and transfers (typed or imported), of every
+    account or only `account_id`'s (a transfer to or from it counts)."""
+    return range_purge.preview(db, user, start, end, account_id)
 
 
 @router.post("/purge")
 def purge_range(data: PurgeRangeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Remove every record in the range, 200 per call (backed up first): call again with `backup_id` while
     `remaining` > 0."""
-    return range_purge.purge(db, user, data.start, data.end, data.backup_id)
+    return range_purge.purge(db, user, data.start, data.end, data.backup_id, data.account_id)
 
 
 def _with_statement(result: dict, records: list[RecordIn], summary: dict) -> dict:

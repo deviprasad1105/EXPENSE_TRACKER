@@ -1,5 +1,6 @@
 """Purge a date range: remove every expense, money received and transfer dated between two dates, whether typed in
-by hand or imported, so the period can be imported again cleanly.
+by hand or imported, so the period can be imported again cleanly. Optionally only one account's: its expenses and
+money received, and the transfers to or from it.
 
 - Checked as a whole first: refused when part of the range is in a locked accounting period, or a record in it is
   reconciled with a bank statement (the books would no longer agree), so a purge never stops halfway on those.
@@ -17,11 +18,11 @@ from datetime import date
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..accounting.engine import get_books
-from ..models import AccountTransfer, Expense, Fund, User
+from ..models import Account, AccountTransfer, Expense, Fund, User
 from ..services.backup import create_backup, load_backup, row_to_dict
 from ..timeutil import now_local
 from .models import (
@@ -51,14 +52,36 @@ def _range(start: date, end: date) -> None:
         _bad("Choose a range of at most 30 years")
 
 
-def preview(db: Session, user: User, start: date, end: date) -> dict:
+def _account(db: Session, user: User, account_id: int | None) -> Account | None:
+    if account_id is None:
+        return None
+    account = db.get(Account, account_id)
+    if account is None or account.user_id != user.id:
+        _bad("Account not found", status.HTTP_404_NOT_FOUND)
+    return account
+
+
+def _where(model, col, user: User, start: date, end: date, account: Account | None) -> tuple:
+    """The records of the range (and of the account, when one is chosen: a transfer counts for both its accounts)."""
+    where = [model.user_id == user.id, col >= start, col <= end]
+    if account is not None:
+        if model is AccountTransfer:
+            where.append(or_(AccountTransfer.from_account_id == account.id, AccountTransfer.to_account_id == account.id))
+        else:
+            where.append(model.account_id == account.id)
+    return tuple(where)
+
+
+def preview(db: Session, user: User, start: date, end: date, account_id: int | None = None) -> dict:
     """What a purge of the range would remove, and why it can't be done (empty `blocks` = it can)."""
     _range(start, end)
-    out: dict = {"start": start, "end": end, "blocks": []}
+    account = _account(db, user, account_id)
+    out: dict = {"start": start, "end": end, "blocks": [],
+                 "account": {"id": account.id, "name": account.name} if account else None}
     imported_ids: dict[str, set] = {}
     total_records = 0
     for name, model, col, link, _ in _KINDS:
-        where = (model.user_id == user.id, col >= start, col <= end)
+        where = _where(model, col, user, start, end, account)
         count, total = db.execute(select(func.count(model.id), func.coalesce(func.sum(model.amount), 0)).where(*where)).one()
         out[name] = {"count": count, "total": str(Decimal(total).quantize(Decimal("0.01")))}
         total_records += count
@@ -73,7 +96,7 @@ def preview(db: Session, user: User, start: date, end: date) -> dict:
     for name, model, col, link, _ in _KINDS:
         for (bid,) in db.execute(select(ImportRecord.batch_id).where(
                 ImportRecord.user_id == user.id, ImportRecord.status.in_((REC_IMPORTED, REC_KEPT)),
-                link.in_(select(model.id).where(model.user_id == user.id, col >= start, col <= end)))):
+                link.in_(select(model.id).where(*_where(model, col, user, start, end, account))))):
             batches[bid] += 1
     out["imports"] = [{"id": b.id, "filename": b.filename, "created_at": b.created_at, "rows": n}
                       for bid, n in batches.most_common() if (b := db.get(ImportBatch, bid))]
@@ -85,7 +108,7 @@ def preview(db: Session, user: User, start: date, end: date) -> dict:
         reconciled = _reconciled(db, user.id)
         n = 0
         for name, model, col, _, source in _KINDS:
-            ids = set(db.scalars(select(model.id).where(model.user_id == user.id, col >= start, col <= end)))
+            ids = set(db.scalars(select(model.id).where(*_where(model, col, user, start, end, account))))
             n += sum(1 for t, i in reconciled if t == source and i in ids)
         if n:
             out["blocks"].append(f"{n} record(s) in this range are reconciled with a bank statement. Unmatch them in "
@@ -93,13 +116,15 @@ def preview(db: Session, user: User, start: date, end: date) -> dict:
     return out
 
 
-def purge(db: Session, user: User, start: date, end: date, backup_id: int | None = None) -> dict:
+def purge(db: Session, user: User, start: date, end: date, backup_id: int | None = None,
+          account_id: int | None = None) -> dict:
     """Remove up to 200 records of the range. The first call checks the whole range and saves the backup; the next
     calls pass that backup's id and remove the rest of what it holds."""
     from ..models import DataBackup
 
     if backup_id is None:
-        info = preview(db, user, start, end)
+        info = preview(db, user, start, end, account_id)
+        account = _account(db, user, account_id)
         if info["blocks"]:
             _bad("Nothing was removed. " + " ".join(info["blocks"]))
         if not info["records"]:
@@ -107,13 +132,14 @@ def purge(db: Session, user: User, start: date, end: date, backup_id: int | None
         tables = {}
         for name, model, col, _, _ in _KINDS:
             tables[name] = [row_to_dict(o) for o in db.scalars(
-                select(model).where(model.user_id == user.id, col >= start, col <= end))]
+                select(model).where(*_where(model, col, user, start, end, account)))]
         backup = create_backup(
             db, KIND_PURGE, user, user, tables,
-            summary=(f"Purged {start:%d %b %Y} to {end:%d %b %Y}: {len(tables['expenses'])} expenses, "
+            summary=(f"Purged {start:%d %b %Y} to {end:%d %b %Y}" + (f" of {account.name}" if account else "")
+                     + f": {len(tables['expenses'])} expenses, "
                      f"{len(tables['funds'])} money received, {len(tables['account_transfers'])} transfers"),
             reason="Purged by the user from Import Records",
-            extra={"start": start.isoformat(), "end": end.isoformat()},
+            extra={"start": start.isoformat(), "end": end.isoformat(), "account_id": account_id},
         )
         db.commit()
     else:
