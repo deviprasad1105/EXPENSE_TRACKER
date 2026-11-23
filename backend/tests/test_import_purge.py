@@ -226,3 +226,44 @@ def test_purge_is_refused_in_a_locked_period_and_checks_its_input(client, make_u
     first = client.get("/api/admin/backups", headers=headers(make_user("boss", admin=True))).json()[0]
     res = client.post(f"{API}/purge", json={"start": str(DAY), "end": str(DAY), "backup_id": first["id"]}, headers=headers(other))
     assert res.status_code == 404
+
+
+def test_purge_only_one_accounts_records(client, make_user, db):
+    me = make_user("asha", expense=True)
+    h = headers(me)
+    acc = {}
+    for name in ("Axis", "SBI", "Cash"):
+        r = client.post("/api/accounts", json={"name": name, "kind": "SAVINGS" if name != "Cash" else "CASH"}, headers=h)
+        assert r.status_code == 201, r.text
+        acc[name] = r.json()["id"]
+    day = str(DAY)
+    for name, amt in (("Axis", "10"), ("SBI", "20"), ("Cash", "30")):
+        client.post("/api/expenses", json={"expense_date": day, "item_name": f"{name} spend", "amount": amt, "account_id": acc[name]}, headers=h)
+    client.post("/api/funds", json={"fund_date": day, "amount": "500", "source": "Salary", "account_id": acc["Axis"]}, headers=h)
+    client.post("/api/funds", json={"fund_date": day, "amount": "50", "source": "Dividend", "account_id": acc["SBI"]}, headers=h)
+    for a, b in (("Axis", "SBI"), ("SBI", "Cash")):
+        client.post("/api/accounts/transfers", json={"from_account_id": acc[a], "to_account_id": acc[b], "amount": "5",
+                                                    "transfer_date": day}, headers=h)
+
+    pv = client.get(f"{API}/purge/preview", params={"start": day, "end": day, "account_id": acc["Axis"]}, headers=h).json()
+    assert pv["account"] == {"id": acc["Axis"], "name": "Axis"}
+    # Axis: its spend, its salary and the Axis → SBI transfer; not SBI's or Cash's, nor SBI → Cash
+    assert (pv["expenses"]["count"], pv["funds"]["count"], pv["account_transfers"]["count"], pv["records"]) == (1, 1, 1, 3)
+    everything = client.get(f"{API}/purge/preview", params={"start": day, "end": day}, headers=h).json()
+    assert everything["account"] is None and everything["records"] == 7
+
+    res = client.post(f"{API}/purge", json={"start": day, "end": day, "account_id": acc["Axis"]}, headers=h)
+    assert res.status_code == 200 and (res.json()["removed"], res.json()["remaining"]) == (3, 0)
+    db.expire_all()
+    assert sorted(e.item_name for e in db.scalars(select(Expense))) == ["Cash spend", "SBI spend"]
+    assert [f.source for f in db.scalars(select(Fund))] == ["Dividend"]
+    left = client.get("/api/accounts/transfers", headers=h).json()
+    assert [(t["from_account_id"], t["to_account_id"]) for t in left] == [(acc["SBI"], acc["Cash"])]
+    backup = client.get("/api/admin/backups", headers=headers(make_user("boss", admin=True))).json()[0]
+    assert "of Axis" in backup["summary"] and backup["row_count"] == 3
+
+    # Someone else's account can't be chosen
+    other = make_user("ravi")
+    theirs = client.post("/api/accounts", json={"name": "Theirs"}, headers=headers(other)).json()["id"]
+    assert client.get(f"{API}/purge/preview", params={"start": day, "end": day, "account_id": theirs}, headers=h).status_code == 404
+    assert client.post(f"{API}/purge", json={"start": day, "end": day, "account_id": theirs}, headers=h).status_code == 404

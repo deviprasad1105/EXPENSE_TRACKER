@@ -8,10 +8,13 @@ import DateInput from '../components/DateInput'
 
 const day = (v) => new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
 
-/** Purge a date range: every expense, money received and transfer dated in it (typed or imported), backed up first. */
+/** Purge a date range: every expense, money received and transfer dated in it (typed or imported), of every account or
+ * one chosen account (with the transfers to or from it), backed up first. */
 export default function ImportPurge() {
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
+  const [accounts, setAccounts] = useState([])
+  const [accountId, setAccountId] = useState('')
   const [info, setInfo] = useState(null)
   const [checking, setChecking] = useState(false)
   const [typed, setTyped] = useState('')
@@ -27,7 +30,7 @@ export default function ImportPurge() {
     setChecking(true)
     if (!keepMsg) setMsg(null)
     try {
-      setInfo((await api.get('/imports/purge/preview', { params: { start, end } })).data)
+      setInfo((await api.get('/imports/purge/preview', { params: { start, end, account_id: accountId || undefined } })).data)
     } catch (err) {
       setInfo(null)
       setMsg({ type: 'error', text: errorMessage(err) })
@@ -36,26 +39,31 @@ export default function ImportPurge() {
     }
   }
   useEffect(() => {
+    api.get('/accounts').then((r) => setAccounts(r.data)).catch(() => setAccounts([]))
+  }, [])
+  useEffect(() => {
     setTyped('')
     preview()
-  }, [start, end])
+  }, [start, end, accountId])
+
+  const which = info?.account ? ` of ${info.account.name}` : ''
 
   const ready = info && info.records > 0 && !info.blocks.length && typed.trim().toUpperCase() === 'PURGE'
 
   const run = async () => {
-    if (!window.confirm(`Purge ${info.records} record(s) dated ${day(start)} to ${day(end)}?\n\nThey are removed from the app and reversed in your books. A backup is kept that an administrator can restore.`)) return
+    if (!window.confirm(`Purge ${info.records} record(s)${which} dated ${day(start)} to ${day(end)}?\n\nThey are removed from the app and reversed in your books. A backup is kept that an administrator can restore.`)) return
     setProgress({ done: 0, total: info.records })
     let backupId = null
     let removed = 0
     try {
       for (;;) {
-        const res = (await api.post('/imports/purge', { start, end, backup_id: backupId })).data
+        const res = (await api.post('/imports/purge', { start, end, account_id: accountId ? Number(accountId) : null, backup_id: backupId })).data
         backupId = res.backup_id
         removed += res.removed
         setProgress({ done: removed, total: info.records })
         if (!res.remaining) break
       }
-      setMsg({ type: 'ok', text: `${removed} record(s) dated ${day(start)} to ${day(end)} were purged. You can now import that period again.` })
+      setMsg({ type: 'ok', text: `${removed} record(s)${which} dated ${day(start)} to ${day(end)} were purged. You can now import that period again.` })
       setTyped('')
       await preview(true)
     } catch (err) {
@@ -86,8 +94,8 @@ export default function ImportPurge() {
       <div className="card">
         <div className="card-head">
           <div>
-            <h3>Date range</h3>
-            <p>Expenses, money received and transfers dated from the first day to the last day (both included) are removed.</p>
+            <h3>Date range and account</h3>
+            <p>Expenses, money received and transfers dated from the first day to the last day (both included) are removed: of every account, or only the one you choose.</p>
           </div>
         </div>
         <div className="form-grid">
@@ -99,6 +107,17 @@ export default function ImportPurge() {
             <label htmlFor="purge-to">To</label>
             <DateInput id="purge-to" value={end} max={todayISO()} onChange={(e) => setEnd(e.target.value)} />
           </div>
+          <div>
+            <label htmlFor="purge-account">Account</label>
+            <select id="purge-account" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+              <option value="">All accounts</option>
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}{a.last4 ? ` ••${a.last4}` : ''}{a.is_active === false ? ' (closed)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
         {checking && <p className="muted small">Checking…</p>}
         {!start || !end ? <p className="hint">Choose both dates to see what would be removed.</p> : null}
@@ -108,7 +127,7 @@ export default function ImportPurge() {
         <div className="card">
           <h3>What would be removed</h3>
           {info.records === 0 ? (
-            <p className="muted">There are no records from {day(info.start)} to {day(info.end)}.</p>
+            <p className="muted">There are no records{which} from {day(info.start)} to {day(info.end)}.</p>
           ) : (
             <>
               <div className="table-wrap">
@@ -123,12 +142,13 @@ export default function ImportPurge() {
                   <tbody>
                     <Line label="Expenses" v={info.expenses} />
                     <Line label="Money received" v={info.funds} />
-                    <Line label="Transfers between accounts" v={info.account_transfers} />
+                    <Line label={info.account ? `Transfers to or from ${info.account.name}` : 'Transfers between accounts'} v={info.account_transfers} />
                   </tbody>
                 </table>
               </div>
               <p className="hint">
-                {info.records} record(s): {info.imported} imported and {info.typed} typed in by hand.
+                {info.records} record(s){which}: {info.imported} imported and {info.typed} typed in by hand.
+                {info.account && info.account_transfers.count > 0 && ` A transfer is removed as a whole, so the other account's side of it goes too.`}
                 {info.imports.length > 0 && ` From the imports: ${info.imports.map((b) => `${b.filename} (${b.rows})`).join(', ')}; their rows can be imported again afterwards.`}
                 {' '}Split bills and settlements (shared with other people), subscriptions, budgets, accounts and opening balances are not touched.
               </p>
@@ -153,7 +173,7 @@ export default function ImportPurge() {
                       </div>
                     ) : (
                       <button className="btn danger" disabled={!ready} onClick={run}>
-                        <Trash2 size={16} /> Purge {info.records} record(s)
+                        <Trash2 size={16} /> Purge {info.records} record(s){which}
                       </button>
                     )}
                   </div>

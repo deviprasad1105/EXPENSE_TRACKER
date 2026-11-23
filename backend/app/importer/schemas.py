@@ -180,6 +180,8 @@ class BatchIn(BaseModel):
 class PurgeRangeIn(BaseModel):
     start: Date
     end: Date
+    # Only this account's records (and transfers to or from it); none = every account
+    account_id: int | None = None
     # The purge's backup, from its first call: the next calls remove the rest of what it holds
     backup_id: int | None = None
 
