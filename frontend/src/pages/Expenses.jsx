@@ -7,6 +7,7 @@ import { useAuth } from '../auth'
 import { accountLabel } from '../components/Accounts'
 import ReadOnlyNotice from '../components/ReadOnlyNotice'
 import { EmptyRow, Msg, PageHeader } from '../components/ui'
+import LearnCategory, { learnable } from '../components/LearnCategory'
 import DateInput from '../components/DateInput'
 
 const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
@@ -63,6 +64,8 @@ export default function Expenses() {
   const [expenses, setExpenses] = useState([])
   const [funds, setFunds] = useState([])
   const [categories, setCategories] = useState([])
+  const [incomeCategories, setIncomeCategories] = useState([])
+  const [offer, setOffer] = useState(null)
   const [accounts, setAccounts] = useState([])
   const [balance, setBalance] = useState(null)
   const [editing, setEditing] = useState(null)
@@ -72,20 +75,24 @@ export default function Expenses() {
     const q = Object.fromEntries(
       Object.entries({ start: filters.start, end: filters.end, search: filters.search, account_id: filters.account_id }).filter(([, v]) => v),
     )
-    // Money received has no category: picking one shows only what was sent
-    const wantSent = filters.type !== 'received'
-    const wantReceived = filters.type !== 'sent' && !filters.category
+    // A category is either one of money sent ("sent:Food") or of money received ("received:Salary")
+    const [catKind, catName] = splitCategory(filters.category)
+    const wantSent = filters.type !== 'received' && catKind !== 'received'
+    const wantReceived = filters.type !== 'sent' && catKind !== 'sent'
+    const byCat = catName ? { category: catName } : {}
     const today = todayISO()
-    const [ex, fu, cats, acc, dash] = await Promise.all([
-      wantSent ? api.get('/expenses', { params: { ...params, ...q, ...(filters.category ? { category: filters.category } : {}) } }) : null,
-      wantReceived ? api.get('/funds', { params: { ...params, ...q } }) : null,
+    const [ex, fu, cats, icats, acc, dash] = await Promise.all([
+      wantSent ? api.get('/expenses', { params: { ...params, ...q, ...byCat } }) : null,
+      wantReceived ? api.get('/funds', { params: { ...params, ...q, ...byCat } }) : null,
       api.get('/expenses/categories', { params }),
+      api.get('/funds/categories', { params }),
       api.get('/accounts', { params }),
       api.get('/dashboard', { params: { ...params, start: today, end: today } }),
     ])
     setExpenses(ex?.data || [])
     setFunds(fu?.data || [])
     setCategories(cats.data)
+    setIncomeCategories(icats.data)
     setAccounts(acc.data)
     setBalance(dash.data)
   }, [params, filters])
@@ -99,7 +106,7 @@ export default function Expenses() {
   const rows = useMemo(() => {
     const out = [
       ...expenses.map((e) => ({ key: `e${e.id}`, kind: 'sent', date: e.expense_date, name: e.item_name, group: e.category, rec: e })),
-      ...funds.map((f) => ({ key: `f${f.id}`, kind: 'received', date: f.fund_date, name: f.source, group: 'Money received', rec: f })),
+      ...funds.map((f) => ({ key: `f${f.id}`, kind: 'received', date: f.fund_date, name: f.source, group: f.category || 'Money received', rec: f })),
     ]
     return out.sort((a, b) => (a.date === b.date ? b.rec.id - a.rec.id : a.date < b.date ? 1 : -1))
   }, [expenses, funds])
@@ -125,10 +132,17 @@ export default function Expenses() {
 
   const saveEdit = async () => {
     try {
-      const { id, expense_date, item_name, category, quantity, amount, note } = editing
-      await api.put(`/expenses/${id}`, { expense_date, item_name, category, quantity: Number(quantity), amount: Number(amount), note })
+      const { id, kind, category, note, before } = editing
+      if (kind === 'received') {
+        await api.put(`/funds/${id}`, { source: editing.source, category, note: note || null })
+      } else {
+        const { expense_date, item_name, quantity, amount } = editing
+        await api.put(`/expenses/${id}`, { expense_date, item_name, category, quantity: Number(quantity), amount: Number(amount), note })
+      }
       setEditing(null)
-      setMsg({ type: 'ok', text: 'Expense updated' })
+      setMsg({ type: 'ok', text: kind === 'received' ? 'Money received updated' : 'Expense updated' })
+      const name = kind === 'received' ? editing.source : editing.item_name
+      setOffer(learnable(before, before.category, category) ? { kind, name, payee_key: before.payee_key, alias_id: before.alias_id, category } : null)
       load()
     } catch (e) {
       setMsg({ type: 'error', text: errorMessage(e) })
@@ -152,7 +166,7 @@ export default function Expenses() {
 
   return (
     <div>
-      <PageHeader title="Expenses" subtitle="Every transaction: money sent (expenses) and money received. An expense can be edited for 3 days after it was saved." />
+      <PageHeader title="Expenses" subtitle="Every transaction: money sent (expenses) and money received, each with its category. An entry can be edited for 3 days after it was saved; older ones of a payee get a new category through an alias (Settings → Transaction aliases)." />
       <ReadOnlyNotice />
       <Msg msg={msg} />
 
@@ -193,7 +207,17 @@ export default function Expenses() {
         <div className="toolbar" style={{ flexWrap: 'wrap', rowGap: 8 }}>
           <div className="segmented" role="tablist" aria-label="Sent or received">
             {TYPES.map(([k, label]) => (
-              <button key={k} className={filters.type === k ? 'on' : ''} onClick={() => setFilters({ ...filters, type: k })} role="tab" aria-selected={filters.type === k}>
+              <button
+                key={k}
+                className={filters.type === k ? 'on' : ''}
+                onClick={() => {
+                  // A category of the other kind no longer applies
+                  const [ck] = splitCategory(filters.category)
+                  setFilters({ ...filters, type: k, category: k === 'all' || !ck || ck === k ? filters.category : '' })
+                }}
+                role="tab"
+                aria-selected={filters.type === k}
+              >
                 {label}
               </button>
             ))}
@@ -211,11 +235,26 @@ export default function Expenses() {
           <DateInput value={filters.start} max={filters.end || todayISO()} onChange={set('start')} aria-label="From" />
           <span className="muted">to</span>
           <DateInput value={filters.end} min={filters.start || undefined} max={todayISO()} onChange={set('end')} aria-label="To" />
-          <select value={filters.category} onChange={set('category')} aria-label="Category" disabled={filters.type === 'received'}>
+          <select value={filters.category} onChange={set('category')} aria-label="Category">
             <option value="">All categories</option>
-            {categories.map((c) => (
-              <option key={c}>{c}</option>
-            ))}
+            {filters.type !== 'received' && (
+              <optgroup label="Money sent">
+                {categories.map((c) => (
+                  <option key={c} value={`sent:${c}`}>
+                    {c}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {filters.type !== 'sent' && (
+              <optgroup label="Money received">
+                {incomeCategories.map((c) => (
+                  <option key={c} value={`received:${c}`}>
+                    {c}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
           {accounts.length > 0 && (
             <select value={filters.account_id} onChange={set('account_id')} aria-label="Account">
@@ -239,10 +278,18 @@ export default function Expenses() {
           <span className="spacer" />
           <span className="muted">{rows.length} transactions</span>
         </div>
-        {filters.category && filters.type !== 'sent' && (
-          <p className="hint" style={{ margin: '0 16px 8px' }}>
-            Money received has no category, so only money sent in {filters.category} is shown.
-          </p>
+        {offer && (
+          <div style={{ margin: '0 16px' }}>
+            <LearnCategory
+              offer={offer}
+              onClose={() => setOffer(null)}
+              onDone={(text) => {
+                setOffer(null)
+                setMsg({ type: 'ok', text })
+                load()
+              }}
+            />
+          </div>
         )}
 
         {/* ---------- transactions ---------- */}
@@ -265,7 +312,40 @@ export default function Expenses() {
               {rows.map((row) => {
                 const r = row.rec
                 const acct = r.account_id && byAccount[r.account_id] ? accountLabel(byAccount[r.account_id]) : '—'
-                if (row.kind === 'sent' && editing?.id === r.id)
+                if (editing?.key === row.key && row.kind === 'received')
+                  return (
+                    <tr key={row.key} className="editing">
+                      <td>{niceDate(row.date, { relative: true })}</td>
+                      <td>
+                        <TypeBadge kind="received" />
+                      </td>
+                      <td>
+                        <input value={editing.source} onChange={ed('source')} aria-label="Received from" />
+                        <input value={editing.note || ''} onChange={ed('note')} placeholder="Note" style={{ marginTop: 4 }} />
+                      </td>
+                      <td>
+                        <select value={editing.category} onChange={ed('category')} aria-label="Income category">
+                          {withCurrent(incomeCategories, editing.category).map((c) => (
+                            <option key={c}>{c}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="muted">{acct}</td>
+                      <td />
+                      <td className="num strong net-pos">{money(r.amount)}</td>
+                      <td colSpan={writable ? 2 : 1}>
+                        <div className="actions">
+                          <button className="btn small" onClick={saveEdit}>
+                            <Check size={14} /> Save
+                          </button>
+                          <button className="btn secondary small" onClick={() => setEditing(null)}>
+                            <X size={14} /> Cancel
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                if (editing?.key === row.key)
                   return (
                     <tr key={row.key} className="editing">
                       <td>
@@ -279,8 +359,8 @@ export default function Expenses() {
                         <input value={editing.note || ''} onChange={ed('note')} placeholder="Note" style={{ marginTop: 4 }} />
                       </td>
                       <td>
-                        <select value={editing.category} onChange={ed('category')}>
-                          {categories.map((c) => (
+                        <select value={editing.category} onChange={ed('category')} aria-label="Category">
+                          {withCurrent(categories, editing.category).map((c) => (
                             <option key={c}>{c}</option>
                           ))}
                         </select>
@@ -326,13 +406,13 @@ export default function Expenses() {
                         </div>
                       )}
                     </td>
-                    <td data-label="Category">{row.kind === 'sent' ? row.group : <span className="muted">—</span>}</td>
+                    <td data-label="Category">{row.group}</td>
                     <td data-label="Account" className="muted">{acct}</td>
                     <td data-label="Sent" className={`num strong net-neg ${row.kind === 'sent' ? '' : 'stack-hide'}`}>{row.kind === 'sent' ? money(r.amount) : ''}</td>
                     <td data-label="Received" className={`num strong net-pos ${row.kind === 'received' ? '' : 'stack-hide'}`}>{row.kind === 'received' ? money(r.amount) : ''}</td>
                     <td data-label="Status">
                       {row.kind === 'received' ? (
-                        <span className="muted small">—</span>
+                        <span className="muted small">{r.editable ? 'Editable' : '—'}</span>
                       ) : r.locked ? (
                         <span className="badge" title={`Locked since ${r.lock_at.replace('T', ' ')}`}>
                           <Lock size={12} /> Locked
@@ -345,8 +425,20 @@ export default function Expenses() {
                       <td>
                         {(row.kind === 'received' || r.editable) && (
                           <div className="actions">
-                            {row.kind === 'sent' && (
-                              <button className="btn ghost small" onClick={() => setEditing({ ...r })} title="Edit" aria-label={`Edit ${row.name}`}>
+                            {r.editable && (
+                              <button
+                                className="btn ghost small"
+                                onClick={() => {
+                                  setOffer(null)
+                                  setEditing(
+                                    row.kind === 'sent'
+                                      ? { ...r, kind: 'sent', key: row.key, before: r }
+                                      : { id: r.id, kind: 'received', key: row.key, source: r.source, category: r.category || 'Money received', note: r.note, before: r },
+                                  )
+                                }}
+                                title="Edit"
+                                aria-label={`Edit ${row.name}`}
+                              >
                                 <Pencil size={14} />
                               </button>
                             )}
@@ -405,6 +497,16 @@ export default function Expenses() {
     </div>
   )
 }
+
+/** "sent:Food" → ['sent', 'Food']; '' → [null, null]. */
+function splitCategory(value) {
+  if (!value) return [null, null]
+  const i = value.indexOf(':')
+  return [value.slice(0, i), value.slice(i + 1)]
+}
+
+/** The category list, with the record's own category in it even if it was hidden. */
+const withCurrent = (list, current) => (current && !list.includes(current) ? [current, ...list] : list)
 
 function TypeBadge({ kind }) {
   return kind === 'sent' ? (

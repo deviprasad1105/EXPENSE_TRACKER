@@ -112,8 +112,10 @@ def name_record(row, alias: TransactionAlias, *, set_category: bool = True) -> N
         row.raw_name = (getattr(row, attr) or "")[:200]
     setattr(row, attr, alias.alias[:100])
     row.alias_id = alias.id
-    if set_category and alias.category and isinstance(row, Expense):
-        row.category = alias.category
+    if set_category:
+        category = alias.category if isinstance(row, Expense) else alias.income_category
+        if category:
+            row.category = category
 
 
 def label_new(db: Session, row, *, set_category: bool = True, aliases: list[TransactionAlias] | None = None,
@@ -188,8 +190,9 @@ def apply_alias(db: Session, alias: TransactionAlias, expense_ids: list[int], fu
     return result
 
 
-def rename_linked(db: Session, alias: TransactionAlias, old_category: str | None) -> ApplyResult:
-    """After an alias is renamed: every record it names follows (an expense's category too, if it came from the alias)."""
+def rename_linked(db: Session, alias: TransactionAlias, old_category: str | None,
+                  old_income_category: str | None = None) -> ApplyResult:
+    """After an alias is renamed: every record it names follows (its category too, if it came from the alias)."""
     result = ApplyResult()
     books = get_books(db, alias.user_id)
     for model in (Expense, Fund):
@@ -200,6 +203,9 @@ def rename_linked(db: Session, alias: TransactionAlias, old_category: str | None
             setattr(row, _name_attr(row), alias.alias[:100])
             if isinstance(row, Expense) and alias.category and old_category and row.category == old_category:
                 row.category = alias.category
+            elif (isinstance(row, Fund) and alias.income_category and old_income_category
+                  and row.category == old_income_category):
+                row.category = alias.income_category
             result.renamed += 1
     alias.updated_at = now_local()
     return result

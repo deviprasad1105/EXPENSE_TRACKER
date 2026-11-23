@@ -45,6 +45,7 @@ from ..models import (
     UpiId,
     User,
     UserCategory,
+    IncomeCategory,
     UserAvatar,
     UserBackground,
     UsernameChangeRequest,
@@ -200,6 +201,7 @@ def _delete_user_data(db: Session, user_id: int):
     db.execute(delete(Fund).where(Fund.user_id == user_id))
     db.execute(delete(TransactionAlias).where(TransactionAlias.user_id == user_id))
     db.execute(delete(UserCategory).where(UserCategory.user_id == user_id))
+    db.execute(delete(IncomeCategory).where(IncomeCategory.user_id == user_id))
     db.execute(delete(DailyItem).where(DailyItem.user_id == user_id))
     db.execute(delete(Budget).where(Budget.user_id == user_id))
     db.execute(delete(CardBill).where(CardBill.user_id == user_id))

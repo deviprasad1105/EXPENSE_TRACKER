@@ -56,7 +56,7 @@ def _records(expenses: list[Expense], funds: list[Fund]) -> list[AliasRecord]:
     rows = [AliasRecord(kind="EXPENSE", id=e.id, date=e.expense_date, name=e.item_name, original=e.raw_name, amount=e.amount,
                         category=e.category, origin=e.origin) for e in expenses]
     rows += [AliasRecord(kind="FUND", id=f.id, date=f.fund_date, name=f.source, original=f.raw_name, amount=f.amount,
-                         origin=f.origin) for f in funds]
+                         category=f.category, origin=f.origin) for f in funds]
     rows.sort(key=lambda r: (r.date, r.id), reverse=True)
     return rows[:PREVIEW_LIMIT]
 
@@ -142,7 +142,8 @@ def create_alias(data: AliasIn, user_id: int | None = None, viewer: User = Depen
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Enter the name or UPI ID to look for")
     if db.scalar(select(TransactionAlias.id).where(TransactionAlias.user_id == target.user.id, TransactionAlias.match_key == key)):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"There is already an alias for '{key}'. Rename that one instead.")
-    alias = TransactionAlias(user_id=target.user.id, match_key=key, alias=data.alias.strip(), category=(data.category or "").strip() or None)
+    alias = TransactionAlias(user_id=target.user.id, match_key=key, alias=data.alias.strip(), category=(data.category or "").strip() or None,
+                             income_category=(data.income_category or "").strip() or None)
     db.add(alias)
     db.flush()
     # Only records the alias really matches can be renamed, whatever ids were sent
@@ -171,14 +172,18 @@ def apply_to_old(alias_id: int, data: AliasApply, viewer: User = Depends(get_cur
 def update_alias(alias_id: int, data: AliasUpdate, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Rename an alias: every record it names is renamed with it."""
     alias = _load(db, viewer, alias_id)
-    old_category = alias.category
+    old_category, old_income_category = alias.category, alias.income_category
     if data.alias:
         alias.alias = data.alias.strip()
     if data.clear_category:
         alias.category = None
     elif data.category is not None:
         alias.category = data.category.strip() or None
-    result = svc.rename_linked(db, alias, old_category)
+    if data.clear_income_category:
+        alias.income_category = None
+    elif data.income_category is not None:
+        alias.income_category = data.income_category.strip() or None
+    result = svc.rename_linked(db, alias, old_category, old_income_category)
     db.commit()
     return AliasChangeOut(alias=_out(db, alias), renamed=result.renamed, skipped_locked=result.skipped_locked)
 

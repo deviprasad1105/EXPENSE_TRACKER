@@ -375,6 +375,8 @@ class ExpenseOut(ORM):
     lock_at: datetime | None = None
     raw_name: str | None = None
     alias_id: int | None = None
+    # Which payee it is (for "always use this category for it")
+    payee_key: str | None = None
     origin: str | None = None
 
 
@@ -383,8 +385,16 @@ class FundIn(BaseModel):
     fund_date: date
     amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
     source: str = Field(default="Income", max_length=100)
+    # The kind of income; empty: the matching alias's income category, else "Money received"
+    category: str | None = Field(default=None, max_length=50)
     note: str | None = Field(default=None, max_length=500)
     account_id: int | None = None
+
+
+class FundUpdate(BaseModel):
+    source: str | None = Field(default=None, min_length=1, max_length=100)
+    category: str | None = Field(default=None, min_length=1, max_length=50)
+    note: str | None = Field(default=None, max_length=500)
 
 
 class FundOut(ORM, FundIn):
@@ -393,7 +403,10 @@ class FundOut(ORM, FundIn):
     created_at: datetime
     raw_name: str | None = None
     alias_id: int | None = None
+    payee_key: str | None = None
     origin: str | None = None
+    # Whether the viewer can change it now (the owner: within the edit window, as for expenses)
+    editable: bool = False
 
 
 # ---------- transaction aliases ----------
@@ -402,12 +415,14 @@ class AliasIn(BaseModel):
     match_key: str = Field(min_length=2, max_length=120)
     alias: str = Field(min_length=1, max_length=100)
     category: str | None = Field(default=None, max_length=50)
+    # Category given to money received it names
+    income_category: str | None = Field(default=None, max_length=50)
     # Existing records to rename now (from the preview); empty leaves old records as they are
     expense_ids: list[int] = Field(default_factory=list, max_length=20000)
     fund_ids: list[int] = Field(default_factory=list, max_length=20000)
     # Rename every existing record it matches (the import review's "also rename old records"), instead of the ids
     apply_all_existing: bool = False
-    # Give the renamed old expenses the alias's category too (new ones always get it)
+    # Give the renamed old records the alias's category / income category too (new ones always get it)
     set_category_existing: bool = False
 
 
@@ -415,6 +430,8 @@ class AliasUpdate(BaseModel):
     alias: str | None = Field(default=None, min_length=1, max_length=100)
     category: str | None = Field(default=None, max_length=50)
     clear_category: bool = False
+    income_category: str | None = Field(default=None, max_length=50)
+    clear_income_category: bool = False
 
 
 class AliasApply(BaseModel):
@@ -428,6 +445,7 @@ class AliasOut(ORM):
     match_key: str
     alias: str
     category: str | None
+    income_category: str | None = None
     created_at: datetime
     updated_at: datetime | None
     records: int = 0

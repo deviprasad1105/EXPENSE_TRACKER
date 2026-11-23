@@ -280,7 +280,8 @@ Money added to the balance (salary, pocket money…).
 | `user_id` | INTEGER, FK → `app_users.id` | Owner. Indexed. |
 | `fund_date` | DATE | |
 | `amount` | NUMBER(12,2) | Always positive. |
-| `source` | VARCHAR2(100) | e.g. `Salary`. |
+| `source` | VARCHAR2(100) | Who or what paid, e.g. `NextGen Clearing`, `Mamta`. Older rows (typed or imported) hold the category here too. |
+| `category` | VARCHAR(50), nullable | The kind of income (`Salary`, `Dividend`, `Refunds`, `Rental`…), as an expense has a category. Picked when added; without one, the matching alias's `income_category`, else `Money received`. Rows from before this column are set at startup: typed or imported ones from `source`, ones from SMS / UPI alerts to `Money received`. Accounting posts each income to the ledger of its category. |
 | `note` | VARCHAR2(500) | |
 | `account_id` | INTEGER, FK → `accounts.id`, nullable | The account it was received in (primary by default). |
 | `created_at` | DATE | |
@@ -288,6 +289,9 @@ Money added to the balance (salary, pocket money…).
 | `raw_name` | VARCHAR(200), nullable | The original description once an alias (or the UPI tracker) has renamed `source`. |
 | `alias_id` | INTEGER, FK → `transaction_aliases.id`, nullable | The alias naming it. Cleared when the user renames the record by hand. |
 | `origin` | VARCHAR(10), nullable | `UPI` when the UPI tracker recorded it; `NULL` when typed or imported. |
+
+**Edit lock:** as for expenses, the owner may change `source`, `category` and `note` only until
+`created_at + EDIT_WINDOW_DAYS`; admins always. Older ones of a payee get a new category through an alias.
 
 **Available balance** = `SUM(funds.amount)` − `SUM(expenses.amount)` for the user, over all time.
 
@@ -712,6 +716,7 @@ A readable name for a payee (*Settings → Transaction aliases*). Unique per (`u
 | `match_key` | VARCHAR(120) | A payee key. Matches a record whose `payee_key` is equal, or (typed keys) whose description contains all its words / the UPI ID. |
 | `alias` | VARCHAR(100) | The name shown: written into `item_name` / `source` of every record it names. |
 | `category` | VARCHAR(50), nullable | Given to *new* expenses it names (typed ones only when left as General). Old records keep theirs. |
+| `income_category` | VARCHAR(50), nullable | The same for *new* money received it names (typed ones only when no category was picked). Changing a record's category on the website offers to set this (or `category`) for its payee. |
 | `created_at`, `updated_at` | DATE | |
 
 **Rules:** new expenses and money received (typed, imported or from the UPI tracker) are named as they are saved.
@@ -725,6 +730,12 @@ like Smoking or one of their own). Unique per (`user_id`, `name`). Expenses keep
 `is_added` (BOOLEAN, nullable) tells the two apart while hidden: true for a category the user added (it can be removed,
 also while hidden), false for a default or used one they only hid. Rows from before this column are set at startup
 (shown ones as added).
+
+### INCOME_CATEGORIES
+The same for money received (*Settings → Categories → Income*): income categories the user added or hid. A separate
+list, since one name can be both (e.g. `Investment`). Unique per (`user_id`, `name`); `is_added` is never NULL.
+The list offered is the defaults (Salary, Bank Interest, Dividend, Refunds, Cashback, Rental, Sale, Reimbursement,
+Money received), the user's own, and every one used in their money received or aliases, without the hidden ones.
 
 ### UPI_IDS
 The user's own UPI IDs (VPAs). Unique per (`user_id`, `vpa`). `account_id` (nullable) is the account its payments

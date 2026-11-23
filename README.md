@@ -168,7 +168,12 @@ Most changes are web changes: deploy them to Vercel as usual, then run `npm run 
   name in Expenses), search finds both, and records in a locked accounting period are never changed.
 - **Categories** (*Settings → Categories*): add your own categories, and hide the ones you never use (e.g. Smoking):
   a hidden category disappears from every category list (entry, filters, budgets, aliases, imports); expenses that have
-  it keep it. Adding a hidden one again shows it again.
+  it keep it. Adding a hidden one again shows it again. *Expenses* and *Income* are two lists: money received has a
+  category too (Salary, Dividend, Refunds, Rental…), picked on *Balance*, shown and filtered in *Expenses*, and used by
+  accounting for its income ledger. An alias can carry one of each.
+- **Learns your categories**: change the category of an expense or money received and the app asks *Always put
+  “Gamara” in Tea and Cigarettes?*. Yes saves it on the payee's alias, so new records from bank alerts and imports get
+  it; *and past ones too* also files that payee's older records.
 - **Aliases in imports**: the review step lists the *Payees in this file* (grouped by UPI ID or name; All / Sent /
   Received), with each one's alias. Rows of a payee with an alias show the name they'll get, and take the alias's
   category when the file has none, so a bank statement needs far less category mapping. Type a name (and category) for

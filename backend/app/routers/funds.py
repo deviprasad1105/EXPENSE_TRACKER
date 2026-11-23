@@ -1,19 +1,49 @@
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..database import get_db
-from ..deps import get_current_user, resolve_target
-from ..models import ROLE_ADMIN, Fund, User
-from ..schemas import FundIn, FundOut
+from ..deps import ACCESS_ADMIN, Target, get_current_user, resolve_target
+from ..models import ROLE_ADMIN, Fund, IncomeCategory, TransactionAlias, User
+from ..schemas import FundIn, FundOut, FundUpdate
 from ..services.accounts import resolve_account
-from ..services.aliases import label_new
+from ..services.aliases import label_new, payee_key
+from ..timeutil import now_local
 from .expenses import like_term
 from ..services.backup import KIND_FUND, create_backup, row_to_dict
 
 router = APIRouter(prefix="/api/funds", tags=["funds"])
+
+# Income categories everyone starts with; the user adds their own (Settings → Categories → Income)
+INCOME_DEFAULTS = ("Salary", "Bank Interest", "Dividend", "Refunds", "Cashback", "Rental", "Sale", "Reimbursement",
+                   "Money received")
+FALLBACK = "Money received"
+
+
+def user_income_categories(db: Session, user_id: int, include_hidden: bool = False) -> list[str]:
+    """The income categories a user can pick: the defaults, the ones they added, and every one used in their money
+    received or aliases, without the ones they hid."""
+    used = db.scalars(select(Fund.category).where(Fund.user_id == user_id, Fund.category.is_not(None)).distinct()).all()
+    alias = db.scalars(select(TransactionAlias.income_category).where(TransactionAlias.user_id == user_id,
+                                                                       TransactionAlias.income_category.is_not(None))).all()
+    own = db.execute(select(IncomeCategory.name, IncomeCategory.is_hidden).where(IncomeCategory.user_id == user_id)).all()
+    names = {c for c in (*used, *alias, *INCOME_DEFAULTS) if c} | {n for n, _ in own}
+    hidden = set() if include_hidden else {n.casefold() for n, h in own if h}
+    return sorted((n for n in names if n.casefold() not in hidden), key=str.casefold)
+
+
+def _lock_at(fund: Fund):
+    return fund.created_at + timedelta(days=settings.edit_window_days)
+
+
+def _to_out(fund: Fund, target: Target) -> FundOut:
+    out = FundOut.model_validate(fund)
+    # As for expenses: admin can always change it; the owner only inside the edit window; viewers never
+    out.editable = target.level == ACCESS_ADMIN or (target.writable and now_local() <= _lock_at(fund))
+    return out
 
 
 @router.get("", response_model=list[FundOut])
@@ -23,6 +53,7 @@ def list_funds(
     end: date | None = None,
     search: str | None = None,
     account_id: int | None = None,
+    category: str | None = None,
     viewer: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -34,22 +65,59 @@ def list_funds(
         stmt = stmt.where(Fund.fund_date <= end)
     if account_id:
         stmt = stmt.where(Fund.account_id == account_id)
+    if category:
+        stmt = stmt.where(Fund.category == category)
     if search:
         term = f"%{like_term(search)}%"
         stmt = stmt.where(or_(func.lower(Fund.source).like(term, escape="\\"), func.lower(Fund.raw_name).like(term, escape="\\"),
-                              func.lower(Fund.note).like(term, escape="\\")))
-    return db.scalars(stmt.order_by(Fund.fund_date.desc(), Fund.id.desc())).all()
+                              func.lower(Fund.note).like(term, escape="\\"), func.lower(Fund.category).like(term, escape="\\")))
+    return [_to_out(f, target) for f in db.scalars(stmt.order_by(Fund.fund_date.desc(), Fund.id.desc()))]
+
+
+@router.get("/categories", response_model=list[str])
+def categories(user_id: int | None = None, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    target = resolve_target(db, viewer, user_id)
+    return user_income_categories(db, target.user.id)
 
 
 @router.post("", response_model=FundOut, status_code=201)
 def add_fund(data: FundIn, user_id: int | None = None, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
     target = resolve_target(db, viewer, user_id, write=True)
     fund = Fund(**data.model_dump(), user_id=target.user.id)
+    fund.category = (data.category or "").strip() or None
     fund.account_id = resolve_account(db, target.user.id, data.account_id)
-    label_new(db, fund)
+    # A category the user picked stays; without one, the alias's income category, else money received
+    label_new(db, fund, set_category=fund.category is None)
+    fund.category = fund.category or FALLBACK
     db.add(fund)
     db.commit()
-    return fund
+    return _to_out(fund, target)
+
+
+@router.put("/{fund_id}", response_model=FundOut)
+def update_fund(fund_id: int, data: FundUpdate, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    fund = db.get(Fund, fund_id)
+    if not fund:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Fund entry not found")
+    target = resolve_target(db, viewer, fund.user_id, write=True)
+    if target.level != ACCESS_ADMIN and now_local() > _lock_at(fund):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"This entry is locked: it can only be changed within {settings.edit_window_days} days of creation. "
+            "To change ones like it, give its payee an alias with an income category.",
+        )
+    changes = data.model_dump(exclude_unset=True)
+    if changes.get("source") and changes["source"] != fund.source:
+        if fund.alias_id is None:
+            fund.payee_key = payee_key(fund.raw_name or changes["source"])
+        else:
+            # Renamed by hand: it no longer follows the alias (raw_name keeps the original description)
+            fund.alias_id = None
+    for key, value in changes.items():
+        if value is not None or key == "note":
+            setattr(fund, key, value.strip() if isinstance(value, str) and key != "note" else value)
+    db.commit()
+    return _to_out(fund, target)
 
 
 @router.delete("/{fund_id}", status_code=204)

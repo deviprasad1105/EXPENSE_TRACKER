@@ -247,6 +247,8 @@ def record_message(db: Session, user: User, text: str) -> UpiEvent:
     row.origin, row.payee_key, row.raw_name = "UPI", key, parsed.description
     if alias:
         name_record(row, alias)
+    if isinstance(row, Fund):
+        row.category = row.category or "Money received"  # the alias's income category, else just money received
     db.add(row)
     db.flush()
     ev = _event(db, user, UPI_CREATED, None if alias else "No alias yet for this payee", text, parsed, upi_id=upi.id if upi else None,
