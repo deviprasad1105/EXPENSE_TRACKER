@@ -340,6 +340,7 @@ def create_record(db: Session, user: User, msg: BankMessage) -> None:
         row = Fund(user_id=user.id, fund_date=msg.txn_date, amount=msg.amount, source=name, note=note, account_id=msg.account_id)
         row.origin = "SMS"
         label_new(db, row)
+        row.category = row.category or "Money received"  # the alias's income category, else just money received
         db.add(row)
         db.flush()
         msg.fund_id, msg.name = row.id, row.source

@@ -66,6 +66,10 @@ def _data_fixups(engine: Engine) -> None:
         # Categories from before 'is_added': a shown one was added by the user, a hidden one was only hidden
         conn.execute(text("UPDATE user_categories SET is_added = :yes WHERE is_added IS NULL AND is_hidden = :no").bindparams(yes=True, no=False))
         conn.execute(text("UPDATE user_categories SET is_added = :no WHERE is_added IS NULL").bindparams(no=False))
+        # Money received from before income categories: one typed in or imported had its category as its source
+        # (Salary, Dividend…); one recorded from an SMS / UPI alert has the payer there, so it is just money received
+        conn.execute(text("UPDATE funds SET category = SUBSTR(source, 1, 50) WHERE category IS NULL AND origin IS NULL"))
+        conn.execute(text("UPDATE funds SET category = 'Money received' WHERE category IS NULL"))
         # Account backups from before 'email' was stored: read it from the backup so the owner can restore / erase it
         rows = conn.execute(text("SELECT id, payload FROM data_backups WHERE kind = 'USER' AND email IS NULL")).all()
         for backup_id, payload in rows:

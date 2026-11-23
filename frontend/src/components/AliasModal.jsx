@@ -11,17 +11,21 @@ import Modal from './Modal'
  * old-records list is shown.
  */
 export default function AliasModal({ initial, alias, categories: given, onClose, onSaved }) {
-  const [form, setForm] = useState({ match_key: '', alias: '', category: '', ...initial })
+  const [form, setForm] = useState({ match_key: '', alias: '', category: '', income_category: '', ...initial })
   const [records, setRecords] = useState(null)
   const [picked, setPicked] = useState(new Set())
   const [renameOld, setRenameOld] = useState(true)
   const [categoryOld, setCategoryOld] = useState(false)
   const [kind, setKind] = useState('all') // all, EXPENSE (sent) or FUND (received)
   const [categories, setCategories] = useState(given || [])
+  const [incomeCategories, setIncomeCategories] = useState([])
 
   useEffect(() => {
     if (!given) api.get('/expenses/categories').then((r) => setCategories(r.data)).catch(() => {})
   }, [given])
+  useEffect(() => {
+    api.get('/funds/categories').then((r) => setIncomeCategories(r.data)).catch(() => {})
+  }, [])
   const [msg, setMsg] = useState(null)
   const [busy, setBusy] = useState(false)
   const existing = !!alias
@@ -73,7 +77,14 @@ export default function AliasModal({ initial, alias, categories: given, onClose,
     try {
       const r = existing
         ? await api.post(`/aliases/${alias.id}/apply`, { ...ids, set_category_existing: categoryOld })
-        : await api.post('/aliases', { match_key: form.match_key, alias: form.alias, category: form.category || null, set_category_existing: categoryOld, ...ids })
+        : await api.post('/aliases', {
+            match_key: form.match_key,
+            alias: form.alias,
+            category: form.category || null,
+            income_category: form.income_category || null,
+            set_category_existing: categoryOld,
+            ...ids,
+          })
       const skipped = r.data.skipped_locked ? ` ${r.data.skipped_locked} in a locked accounting period were left as they are.` : ''
       onSaved(`${existing ? alias.alias : form.alias}: ${r.data.renamed} old record${r.data.renamed === 1 ? '' : 's'} renamed.${skipped}`)
     } catch (err) {
@@ -83,6 +94,8 @@ export default function AliasModal({ initial, alias, categories: given, onClose,
   }
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value })
+  const sentCat = existing ? alias.category : form.category
+  const receivedCat = existing ? alias.income_category : form.income_category
   const count = ids.expense_ids.length + ids.fund_ids.length
 
   return (
@@ -109,10 +122,19 @@ export default function AliasModal({ initial, alias, categories: given, onClose,
               <input value={form.alias} onChange={set('alias')} placeholder="e.g. Tea" required maxLength={100} autoFocus />
             </div>
             <div>
-              <label>Category (optional)</label>
+              <label>Category for money sent (optional)</label>
               <input value={form.category} onChange={set('category')} list="alias-categories" placeholder="Pick or type a new one" maxLength={50} />
               <datalist id="alias-categories">
                 {categories.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
+            </div>
+            <div>
+              <label>Category for money received (optional)</label>
+              <input value={form.income_category} onChange={set('income_category')} list="alias-income-categories" placeholder="e.g. Salary, Rental" maxLength={50} />
+              <datalist id="alias-income-categories">
+                {incomeCategories.map((c) => (
                   <option key={c} value={c} />
                 ))}
               </datalist>
@@ -133,10 +155,23 @@ export default function AliasModal({ initial, alias, categories: given, onClose,
                 <span className="muted">(untick any you want to keep as they are)</span>
               </label>
             )}
-            {(renameOld || existing) && (existing ? alias.category : form.category) && (
+            {(renameOld || existing) && (sentCat || receivedCat) && (
               <label className="check" style={{ margin: '0 0 8px' }}>
                 <input type="checkbox" checked={categoryOld} onChange={(e) => setCategoryOld(e.target.checked)} />
-                Also put the ticked old expenses in <b>{existing ? alias.category : form.category}</b>
+                Also give the ticked old records the alias's category:
+                {sentCat && (
+                  <>
+                    {' '}
+                    expenses in <b>{sentCat}</b>
+                  </>
+                )}
+                {sentCat && receivedCat && ','}
+                {receivedCat && (
+                  <>
+                    {' '}
+                    money received in <b>{receivedCat}</b>
+                  </>
+                )}
                 <span className="muted">(new ones always get it)</span>
               </label>
             )}

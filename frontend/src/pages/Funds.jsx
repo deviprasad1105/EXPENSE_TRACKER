@@ -7,12 +7,15 @@ import { AccountSelect, accountLabel, useAccounts } from '../components/Accounts
 import ReadOnlyNotice from '../components/ReadOnlyNotice'
 import { EmptyRow, Msg, PageHeader, StatTile } from '../components/ui'
 import DateInput from '../components/DateInput'
+import LearnCategory, { learnable } from '../components/LearnCategory'
 
 export default function Funds() {
   const { params, target, user } = useAuth()
   const [list, setList] = useState([])
   const [bal, setBal] = useState(null)
-  const [form, setForm] = useState({ fund_date: todayISO(), amount: '', source: 'Salary', note: '' })
+  const [form, setForm] = useState({ fund_date: todayISO(), amount: '', source: '', category: 'Salary', note: '' })
+  const [categories, setCategories] = useState([])
+  const [offer, setOffer] = useState(null)
   const [msg, setMsg] = useState(null)
   const [accountId, setAccountId] = useState(undefined)
   const [version, setVersion] = useState(0)
@@ -21,9 +24,10 @@ export default function Funds() {
   const byId = Object.fromEntries(accounts.map((a) => [a.id, a]))
 
   const load = useCallback(async () => {
-    const [f, d] = await Promise.all([api.get('/funds', { params }), api.get('/dashboard', { params })])
+    const [f, d, c] = await Promise.all([api.get('/funds', { params }), api.get('/dashboard', { params }), api.get('/funds/categories', { params })])
     setList(f.data)
     setBal(d.data)
+    setCategories(c.data)
   }, [params])
 
   useEffect(() => {
@@ -34,9 +38,10 @@ export default function Funds() {
   const submit = async (e) => {
     e.preventDefault()
     try {
-      await api.post('/funds', { ...form, amount: Number(form.amount), note: form.note || null, account_id: accountId ?? null }, { params })
+      const source = form.source.trim() || form.category
+      await api.post('/funds', { ...form, source, amount: Number(form.amount), note: form.note || null, account_id: accountId ?? null }, { params })
       setVersion((v) => v + 1)
-      setForm({ ...form, amount: '', note: '' })
+      setForm({ ...form, amount: '', source: '', note: '' })
       setMsg({ type: 'ok', text: 'Funds added' })
       load()
     } catch (err) {
@@ -56,6 +61,17 @@ export default function Funds() {
   }
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value })
+
+  const recategorise = async (f, category) => {
+    try {
+      await api.put(`/funds/${f.id}`, { category })
+      setMsg({ type: 'ok', text: `“${f.source}” is now in ${category}` })
+      setOffer(learnable(f, f.category, category) ? { kind: 'received', name: f.source, payee_key: f.payee_key, alias_id: f.alias_id, category } : null)
+      load()
+    } catch (err) {
+      setMsg({ type: 'error', text: errorMessage(err) })
+    }
+  }
 
   return (
     <div>
@@ -84,8 +100,16 @@ export default function Funds() {
               <input type="number" min="0.01" step="0.01" value={form.amount} onChange={set('amount')} required />
             </div>
             <div>
-              <label>Source</label>
-              <input value={form.source} onChange={set('source')} required />
+              <label>Category</label>
+              <select value={form.category} onChange={set('category')} required>
+                {categories.map((c) => (
+                  <option key={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label>Received from</label>
+              <input value={form.source} onChange={set('source')} placeholder={`e.g. employer, person (empty: ${form.category})`} maxLength={100} />
             </div>
             <div>
               <label>Note</label>
@@ -100,6 +124,17 @@ export default function Funds() {
           </div>
         </form>
       )}
+      {offer && (
+        <LearnCategory
+          offer={offer}
+          onClose={() => setOffer(null)}
+          onDone={(text) => {
+            setOffer(null)
+            setMsg({ type: 'ok', text })
+            load()
+          }}
+        />
+      )}
       <div className="card flush">
         <div className="card-head">
           <h3>History</h3>
@@ -109,7 +144,8 @@ export default function Funds() {
             <thead>
               <tr>
                 <th>Date</th>
-                <th>Source</th>
+                <th>Received from</th>
+                <th>Category</th>
                 <th>Account</th>
                 <th className="num">Amount</th>
                 <th>Note</th>
@@ -123,6 +159,17 @@ export default function Funds() {
                   <td data-label="Source" className="strong stack-title" title={f.raw_name && f.raw_name !== f.source ? `Original: ${f.raw_name}` : undefined}>
                     {f.source} {f.origin === 'UPI' && <span className="badge info">UPI</span>}
                     {f.alias_id && <span className="badge">alias</span>}
+                  </td>
+                  <td data-label="Category">
+                    {f.editable ? (
+                      <select value={f.category || 'Money received'} onChange={(e) => recategorise(f, e.target.value)} aria-label={`Category of ${f.source}`}>
+                        {(categories.includes(f.category) ? categories : [f.category, ...categories]).filter(Boolean).map((c) => (
+                          <option key={c}>{c}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      f.category || 'Money received'
+                    )}
                   </td>
                   <td data-label="Account" className="muted">{f.account_id && byId[f.account_id] ? accountLabel(byId[f.account_id]) : '—'}</td>
                   <td data-label="Amount" className="num strong" style={{ color: 'var(--success)' }}>+{money(f.amount)}</td>
@@ -138,7 +185,7 @@ export default function Funds() {
                   )}
                 </tr>
               ))}
-              {!list.length && <EmptyRow cols={6}>No funds yet. Add your salary or pocket money to track your balance.</EmptyRow>}
+              {!list.length && <EmptyRow cols={7}>No funds yet. Add your salary or pocket money to track your balance.</EmptyRow>}
             </tbody>
           </table>
         </div>

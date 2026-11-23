@@ -668,10 +668,16 @@ function Categories() {
   const [list, setList] = useState([])
   const [name, setName] = useState('')
   const [msg, setMsg] = useState(null)
+  // Money sent and money received have their own lists (the same name can be in both)
+  const [kind, setKind] = useState('expense')
+  const opts = { params: { kind } }
+  const records = kind === 'income' ? 'money received entr(ies)' : 'expense(s)'
 
   useEffect(() => {
-    api.get('/categories').then((r) => setList(r.data)).catch((e) => setMsg({ type: 'error', text: errorMessage(e) }))
-  }, [])
+    setList([])
+    api.get('/categories', opts).then((r) => setList(r.data)).catch((e) => setMsg({ type: 'error', text: errorMessage(e) }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind])
 
   const run = async (fn, ok) => {
     try {
@@ -685,16 +691,16 @@ function Categories() {
   }
   const add = async (e) => {
     e.preventDefault()
-    if (await run(() => api.post('/categories', { name }), `“${name.trim()}” added. It now shows in every category list.`)) setName('')
+    if (await run(() => api.post('/categories', { name }, opts), `“${name.trim()}” added. It now shows in every category list.`)) setName('')
   }
   const toggle = (c) =>
     run(
-      () => api.patch(`/categories/${encodeURIComponent(c.name)}`, { is_hidden: !c.is_hidden }),
-      c.is_hidden ? `“${c.name}” shows again.` : `“${c.name}” is hidden from every category list. Its ${c.records} expense(s) keep it.`,
+      () => api.patch(`/categories/${encodeURIComponent(c.name)}`, { is_hidden: !c.is_hidden }, opts),
+      c.is_hidden ? `“${c.name}” shows again.` : `“${c.name}” is hidden from every category list. Its ${c.records} ${records} keep it.`,
     )
   const remove = (c) =>
-    window.confirm(`Remove “${c.name}”?${c.records ? ` Its ${c.records} expense(s) keep it, so it stays in the list while they do.` : ''}`) &&
-    run(() => api.delete(`/categories/${encodeURIComponent(c.name)}`), `“${c.name}” removed.`)
+    window.confirm(`Remove “${c.name}”?${c.records ? ` Its ${c.records} ${records} keep it, so it stays in the list while they do.` : ''}`) &&
+    run(() => api.delete(`/categories/${encodeURIComponent(c.name)}`, opts), `“${c.name}” removed.`)
 
   const shown = list.filter((c) => !c.is_hidden)
   const hidden = list.filter((c) => c.is_hidden)
@@ -707,14 +713,24 @@ function Categories() {
             <CategoryOutlined style={{ fontSize: 20, verticalAlign: '-4px', marginRight: 6 }} />
             Categories
           </h3>
-          <p>Add your own categories, and hide the ones you never use (e.g. Smoking). A hidden category disappears from every list; old expenses keep it.</p>
+          <p>Add your own categories, and hide the ones you never use (e.g. Smoking). A hidden category disappears from every list; old records keep it.</p>
         </div>
+      </div>
+      <div className="segmented" role="tablist" aria-label="Expense or income categories" style={{ marginBottom: 12 }}>
+        {[
+          ['expense', 'Expenses (money sent)'],
+          ['income', 'Income (money received)'],
+        ].map(([k, label]) => (
+          <button key={k} type="button" className={kind === k ? 'on' : ''} role="tab" aria-selected={kind === k} onClick={() => { setMsg(null); setKind(k) }}>
+            {label}
+          </button>
+        ))}
       </div>
       <Msg msg={msg} />
       <form className="inline-form" style={{ marginTop: 0 }} onSubmit={add}>
         <div>
           <label>New category</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Pets, Fuel, Kids" maxLength={50} required />
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder={kind === 'income' ? 'e.g. Rental, Ticket Money, Awards' : 'e.g. Pets, Fuel, Kids'} maxLength={50} required />
         </div>
         <div className="form-actions" style={{ alignSelf: 'end' }}>
           <button className="btn secondary">
@@ -769,6 +785,7 @@ export function Aliases() {
   const [aliases, setAliases] = useState([])
   const [groups, setGroups] = useState([])
   const [categories, setCategories] = useState([])
+  const [incomeCategories, setIncomeCategories] = useState([])
   const [modal, setModal] = useState(null) // { initial } for a new alias, { alias } to rename its old records
   const [editing, setEditing] = useState(null)
   const [showAll, setShowAll] = useState(false)
@@ -776,7 +793,13 @@ export function Aliases() {
   const [msg, setMsg] = useState(null)
 
   const load = useCallback(async () => {
-    const [a, g, c] = await Promise.all([api.get('/aliases'), api.get('/aliases/groups', { params: { limit: 500 } }), api.get('/expenses/categories')])
+    const [a, g, c, ic] = await Promise.all([
+      api.get('/aliases'),
+      api.get('/aliases/groups', { params: { limit: 500 } }),
+      api.get('/expenses/categories'),
+      api.get('/funds/categories'),
+    ])
+    setIncomeCategories(ic.data)
     setAliases(a.data)
     setGroups(g.data)
     setCategories(c.data)
@@ -800,7 +823,13 @@ export function Aliases() {
 
   const saveEdit = async (e) => {
     e.preventDefault()
-    const body = { alias: editing.alias, category: editing.category || null, clear_category: !editing.category }
+    const body = {
+      alias: editing.alias,
+      category: editing.category || null,
+      clear_category: !editing.category,
+      income_category: editing.income_category || null,
+      clear_income_category: !editing.income_category,
+    }
     if (await run(() => api.put(`/aliases/${editing.id}`, body), (r) => `Renamed to “${editing.alias}”: ${r.data.renamed} record${r.data.renamed === 1 ? '' : 's'} updated.`))
       setEditing(null)
   }
@@ -866,6 +895,21 @@ export function Aliases() {
                             ))}
                           </datalist>
                         </div>
+                        <div>
+                          <label>Category for money received</label>
+                          <input
+                            value={editing.income_category}
+                            onChange={(e) => setEditing({ ...editing, income_category: e.target.value })}
+                            list="alias-income-cat-edit"
+                            placeholder="Keep their own"
+                            maxLength={50}
+                          />
+                          <datalist id="alias-income-cat-edit">
+                            {incomeCategories.map((c) => (
+                              <option key={c} value={c} />
+                            ))}
+                          </datalist>
+                        </div>
                         <div className="form-actions" style={{ gridColumn: '1 / -1' }}>
                           <span className="hint" style={{ marginRight: 'auto' }}>All {a.records} record(s) with this alias are renamed too.</span>
                           <button type="button" className="btn ghost" onClick={() => setEditing(null)}>
@@ -882,7 +926,10 @@ export function Aliases() {
                     <td>
                       <code>{a.match_key}</code>
                     </td>
-                    <td>{a.category || <span className="muted">—</span>}</td>
+                    <td>
+                      {a.category || <span className="muted">—</span>}
+                      {a.income_category && <div className="hint">Received: {a.income_category}</div>}
+                    </td>
                     <td className="num">
                       {a.records}
                       {a.unnamed > 0 && (
@@ -895,7 +942,7 @@ export function Aliases() {
                     </td>
                     <td>
                       <div className="actions">
-                        <button className="btn ghost small" title="Rename" aria-label={`Rename ${a.alias}`} onClick={() => setEditing({ id: a.id, alias: a.alias, category: a.category || '' })}>
+                        <button className="btn ghost small" title="Rename" aria-label={`Rename ${a.alias}`} onClick={() => setEditing({ id: a.id, alias: a.alias, category: a.category || '', income_category: a.income_category || '' })}>
                           <EditOutlined style={{ fontSize: 18 }} />
                         </button>
                         <button className="btn ghost small" title="Delete" aria-label={`Delete ${a.alias}`} style={{ color: 'var(--danger)' }} onClick={() => remove(a)}>

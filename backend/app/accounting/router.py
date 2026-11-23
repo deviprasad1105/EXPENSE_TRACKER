@@ -361,7 +361,8 @@ def _rules_out(db: Session, books: AccSettings) -> list[RuleOut]:
     usage: Counter = Counter()
     for cat, n in db.execute(select(Expense.category, func.count()).where(Expense.user_id == uid).group_by(Expense.category)):
         usage[("EXPENSE_CATEGORY", autopost.rule_key(cat))] += n
-    for src, n in db.execute(select(Fund.source, func.count()).where(Fund.user_id == uid).group_by(Fund.source)):
+    label = func.coalesce(Fund.category, Fund.source)
+    for src, n in db.execute(select(label, func.count()).where(Fund.user_id == uid).group_by(label)):
         usage[(RULE_FUND_SOURCE, autopost.rule_key(src))] += n
     for cat, n in db.execute(select(Subscription.category, func.count()).where(Subscription.user_id == uid).group_by(Subscription.category)):
         usage[("EXPENSE_CATEGORY", autopost.rule_key(cat))] += n

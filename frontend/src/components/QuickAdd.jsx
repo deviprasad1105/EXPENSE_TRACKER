@@ -15,7 +15,8 @@ const CATEGORY_ICON = {
   shopping: ShoppingBag, health: HeartPulse, entertainment: Clapperboard,
 }
 const iconFor = (c) => CATEGORY_ICON[(c || '').toLowerCase()] || Tag
-const SOURCES = ['Salary', 'Refund', 'Gift', 'Interest', 'Other income']
+// Income categories shown as chips; the rest of the user's list is under More…
+const SOURCES = ['Salary', 'Refunds', 'Dividend', 'Bank Interest', 'Money received']
 
 const shiftDay = (iso, days) => {
   const d = new Date(`${iso}T00:00`)
@@ -45,6 +46,7 @@ export default function QuickAdd({ onClose }) {
   const [day, setDay] = useState(todayISO())
   const [accountId, setAccountId] = useState(undefined)
   const [categories, setCategories] = useState([])
+  const [incomeCategories, setIncomeCategories] = useState([])
   const [accounts, setAccounts] = useState([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -52,9 +54,10 @@ export default function QuickAdd({ onClose }) {
   const amountRef = useRef(null)
 
   useEffect(() => {
-    Promise.all([api.get('/expenses/categories', { params }), api.get('/accounts', { params })])
-      .then(([c, a]) => {
+    Promise.all([api.get('/expenses/categories', { params }), api.get('/accounts', { params }), api.get('/funds/categories', { params })])
+      .then(([c, a, ic]) => {
         setCategories(c.data)
+        setIncomeCategories(ic.data)
         setAccounts(a.data.filter((x) => x.is_active !== false))
       })
       .catch(() => {})
@@ -80,7 +83,7 @@ export default function QuickAdd({ onClose }) {
           account_id: accountId ?? null,
         }, { params })
       } else {
-        await api.post('/funds', { fund_date: day, amount: Number(amount), source: what.trim() || source, account_id: accountId ?? null }, { params })
+        await api.post('/funds', { fund_date: day, amount: Number(amount), source: what.trim() || source, category: source, account_id: accountId ?? null }, { params })
       }
       announceChange()
       // A SIP / money sent to a broker: ask whether to add it to an investment
@@ -137,6 +140,12 @@ export default function QuickAdd({ onClose }) {
             {SOURCES.map((s) => (
               <button type="button" key={s} className={source === s ? 'on' : ''} onClick={() => setSource(s)}>{s}</button>
             ))}
+            {incomeCategories.some((c) => !SOURCES.includes(c)) && (
+              <select value={SOURCES.includes(source) ? '' : source} onChange={(e) => e.target.value && setSource(e.target.value)} aria-label="More income categories">
+                <option value="">More…</option>
+                {incomeCategories.filter((c) => !SOURCES.includes(c)).map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            )}
           </div>
         )}
 

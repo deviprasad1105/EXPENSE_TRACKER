@@ -1004,8 +1004,10 @@ def _create(db: Session, user: User, r: dict, ctx: dict) -> dict:
         # otherwise the description goes in the note, in full
         shown = (full if len(full) > 100 else None) if source == description[:100] else full
         fund_note = " – ".join(x for x in (at, shown, r["note"]) if x)[:500] or None
-        fund = Fund(user_id=user.id, fund_date=d, amount=amount, source=source, note=fund_note, account_id=r["account_id"])
-        label_new(db, fund, aliases=_aliases(db, user, ctx), text=description or source)
+        fund = Fund(user_id=user.id, fund_date=d, amount=amount, source=source, category=source[:50], note=fund_note,
+                    account_id=r["account_id"])
+        # The file's category stays (an alias only renames it)
+        label_new(db, fund, aliases=_aliases(db, user, ctx), text=description or source, set_category=False)
         db.add(fund)
         db.flush()
         return {"fund_id": fund.id}

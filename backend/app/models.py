@@ -355,6 +355,11 @@ class Fund(Base):
     fund_date: Mapped[date] = mapped_column(Date, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     source: Mapped[str] = mapped_column(String(100), nullable=False, default="Income")
+    # The kind of income (Salary, Dividend, Refunds…), as an expense has a category; `source` is who or what paid.
+    # NULL on rows from before this column: set at startup (migrate._data_fixups). No column default: adding the
+    # column with one would fill every old row with it before the fix-up could take the category from `source`.
+    # New rows get "Money received" where they are created when nothing better is known.
+    category: Mapped[str | None] = mapped_column(String(50))
     note: Mapped[str | None] = mapped_column(String(500))
     # The account it was received in (NULL: not tracked)
     account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
@@ -382,6 +387,8 @@ class TransactionAlias(Base):
     alias: Mapped[str] = mapped_column(String(100), nullable=False)
     # Category given to new expenses it names (NULL: keep theirs)
     category: Mapped[str | None] = mapped_column(String(50))
+    # Category given to new money received it names (NULL: keep theirs)
+    income_category: Mapped[str | None] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime)
 
@@ -400,6 +407,21 @@ class UserCategory(Base):
     # Added by the user (True) or only a hidden default / used category (False); kept while hidden so it can be removed.
     # NULL on rows from before this column: set at startup (migrate._data_fixups) from is_hidden.
     is_added: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+
+
+class IncomeCategory(Base):
+    """As UserCategory, for money received: an income category the user added, or one they hid. A separate list,
+    since the same name can be both (e.g. Investment)."""
+
+    __tablename__ = "income_categories"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_income_category"),)
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_added: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
 
 

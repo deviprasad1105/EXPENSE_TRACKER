@@ -184,7 +184,8 @@ def _fund(db: Session, sid: int):
         narration = (f.source or "Money received") + (f" – {f.note}" if f.note else "")
         return Plan(RECEIPT, f.fund_date, narration, _net(
             (payment_ledger(db, books, f.user_id, f.account_id), f.amount),
-            (rule_ledger(db, f.user_id, RULE_FUND_SOURCE, f.source), -f.amount),
+            # Income posts by its category (the kind of income); the source is only a fallback for old rows
+            (rule_ledger(db, f.user_id, RULE_FUND_SOURCE, f.category or f.source), -f.amount),
         ))
 
     return {f.user_id: plan}
@@ -432,7 +433,7 @@ def sync_rule(db: Session, books: AccSettings, rule: PostingRule) -> SyncReport:
     """Re-post the sources a posting rule covers (open periods only), after the rule's ledger changed."""
     uid, report = books.user_id, SyncReport()
     if rule.kind == RULE_FUND_SOURCE:
-        targets = [(FUND, f.id) for f in db.scalars(select(Fund).where(Fund.user_id == uid)) if rule_key(f.source) == rule.rule_key]
+        targets = [(FUND, f.id) for f in db.scalars(select(Fund).where(Fund.user_id == uid)) if rule_key(f.category or f.source) == rule.rule_key]
     else:
         targets = [(EXPENSE, e.id) for e in db.scalars(select(Expense).where(Expense.user_id == uid))
                    if rule_key(e.category) == rule.rule_key]
