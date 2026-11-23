@@ -7,7 +7,8 @@ import ShowChartRounded from '@mui/icons-material/ShowChartRounded'
 import TrendingUpRounded from '@mui/icons-material/TrendingUpRounded'
 import api, { errorMessage, money, niceDate } from '../api'
 import { useAuth } from '../auth'
-import { Msg, PageHeader, StatTile } from '../components/ui'
+import { Alert, Msg, PageHeader, StatTile } from '../components/ui'
+import Modal from '../components/Modal'
 import { InvestDialog } from '../components/InvestPrompt'
 import { useRecordsChanged } from '../components/QuickAdd'
 import { KINDS, ONE } from '../investmentKinds'
@@ -78,7 +79,7 @@ export default function Investments({ embedded = false }) {
   // Added or skipped from the dialog after saving an expense elsewhere
   useRecordsChanged(useCallback(() => load().catch(() => {}), [load]))
 
-  const run = async (fn, ok) => {
+  const run = async (fn, ok, onError) => {
     setMsg(null)
     try {
       await fn()
@@ -86,7 +87,11 @@ export default function Investments({ embedded = false }) {
       if (ok) setMsg({ type: 'ok', text: ok })
       return true
     } catch (e) {
-      setMsg({ type: 'error', text: errorMessage(e) })
+      if (onError) onError(errorMessage(e))
+      else {
+        setMsg({ type: 'error', text: errorMessage(e) })
+        window.scrollTo({ top: 0, behavior: 'smooth' })
+      }
       return false
     }
   }
@@ -452,21 +457,25 @@ function HoldingForm({ h, parents, run, params, close }) {
     kind: h?.kind || 'MUTUAL_FUND',
     is_active: h ? h.is_active : true,
   }))
+  const [err, setErr] = useState(null)
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
   const submit = async (e) => {
     e.preventDefault()
     const body = Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v === '' ? null : v]))
     body.parent_id = body.parent_id == null ? null : Number(body.parent_id)
+    setErr(null)
     const ok = await run(
       () => (h ? api.put(`/investments/${h.id}`, body) : api.post('/investments', body, { params })),
       `${f.name} ${h ? 'updated' : 'added'}.`,
+      setErr,
     )
     if (ok) close()
   }
+  // A pop-up, so it opens where you are (a row's Edit is often far down the page)
   return (
-    <form className="card" onSubmit={submit}>
-      <h3>{h ? `Edit ${h.name}` : 'Add an investment'}</h3>
-      <p className="hint">Only the name is needed. Leave anything you don’t know empty; it shows as “—”.</p>
+    <Modal wide title={h ? `Edit ${h.name}` : 'Add an investment'} subtitle="Only the name is needed. Leave anything you don’t know empty; it shows as “—”." onClose={close}>
+    <form onSubmit={submit}>
+      {err && <Alert type="error">{err}</Alert>}
       <div className="form-grid">
         <div>
           <label>Type</label>
@@ -539,5 +548,6 @@ function HoldingForm({ h, parents, run, params, close }) {
         </div>
       </div>
     </form>
+    </Modal>
   )
 }
