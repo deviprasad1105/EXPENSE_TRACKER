@@ -319,8 +319,8 @@ def test_import_creates_expenses_and_income_with_their_dates(client, make_user, 
     expenses = client.get("/api/expenses", params={"start": str(DAY1), "end": str(DAY2)}, headers=headers(me)).json()
     assert sorted((e["expense_date"], e["item_name"], D(e["amount"])) for e in expenses) == [
         (str(DAY1), "Metro card", D("500")), (str(DAY1), "Swiggy dinner", D("1250.50")), (str(DAY2), "Petrol", D("2000"))]
-    # The edit window runs from the import, not from the old date
-    assert all(e["editable"] and not e["locked"] for e in expenses)
+    # Imported records can be edited like any other
+    assert all(e["editable"] for e in expenses)
     funds = client.get("/api/funds", headers=headers(me)).json()
     assert [(f["fund_date"], f["source"], D(f["amount"])) for f in funds] == [(str(DAY2), "Salary", D("75000"))]
     assert db.scalar(select(func.count(Notification.id)).where(Notification.kind == "BUDGET_ALERT")) == 0

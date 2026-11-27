@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { ArrowDownLeft, ArrowUpRight, Check, Lock, Pencil, Search, Trash2, X } from 'lucide-react'
+import { ArrowDownLeft, ArrowUpRight, Check, Pencil, Search, Trash2, X } from 'lucide-react'
 import api, { errorMessage, money, niceDate, todayISO } from '../api'
 import { useRecordsChanged } from '../components/QuickAdd'
 import { useAuth } from '../auth'
@@ -166,7 +166,7 @@ export default function Expenses() {
 
   return (
     <div>
-      <PageHeader title="Expenses" subtitle="Every transaction: money sent (expenses) and money received, each with its category. An entry can be edited for 3 days after it was saved; older ones of a payee get a new category through an alias (Settings → Transaction aliases)." />
+      <PageHeader title="Expenses" subtitle="Every transaction: money sent (expenses) and money received, each with its category. Any entry can be edited at any time; balances, budgets, the books and an investment it was added to follow the change. To change every entry of a payee at once, use an alias (Settings → Transaction aliases)." />
       <ReadOnlyNotice />
       <Msg msg={msg} />
 
@@ -304,7 +304,6 @@ export default function Expenses() {
                 <th>Account</th>
                 <th className="num">Sent (debit)</th>
                 <th className="num">Received (credit)</th>
-                <th>Status</th>
                 {writable && <th></th>}
               </tr>
             </thead>
@@ -333,7 +332,7 @@ export default function Expenses() {
                       <td className="muted">{acct}</td>
                       <td />
                       <td className="num strong net-pos">{money(r.amount)}</td>
-                      <td colSpan={writable ? 2 : 1}>
+                      <td>
                         <div className="actions">
                           <button className="btn small" onClick={saveEdit}>
                             <Check size={14} /> Save
@@ -373,7 +372,7 @@ export default function Expenses() {
                         </div>
                       </td>
                       <td />
-                      <td colSpan={writable ? 2 : 1}>
+                      <td>
                         <div className="actions">
                           <button className="btn small" onClick={saveEdit}>
                             <Check size={14} /> Save
@@ -410,17 +409,6 @@ export default function Expenses() {
                     <td data-label="Account" className="muted">{acct}</td>
                     <td data-label="Sent" className={`num strong net-neg ${row.kind === 'sent' ? '' : 'stack-hide'}`}>{row.kind === 'sent' ? money(r.amount) : ''}</td>
                     <td data-label="Received" className={`num strong net-pos ${row.kind === 'received' ? '' : 'stack-hide'}`}>{row.kind === 'received' ? money(r.amount) : ''}</td>
-                    <td data-label="Status">
-                      {row.kind === 'received' ? (
-                        <span className="muted small">{r.editable ? 'Editable' : '—'}</span>
-                      ) : r.locked ? (
-                        <span className="badge" title={`Locked since ${r.lock_at.replace('T', ' ')}`}>
-                          <Lock size={12} /> Locked
-                        </span>
-                      ) : (
-                        <span className="badge ok">Editable until {niceDate(r.lock_at.slice(0, 10))}</span>
-                      )}
-                    </td>
                     {writable && (
                       <td>
                         {(row.kind === 'received' || r.editable) && (
@@ -452,7 +440,7 @@ export default function Expenses() {
                   </tr>
                 )
               })}
-              {!rows.length && <EmptyRow cols={writable ? 9 : 8}>No transactions match these filters.</EmptyRow>}
+              {!rows.length && <EmptyRow cols={writable ? 8 : 7}>No transactions match these filters.</EmptyRow>}
             </tbody>
             {rows.length > 0 && (
               <tfoot>
@@ -462,7 +450,7 @@ export default function Expenses() {
                   </td>
                   <td className="num net-neg">{money(sent)}</td>
                   <td className="num net-pos">{money(received)}</td>
-                  <td colSpan={writable ? 2 : 1} />
+                  {writable && <td />}
                 </tr>
               </tfoot>
             )}

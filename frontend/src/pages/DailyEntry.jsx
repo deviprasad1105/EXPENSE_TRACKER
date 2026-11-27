@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { checkInvestments } from '../components/InvestPrompt'
 import { Link } from 'react-router-dom'
-import { CheckCircle2, Lock, Plus, X } from 'lucide-react'
+import { CheckCircle2, Plus, X } from 'lucide-react'
 import api, { errorMessage, money, niceDate, todayISO } from '../api'
 import { useRecordsChanged } from '../components/QuickAdd'
 import { useAuth } from '../auth'
@@ -90,7 +90,7 @@ export default function DailyEntry() {
     ]
     if (!items.length) return setMsg({ type: 'error', text: 'Nothing to save. Select at least one item.' })
     const from = accounts.find((a) => a.id === accountId)
-    if (!window.confirm(`Save ${items.length} item(s) totalling ${money(total)} for ${day}${from ? `, paid from ${accountLabel(from)}` : ''}?\n\nYou can edit them for the next 3 days. After that they are locked.`))
+    if (!window.confirm(`Save ${items.length} item(s) totalling ${money(total)} for ${day}${from ? `, paid from ${accountLabel(from)}` : ''}?\n\nYou can edit them later on the Expenses page.`))
       return
     try {
       const r = await api.post('/expenses/daily', { expense_date: day, items, account_id: accountId ?? null }, { params })
@@ -235,7 +235,6 @@ export default function DailyEntry() {
                 <th>Category</th>
                 <th className="num">Qty</th>
                 <th className="num">Amount</th>
-                <th>Status</th>
               </tr>
             </thead>
             <tbody>
@@ -247,18 +246,9 @@ export default function DailyEntry() {
                   <td>{e.category}</td>
                   <td className="num">{e.quantity}</td>
                   <td className="num strong">{money(e.amount)}</td>
-                  <td>
-                    {e.locked ? (
-                      <span className="badge">
-                        <Lock size={12} /> Locked
-                      </span>
-                    ) : (
-                      <span className="badge ok">Editable until {e.lock_at.replace('T', ' ').slice(0, 16)}</span>
-                    )}
-                  </td>
                 </tr>
               ))}
-              {!saved.length && <EmptyRow cols={5}>Nothing saved for this day yet.</EmptyRow>}
+              {!saved.length && <EmptyRow cols={4}>Nothing saved for this day yet.</EmptyRow>}
             </tbody>
           </table>
         </div>

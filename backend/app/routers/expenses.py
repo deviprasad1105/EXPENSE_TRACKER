@@ -1,12 +1,11 @@
-from datetime import date, timedelta
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from ..config import settings
 from ..database import get_db
-from ..deps import ACCESS_ADMIN, Target, get_current_user, resolve_target
+from ..deps import Target, get_current_user, resolve_target
 from ..models import ROLE_ADMIN, DailyItem, Expense, TransactionAlias, User, UserCategory
 from ..services.accounts import resolve_account
 from ..services.aliases import label_new, payee_key
@@ -18,16 +17,11 @@ from ..timeutil import now_local, today_local
 router = APIRouter(prefix="/api/expenses", tags=["expenses"])
 
 
-def _lock_at(expense: Expense):
-    return expense.created_at + timedelta(days=settings.edit_window_days)
-
-
 def _to_out(expense: Expense, target: Target) -> ExpenseOut:
     out = ExpenseOut.model_validate(expense)
-    out.lock_at = _lock_at(expense)
-    out.locked = now_local() > out.lock_at
-    # Admin can always alter; the owner only inside the edit window; viewers never
-    out.editable = target.level == ACCESS_ADMIN or (target.writable and not out.locked)
+    # The owner (and admin) can change an entry at any time; viewers never. What it feeds (balances, budgets, the
+    # books, an investment it was added to, a bill or subscription it paid) follows the change.
+    out.editable = target.writable
     return out
 
 
@@ -36,11 +30,6 @@ def _load_for_write(db: Session, viewer: User, expense_id: int) -> tuple[Expense
     if not expense:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Expense not found")
     target = resolve_target(db, viewer, expense.user_id, write=True)
-    if target.level != ACCESS_ADMIN and now_local() > _lock_at(expense):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            f"This expense is locked: it can only be changed within {settings.edit_window_days} days of creation",
-        )
     return expense, target
 
 

@@ -1,17 +1,15 @@
-from datetime import date, timedelta
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from ..config import settings
 from ..database import get_db
-from ..deps import ACCESS_ADMIN, Target, get_current_user, resolve_target
+from ..deps import Target, get_current_user, resolve_target
 from ..models import ROLE_ADMIN, Fund, IncomeCategory, TransactionAlias, User
 from ..schemas import FundIn, FundOut, FundUpdate
 from ..services.accounts import resolve_account
 from ..services.aliases import label_new, payee_key
-from ..timeutil import now_local
 from .expenses import like_term
 from ..services.backup import KIND_FUND, create_backup, row_to_dict
 
@@ -35,14 +33,10 @@ def user_income_categories(db: Session, user_id: int, include_hidden: bool = Fal
     return sorted((n for n in names if n.casefold() not in hidden), key=str.casefold)
 
 
-def _lock_at(fund: Fund):
-    return fund.created_at + timedelta(days=settings.edit_window_days)
-
-
 def _to_out(fund: Fund, target: Target) -> FundOut:
     out = FundOut.model_validate(fund)
-    # As for expenses: admin can always change it; the owner only inside the edit window; viewers never
-    out.editable = target.level == ACCESS_ADMIN or (target.writable and now_local() <= _lock_at(fund))
+    # As for expenses: the owner (and admin) can change it at any time; viewers never
+    out.editable = target.writable
     return out
 
 
@@ -100,12 +94,6 @@ def update_fund(fund_id: int, data: FundUpdate, viewer: User = Depends(get_curre
     if not fund:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Fund entry not found")
     target = resolve_target(db, viewer, fund.user_id, write=True)
-    if target.level != ACCESS_ADMIN and now_local() > _lock_at(fund):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            f"This entry is locked: it can only be changed within {settings.edit_window_days} days of creation. "
-            "To change ones like it, give its payee an alias with an income category.",
-        )
     changes = data.model_dump(exclude_unset=True)
     if changes.get("source") and changes["source"] != fund.source:
         if fund.alias_id is None:
