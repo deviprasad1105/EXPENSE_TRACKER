@@ -187,6 +187,10 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 .table { width: 100%; border-collapse: separate; border-spacing: 0; }
 .table th { text-align: left; font-size: 12px; font-weight: 500; color: var(--muted); background: var(--surface-2); padding: 10px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .table td { padding: 12px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; color: var(--text-2); }
+/* Long unbroken text (UPI narrations, file names, emails) wraps inside its column instead of widening the table
+   and pushing the last columns (often the action buttons) out of sight. Amounts and dates never break. */
+.table td { overflow-wrap: anywhere; }
+.table td.num, .table td.nowrap { overflow-wrap: normal; white-space: nowrap; }
 .table tbody tr:last-child td { border-bottom: 0; }
 .table tbody tr:hover td { background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
 .table td.strong, .table td b { color: var(--text); font-weight: 500; }
@@ -201,6 +205,16 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 .empty svg { display: block; margin: 0 auto 8px; opacity: .5; }
 
 .actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
+/* Admin → Users: every column fits without scrolling sideways */
+.users-table select { width: 180px; max-width: 100%; text-overflow: ellipsis; padding-top: 5px; padding-bottom: 5px; }
+.users-table .role-stack { display: flex; flex-direction: column; gap: 2px; }
+.users-table .mini-label { font-size: 11px; color: var(--muted); margin: 4px 0 0; font-weight: 500; }
+.users-table .mini-label:first-child { margin-top: 0; }
+.users-table .role-stack > .badge, .users-table .role-stack > .muted { align-self: flex-start; }
+.users-table .user-badges { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 0 44px; }
+.users-table td { vertical-align: middle; }
+.users-table .cell-user small { display: block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.users-table .actions { width: 150px; justify-content: flex-start; }
 .w-num { width: 76px; text-align: right; }
 .w-amt { width: 120px; text-align: right; }
 
@@ -249,6 +263,9 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 /* ---------- forms ---------- */
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; align-items: end; }
 .form-grid > div, .field { display: flex; flex-direction: column; gap: 6px; }
+/* A drop-down is as wide as its longest option ("Andaman and Nicobar Islands"): never wider than its column */
+.form-grid > *, .field { min-width: 0; }
+.form-grid select, .field select { max-width: 100%; }
 .form-grid .span-all { grid-column: 1 / -1; }
 .hint { font-size: 12px; color: var(--muted); }
 .statement-check { margin: 12px 0 4px; padding: 12px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
@@ -925,6 +942,11 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
   transition: transform .15s ease, box-shadow .15s ease;
 }
 .fab:hover { transform: translateY(-2px); box-shadow: 0 18px 36px -10px rgba(99, 102, 241, .85); }
+/* A round button so it covers as little of the page as possible; "Add" slides out on hover / keyboard focus */
+.fab { width: 56px; height: 56px; padding: 0; justify-content: center; gap: 0; right: 24px; bottom: 24px; transition: transform .15s ease, box-shadow .15s ease, width .18s ease, padding .18s ease; }
+.fab > span { max-width: 0; overflow: hidden; white-space: nowrap; transition: max-width .18s ease; }
+.fab:hover, .fab:focus-visible { width: auto; padding: 0 20px 0 14px; gap: 6px; }
+.fab:hover > span, .fab:focus-visible > span { max-width: 60px; }
 .fab:focus-visible { outline: 3px solid var(--primary-soft); outline-offset: 3px; }
 .bottom-nav { display: none; }
 
@@ -1081,6 +1103,41 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 .review-item { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px 16px; background: var(--surface-2); display: flex; flex-direction: column; gap: 10px; }
 .review-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .review-body { margin: 0; font-size: 13px; color: var(--text-2); overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+/* "To review" as a compact, selectable list (AutoTracking.jsx → ReviewList) */
+.review-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.review-search { flex: 1 1 220px; min-width: 0; }
+.review-bulk { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: var(--surface-2); }
+.review-bulk.on { background: var(--primary-soft); border-color: var(--primary); }
+.review-bulk select, .review-bulk input:not([type="checkbox"]) { width: auto; min-width: 0; max-width: 220px; padding: 5px 8px; font-size: 13px; }
+.review-bulk .spacer { flex: 1; }
+.review-rows { border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); }
+.card > .review-rows:first-of-type, .card-head + .review-rows { border-top: 1px solid var(--border); border-radius: var(--radius-sm); }
+.review-row { border-bottom: 1px solid var(--border); }
+.review-row:last-child { border-bottom: 0; }
+.review-row.picked { background: color-mix(in srgb, var(--primary-soft) 55%, transparent); }
+.review-row.open { background: var(--surface-2); }
+.review-line { display: grid; grid-template-columns: auto 82px minmax(0, 1fr) auto 110px; align-items: center; gap: 12px; padding: 10px 12px; cursor: pointer; }
+.review-line.static { cursor: default; grid-template-columns: 82px minmax(0, 1fr) 110px auto; }
+.review-line:hover { background: var(--surface-2); }
+.review-line input[type="checkbox"] { width: 18px; height: 18px; margin: 0; }
+.review-when { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.review-what { min-width: 0; }
+.review-amt { font-weight: 600; text-align: right; white-space: nowrap; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.warn-text { color: var(--warning); font-weight: 500; }
+.review-item.inline { border: 0; border-top: 1px dashed var(--border); border-radius: 0; margin: 0 12px 12px; padding: 12px 4px 0; background: none; }
+.review-more { width: 100%; margin-top: 8px; }
+@media (max-width: 640px) {
+  .review-line { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "c what amt" "c when flag"; row-gap: 2px; }
+  .review-line > input[type="checkbox"] { grid-area: c; }
+  .review-line .review-what { grid-area: what; }
+  .review-line .review-amt { grid-area: amt; }
+  .review-line .review-when { grid-area: when; }
+  .review-line .review-flag { grid-area: flag; justify-self: end; }
+  .review-line.static { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "what amt" "when btn"; }
+  .review-line.static > .btn { grid-area: btn; justify-self: end; }
+  .review-bulk select, .review-bulk input:not([type="checkbox"]) { max-width: none; flex: 1 1 140px; }
+}
 .phone-steps { display: flex; flex-direction: column; gap: 12px; }
 .phone-step { display: flex; align-items: center; gap: 10px; }
 .phone-step .grow { flex: 1; min-width: 0; }

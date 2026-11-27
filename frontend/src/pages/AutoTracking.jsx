@@ -33,6 +33,8 @@ export default function AutoTracking() {
   const [settings, setSettings] = useState(null)
   const [form, setForm] = useState(null)
   const [messages, setMessages] = useState([])
+  const [waiting, setWaiting] = useState([])
+  const [gaps, setGaps] = useState([])
   const [bills, setBills] = useState([])
   const [accounts, setAccounts] = useState([])
   const [categories, setCategories] = useState([])
@@ -42,11 +44,19 @@ export default function AutoTracking() {
   const [busy, setBusy] = useState('')
 
   const load = useCallback(async () => {
-    const [s, m, b] = await Promise.all([api.get('/autotrack/settings'), api.get('/autotrack/messages', { params: { limit: 300 } }), api.get('/autotrack/bills')])
+    const [s, m, w, b, g] = await Promise.all([
+      api.get('/autotrack/settings'),
+      api.get('/autotrack/messages', { params: { limit: 300 } }),
+      api.get('/autotrack/messages', { params: { status_filter: 'PENDING,FAILED', limit: 1000 } }),
+      api.get('/autotrack/bills'),
+      api.get('/autotrack/gaps').catch(() => ({ data: [] })),
+    ])
     setSettings(s.data)
     setForm((f) => f || { enabled: s.data.enabled, mode: s.data.mode, since: s.data.since || '' })
     setMessages(m.data)
+    setWaiting(w.data)
     setBills(b.data)
+    setGaps(g.data)
     setPhone(await phoneStatus())
   }, [])
 
@@ -91,7 +101,7 @@ export default function AutoTracking() {
     })
   }
 
-  const pending = messages.filter((m) => m.status === 'PENDING' || m.status === 'FAILED')
+  const pending = waiting
   const ready = pending.filter((m) => m.status === 'PENDING' && !m.reason).length
   const shown = useMemo(
     () => messages.filter((m) => filter === 'all' || (filter === 'recorded' ? m.status === 'CREATED' : !['CREATED', 'PENDING', 'FAILED'].includes(m.status))),
@@ -131,28 +141,9 @@ export default function AutoTracking() {
 
       {settings && !settings.enabled && <Alert type="warn">Auto-tracking is off: messages are kept but nothing is recorded. Turn it on above.</Alert>}
 
-      <div className="card">
-        <div className="card-head">
-          <div>
-            <h3>To review</h3>
-            <p>Check each one, change anything, then record it. Add an account’s last 4 digits in <Link to="/settings#accounts">Settings → Bank accounts</Link> so it’s found next time.</p>
-          </div>
-          {ready > 0 && (
-            <button className="btn" disabled={!!busy} onClick={() => run('all', async () => setMsg({ type: 'ok', text: `Recorded ${(await api.post('/autotrack/messages/accept-all')).data.recorded}.` }))}>
-              Record all ready ({ready})
-            </button>
-          )}
-        </div>
-        {!pending.length ? (
-          <p className="muted">Nothing to review.</p>
-        ) : (
-          <div className="review-list">
-            {pending.map((m) => (
-              <ReviewItem key={m.id} m={m} accounts={accounts} categories={categories} run={run} busy={busy} />
-            ))}
-          </div>
-        )}
-      </div>
+      <ReviewList items={pending} accounts={accounts} categories={categories} run={run} busy={busy} setMsg={setMsg} />
+
+      {gaps.length > 0 && <GapsCard gaps={gaps} run={run} busy={busy} setMsg={setMsg} />}
 
       {bills.length > 0 && (
         <div className="card">
@@ -444,6 +435,210 @@ function Step({ ok, title, text, children }) {
   )
 }
 
+// Which group a waiting message is in (the filter chips)
+const needsAccount = (m) => /^(Which account|Choose both accounts)/.test(m.reason || '')
+const maybeSame = (m) => (m.reason || '').includes('may be the same')
+const GROUPS = [
+  ['all', 'All', () => true],
+  ['ready', 'Ready', (m) => m.status === 'PENDING' && !m.reason],
+  ['account', 'Needs account', needsAccount],
+  ['same', 'Maybe already recorded', maybeSame],
+  ['unread', 'Couldn’t read', (m) => m.status === 'FAILED'],
+]
+const PAGE = 50
+
+/**
+ * "To review" for any number of messages: one compact line each, filters, search, and checkboxes with Select all.
+ * The bar above the list acts on everything selected (record into one account and category, don't record, remove);
+ * a line opens to its full form to change one message.
+ */
+function ReviewList({ items, accounts, categories, run, busy, setMsg }) {
+  const [group, setGroup] = useState('all')
+  const [query, setQuery] = useState('')
+  const [picked, setPicked] = useState(() => new Set())
+  const [open, setOpen] = useState(null)
+  const [limit, setLimit] = useState(PAGE)
+  const [bulk, setBulk] = useState({ account_id: '', category: '', suggestion: '' })
+
+  const accountName = useMemo(() => Object.fromEntries(accounts.map((a) => [a.id, a.name + (a.last4 ? ` ••${a.last4}` : '')])), [accounts])
+  const counts = useMemo(() => Object.fromEntries(GROUPS.map(([k, , f]) => [k, items.filter(f).length])), [items])
+  const shown = useMemo(() => {
+    const test = GROUPS.find(([k]) => k === group)[2]
+    const q = query.trim().toLowerCase()
+    return items.filter((m) => test(m) && (!q || `${m.name || ''} ${m.party || ''} ${m.body} ${m.amount || ''}`.toLowerCase().includes(q)))
+  }, [items, group, query])
+  // Drop selections that are no longer in the list (recorded, removed)
+  useEffect(() => {
+    setPicked((p) => {
+      const live = new Set(items.map((m) => m.id))
+      const next = new Set([...p].filter((id) => live.has(id)))
+      return next.size === p.size ? p : next
+    })
+  }, [items])
+
+  const allShown = shown.length > 0 && shown.every((m) => picked.has(m.id))
+  const toggleAll = () => setPicked(allShown ? new Set([...picked].filter((id) => !shown.some((m) => m.id === id))) : new Set([...picked, ...shown.map((m) => m.id)]))
+  const toggle = (id) => setPicked((p) => {
+    const n = new Set(p)
+    n.has(id) ? n.delete(id) : n.add(id)
+    return n
+  })
+  const total = items.filter((m) => picked.has(m.id)).reduce((t, m) => t + (m.direction === 'CREDIT' ? 1 : -1) * Number(m.amount || 0), 0)
+
+  const act = (action) => {
+    const ids = [...picked]
+    if (action === 'delete' && !window.confirm(`Remove ${ids.length} message${ids.length > 1 ? 's' : ''} from the list? Anything recorded from them stays.`)) return
+    run(`bulk-${action}`, async () => {
+      const { data } = await api.post('/autotrack/messages/bulk', {
+        ids,
+        action,
+        account_id: bulk.account_id ? Number(bulk.account_id) : null,
+        category: bulk.category || null,
+        suggestion: bulk.suggestion || null,
+      })
+      const words = { record: 'Recorded', dismiss: 'Not recorded', delete: 'Removed' }
+      const left = Object.entries(data.reasons || {}).map(([why, n]) => `${n}: ${why}`).join('; ')
+      setMsg({ type: data.skipped ? 'warn' : 'ok', text: `${words[action]} ${data.done}.${data.skipped ? ` ${data.skipped} left (${left}).` : ''}` })
+      setPicked(new Set())
+    })
+  }
+
+  return (
+    <div className="card review-card">
+      <div className="card-head">
+        <div>
+          <h3>To review {items.length > 0 && <span className="badge info">{items.length}</span>}</h3>
+          <p>
+            Tick the ones to record (or <b>Select all</b>), choose an account if they need one, then <b>Record</b>. Tap a line to change it on its own.
+            Choosing an account for a message remembers its last digits, so the next ones find it.
+          </p>
+        </div>
+      </div>
+      {!items.length ? (
+        <p className="muted">Nothing to review.</p>
+      ) : (
+        <>
+          <div className="review-tools">
+            <div className="segmented">
+              {GROUPS.filter(([k]) => k === 'all' || counts[k]).map(([k, label]) => (
+                <button key={k} className={group === k ? 'on' : ''} onClick={() => { setGroup(k); setLimit(PAGE) }}>
+                  {label} <span className="muted">{counts[k]}</span>
+                </button>
+              ))}
+            </div>
+            <input className="review-search" type="search" placeholder="Search name, amount, message…" value={query} onChange={(e) => { setQuery(e.target.value); setLimit(PAGE) }} />
+          </div>
+
+          <div className={`review-bulk ${picked.size ? 'on' : ''}`}>
+            <label className="check">
+              <input type="checkbox" checked={allShown} onChange={toggleAll} disabled={!shown.length} />
+              {picked.size ? `${picked.size} selected` : `Select all (${shown.length})`}
+            </label>
+            {picked.size > 0 && (
+              <>
+                <span className="muted small">{money(Math.abs(total))} {total < 0 ? 'out' : 'in'}</span>
+                <select value={bulk.suggestion} onChange={(e) => setBulk({ ...bulk, suggestion: e.target.value })} aria-label="Record as">
+                  <option value="">As read</option>
+                  {KINDS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                </select>
+                <select value={bulk.account_id} onChange={(e) => setBulk({ ...bulk, account_id: e.target.value })} aria-label="Account">
+                  <option value="">Each one’s own account</option>
+                  {accounts.map((a) => <option key={a.id} value={a.id}>{accountName[a.id]}</option>)}
+                </select>
+                <input list="bulk-cats" placeholder="Category (keep)" value={bulk.category} maxLength={50} onChange={(e) => setBulk({ ...bulk, category: e.target.value })} aria-label="Category" />
+                <datalist id="bulk-cats">{categories.map((c) => <option key={c} value={c} />)}</datalist>
+                <span className="spacer" />
+                <button className="btn ghost small" disabled={!!busy} onClick={() => setPicked(new Set())}>Clear</button>
+                <button className="btn ghost small" disabled={!!busy} onClick={() => act('delete')}>Remove</button>
+                <button className="btn secondary small" disabled={!!busy} onClick={() => act('dismiss')}>Don’t record</button>
+                <button className="btn small" disabled={!!busy} onClick={() => act('record')}>
+                  {busy === 'bulk-record' ? 'Recording…' : `Record ${picked.size}`}
+                </button>
+              </>
+            )}
+          </div>
+
+          <div className="review-rows">
+            {!shown.length && <p className="muted" style={{ padding: 12 }}>Nothing matches.</p>}
+            {shown.slice(0, limit).map((m) => (
+              <div key={m.id} className={`review-row ${picked.has(m.id) ? 'picked' : ''} ${open === m.id ? 'open' : ''}`}>
+                <div className="review-line" onClick={() => setOpen(open === m.id ? null : m.id)}>
+                  <input type="checkbox" checked={picked.has(m.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggle(m.id)} aria-label="Select" />
+                  <div className="review-when">{m.txn_date ? niceDate(m.txn_date) : niceDate(m.received_at, { relative: true })}</div>
+                  <div className="review-what">
+                    <div className="strong ellipsis">{m.name || m.party || m.sender || 'Bank message'}</div>
+                    <div className="hint ellipsis">
+                      {m.account_id ? accountName[m.account_id] || 'Account' : <span className="warn-text">No account</span>}
+                      {m.category ? ` · ${m.category}` : ''}
+                      {m.source === 'BALANCE' ? ' · balance check' : m.sender ? ` · ${m.sender}` : ''}
+                    </div>
+                  </div>
+                  <div className="review-flag">
+                    {m.status === 'FAILED' ? <span className="badge bad">Couldn’t read</span>
+                      : needsAccount(m) ? <span className="badge warn">Account?</span>
+                      : maybeSame(m) ? <span className="badge warn">Maybe recorded</span>
+                      : !m.reason ? <span className="badge ok">Ready</span> : <span className="badge info">Check</span>}
+                  </div>
+                  <div className={`review-amt num ${m.direction === 'CREDIT' ? 'net-pos' : ''}`}>{m.amount ? (m.direction === 'CREDIT' ? '+' : '') + money(m.amount) : '—'}</div>
+                </div>
+                {open === m.id && <ReviewItem m={m} accounts={accounts} categories={categories} run={run} busy={busy} />}
+              </div>
+            ))}
+          </div>
+          {shown.length > limit && (
+            <button className="btn ghost review-more" onClick={() => setLimit(limit + PAGE)}>
+              Show {Math.min(PAGE, shown.length - limit)} more ({shown.length - limit} left)
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+/** Payments the bank's balance shows but no message described (no SMS, no notification). */
+function GapsCard({ gaps, run, busy, setMsg }) {
+  return (
+    <div className="card">
+      <div className="card-head">
+        <div>
+          <h3>Payments with no message</h3>
+          <p>
+            The balance in your bank’s messages changed by more than the messages explain, so money moved without an SMS or notification. Add each one
+            to review, then name it. If you already added it by hand, choose <b>Don’t record</b> there.
+          </p>
+        </div>
+      </div>
+      <div className="review-rows">
+        {gaps.map((g) => (
+          <div key={g.key} className="review-row">
+            <div className="review-line static">
+              <div className="review-when">{niceDate(g.before)}</div>
+              <div className="review-what">
+                <div className="strong">{g.direction === 'DEBIT' ? 'Paid out' : 'Received'}: {g.bank || 'Bank'} ••{g.last4}</div>
+                <div className="hint">
+                  Between {niceDate(g.after, { relative: true })} and {niceDate(g.before, { relative: true })} · balance {money(g.after_balance)} → {money(g.before_balance)}
+                </div>
+              </div>
+              <div className={`review-amt num ${g.direction === 'CREDIT' ? 'net-pos' : ''}`}>{money(g.amount)}</div>
+              <button
+                className="btn secondary small"
+                disabled={!!busy}
+                onClick={() => run(`gap-${g.key}`, async () => {
+                  await api.post(`/autotrack/gaps/${encodeURIComponent(g.key)}/review`)
+                  setMsg({ type: 'ok', text: 'Added to “To review”: give it a name and record it.' })
+                })}
+              >
+                Add to review
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ReviewItem({ m, accounts, categories, run, busy }) {
   const [f, setF] = useState({
     suggestion: m.suggestion || (m.direction === 'CREDIT' ? 'INCOME' : 'EXPENSE'),
@@ -473,7 +668,7 @@ function ReviewItem({ m, accounts, categories, run, busy }) {
     </option>
   ))
   return (
-    <form className="review-item" onSubmit={accept}>
+    <form className="review-item inline" onSubmit={accept}>
       <div className="review-head">
         <span className={`badge ${STATUS[m.status][0]}`}>{STATUS[m.status][1]}</span>
         <span className="muted small">

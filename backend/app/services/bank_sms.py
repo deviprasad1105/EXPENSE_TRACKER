@@ -25,7 +25,7 @@ KIND_BILL = "BILL"        # a card / utility bill is due
 # How the money moved
 CH_UPI, CH_CARD, CH_ATM, CH_BANK, CH_CARD_BILL, CH_AUTOPAY = "UPI", "CARD", "ATM", "BANK", "CARD_BILL", "AUTOPAY"
 
-_AMT = r"(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)"
+_AMT = r"(?:rs[.:]?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)"  # Rs.10 / Rs:10 / INR 10 / ₹10
 _AMOUNT = re.compile(_AMT, re.I)
 # "debited by 120.0" (some banks leave out Rs)
 _AMOUNT_VERB = re.compile(r"(?:debited|credited|sent|paid|received|spent|withdrawn|deducted)\s+(?:by|for|with|of)?\s*([\d,]+(?:\.\d{1,2})?)\b", re.I)
@@ -33,7 +33,7 @@ _AMOUNT_VERB = re.compile(r"(?:debited|credited|sent|paid|received|spent|withdra
 _NOT_TXN_AMOUNT = re.compile(
     r"(?:bal(?:ance)?|avl|avbl|available|limit|outstanding|total\s+(?:amt|amount)?\s*due|min(?:imum)?\.?\s*(?:amt|amount)?\s*due"
     r"|due\s+amount|amount\s+due)[\s.:-]*(?:is|of|:)?\s*$", re.I)
-_BALANCE = re.compile(r"(?:avl|avbl|available|a/c|clear|closing|total)?\s*bal(?:ance)?[\s.:-]*(?:is|of|:)?\s*(?:rs\.?|inr|₹)\s*(-?[\d,]+(?:\.\d{1,2})?)", re.I)
+_BALANCE = re.compile(r"(?:avl|avbl|available|a/c|clear|closing|total)?\s*bal(?:ance)?[\s.:-]*(?:is|of|:)?\s*(?:rs[.:]?|inr|₹)\s*(-?[\d,]+(?:\.\d{1,2})?)", re.I)
 _TOTAL_DUE = re.compile(r"(?:total\s+(?:amt\.?|amount)?\s*due|amount\s+due|total\s+outstanding|stmt\s+amt|statement\s+amount|bill\s+amount|bill\s+of)[\s.:-]*(?:is|of|:)?\s*" + _AMT, re.I)
 _MIN_DUE = re.compile(r"min(?:imum)?\.?\s*(?:amt\.?|amount)?\s*due[\s.:-]*(?:is|of|:)?\s*" + _AMT, re.I)
 _DUE_DATE = re.compile(r"(?:due\s*(?:date|on|by)?|pay\s+by|payable\s+by|by)[\s.:-]*(?:is|on)?\s*(\d{1,2}[-/.\s]?(?:\d{1,2}|[A-Za-z]{3,9})[-/.\s,]*\d{2,4})", re.I)
@@ -49,7 +49,7 @@ _PROMO = re.compile(
     # UPI app nudges: "₹100 cashback on your next payment", "Pay your bill now", "Plans starting at ₹199"
     r"|next\s+payment|pay\s+(?:your|now)|recharge\s+now|starting\s+(?:at|from)|reminder|get\s+(?:rs\.?|inr|₹)\s*[\d,]+)\b", re.I)
 _DEBIT = re.compile(
-    r"\b(debited|debit(?:ed)?\s+(?:by|for|with)|spent|withdrawn|withdrawal|paid|sent(?!\s+you)|purchase|used\s+(?:for|at)|txn\s+of"
+    r"\b(debited|debit(?:ed)?\s+(?:by|for|with)|dr\.?\s+from|spent|withdrawn|withdrawal|paid|sent(?!\s+you)|purchase|used\s+(?:for|at)|txn\s+of"
     r"|transaction\s+of|transferred\s+to|payment\s+(?:of|to|for)|charged|deducted|auto[\s-]?debit|autopay|mandate\s+executed"
     # UPI apps: "Your ₹10 payment to X", "₹1 Payment Successful", "Payment completed"
     r"|(?:rs\.?|inr|₹)\s*[\d,.]+\s+payment|payment\s+(?:is\s+|was\s+|has\s+been\s+)?(?:successful|completed|done))\b", re.I)
@@ -77,11 +77,19 @@ _SENT_YOU = re.compile(r"(?:^|[:.!]\s*)([A-Za-z][\w .&'-]{1,60}?)\s+(?:has\s+)?s
 # App hints that aren't part of the payment ("Tap to view details")
 _APP_HINT = re.compile(r"\b(?:tap|click)\s+(?:here\s+)?(?:to|for)\s+(?:view|see|check|know)\s+(?:more\s+)?(?:the\s+)?(?:details?|more|receipt|info)\b", re.I)
 _UPI_APPS = re.compile(r"\b(?:phonepe|google\s*pay|gpay|paytm|bhim|amazon\s*pay|cred|mobikwik|freecharge|navi|super\.?money)\b", re.I)
+# "UPI/431234567899/ZEPTO" (no P2M/P2A part, e.g. Canara Bank)
+_UPI_REF_PATH = re.compile(r"\bupi/\d{6,}/([^/\n]+)", re.I)
+# "spent ... on 20-Nov-26 on FLIPKART" (ICICI cards)
+_ON_DATE_ON = re.compile(r"\bon\s+\d{1,4}[-/ ][A-Za-z0-9]{2,9}[-/ ]\d{2,4}\s+(?:on|at)\s+([A-Za-z0-9][\w .&'*/-]{1,60}?)" + _NAME_END, re.I)
+# Multi-line alerts (Axis cards): the payee is the line after the date / time line
+_DATE_LINE = re.compile(r"^\s*\d{1,4}[-/.][A-Za-z0-9]{1,9}[-/.]\d{2,4}(?:[,\s:]+\d{1,2}:\d{2}(?::\d{2})?)?(?:\s*IST)?\s*$", re.I)
+_NOT_A_NAME_LINE = re.compile(r"^\s*(?:avl|avbl|available|bal|sms|not\s+you|call|if\s+not|upi|ref|card|a/c|inr|rs|₹)", re.I)
+_TO_ACCOUNT = re.compile(r"\b(?:credited\s+)?to\s+a/?c\s*(?:no\.?)?\s*[xX*•]+(\d{3,6})\b", re.I)
 _SEMI_CREDITED = re.compile(r";\s*([A-Za-z][\w .&'-]{1,60}?)\s+credited", re.I)
 # "from HDFC Bank A/c", "to your a/c", "by NEFT": the user's own bank or the channel, not the other party
 _NOT_A_PARTY = re.compile(
     r"^(?:your|a/?c|ac|acct|account|card|credit\s+card|debit\s+card|bank|\w+\s+bank\b|(?:rs|inr)\b|neft|imps|rtgs|upi|net\s*banking"
-    r"|atm|pos|cash|mobile|the|a|an|self|xx|\d)(?:\b|$)", re.I)
+    r"|atm|pos|cash|mobile|the|a|an|self|xx|\d|block|transfer|deposit|no\.?$)(?:\b|$)", re.I)
 # Where a bank's own footer starts after the payee in a UPI narration ("SWIGGY LIMITED. Not you? SMS BLOCKUPI…")
 _FOOTER = re.compile(r"\.\s|\s+(?:not\s+you|if\s+not|call|sms\s|-\s*\w+\s+bank|avl|bal)\b", re.I)
 _CARD_BILL_DEBIT = re.compile(r"\b(credit\s*card\s+(?:bill|payment|dues?)|towards\s+(?:your\s+)?(?:\w+\s+)?credit\s*card|cc\s+(?:bill|payment)|card\s+bill\s+payment|billdesk.*card|cred\s+club)\b", re.I)
@@ -189,6 +197,12 @@ def _money(text: str) -> Decimal | None:
     return value if value > 0 else None
 
 
+def _balance(text: str) -> Decimal | None:
+    """A balance keeps its sign: an overdrawn account shows "Avl bal INR -99.00"."""
+    value = _money(text.lstrip("-"))
+    return None if value is None else (-value if text.startswith("-") else value)
+
+
 def _txn_amount(flat: str) -> Decimal | None:
     """The first amount that isn't a balance, a limit or a due amount."""
     for rx in (_AMOUNT, _AMOUNT_VERB):
@@ -234,19 +248,28 @@ def _clean_party(name: str | None) -> str | None:
     return name[:80]
 
 
+def _line_after_date(text: str) -> str | None:
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    for i, line in enumerate(lines[:-1]):
+        if _DATE_LINE.match(line) and not _NOT_A_NAME_LINE.match(lines[i + 1]) and re.search(r"[A-Za-z]{2}", lines[i + 1]):
+            return _clean_party(lines[i + 1])
+    return None
+
+
 def _party(text: str, flat: str, direction: str, channel: str) -> str | None:
-    m = UPI_PATH_RE.search(text)
-    if m:
-        name = _clean_party(_FOOTER.split(m.group(1), 1)[0])
-        if name:
-            return name
+    for rx in (UPI_PATH_RE, _UPI_REF_PATH):
+        m = rx.search(text)
+        if m:
+            name = _clean_party(_FOOTER.split(m.group(1), 1)[0])
+            if name:
+                return name
     if direction == CREDIT and _SALARY.search(flat):
         return "Salary"
     if direction == CREDIT and _INTEREST.search(flat):
         return "Interest"
     tries = []
     if channel in (CH_CARD, CH_ATM) or direction == DEBIT:
-        tries += [_AT, _INFO]
+        tries += [_AT, _ON_DATE_ON, _INFO]
     if direction == DEBIT:
         m = _SEMI_CREDITED.search(flat)
         if m and _clean_party(m.group(1)):
@@ -262,6 +285,13 @@ def _party(text: str, flat: str, direction: str, channel: str) -> str | None:
             name = _clean_party(m.group(1))
             if name:
                 return name
+    name = _line_after_date(text)
+    if name:
+        return name
+    # Sent to another bank account, with no name: "credited to a/c no. XXXXX5678", "to A/c XX9999"
+    m = _TO_ACCOUNT.search(flat) if direction == DEBIT else None
+    if m:
+        return f"A/c ••{m.group(1)[-4:]}"
     if direction == CREDIT and _REFUND.search(flat):
         return "Refund"
     return None
@@ -353,7 +383,7 @@ def parse_bank_message(text: str, sender: str | None = None, received: date | No
         last4=_digits(last4),
         party=_party(text, flat, direction, channel) if channel != CH_CARD_BILL else None,
         vpa=vpas[-1] if direction == DEBIT and vpas else (vpas[0] if vpas else None),
-        ref=ref, balance=_money(bal.group(1).lstrip("-")) if bal else None,
+        ref=ref, balance=_balance(bal.group(1)) if bal else None,
         txn_date=_date_near(parse_date(flat), received),
         # Paying a card bill from the bank: the account in the message is the bank's; the card is where it went
         is_credit_card=(channel == CH_CARD_BILL and direction == CREDIT)
