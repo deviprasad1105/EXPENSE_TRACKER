@@ -35,7 +35,7 @@ public class BankNotificationListener extends NotificationListenerService {
             while (recent.size() > RECENT) recent.removeFirst();
         }
         AutoTrackStore.enqueue(this, appName(pkg), body, sbn.getPostTime(), "NOTIFICATION");
-        Uploader.flushAsync(this, null);
+        UploadWorker.schedule(this);
     }
 
     /**
@@ -68,6 +68,12 @@ public class BankNotificationListener extends NotificationListenerService {
         if (s.isEmpty() || out.indexOf(s) >= 0) return;
         if (out.length() > 0) out.append(out.indexOf(":") < 0 ? ": " : ". ");
         out.append(s);
+    }
+
+    @Override
+    public void onListenerConnected() {
+        // Connected again (after an update or a restart): send anything that waited meanwhile
+        if (AutoTrackStore.enabled(this) && AutoTrackStore.queued(this) > 0) UploadWorker.schedule(this);
     }
 
     @Override

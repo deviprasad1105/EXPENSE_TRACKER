@@ -38,6 +38,7 @@ def decode_access_token(token: str) -> tuple[int, int] | None:
 
 # Sign-in tickets: proof of one step of signing in, sent back with the next step
 MFA_TICKET = "mfa"            # the password (or temporary password) was right; the authenticator code comes next
+EMAIL_CODE_TICKET = "mail"     # the earlier steps passed; the code emailed for this sign-in comes next (admin setting)
 NEW_PASSWORD_TICKET = "newpw"  # signed in with a temporary password: a new password must be chosen next
 
 

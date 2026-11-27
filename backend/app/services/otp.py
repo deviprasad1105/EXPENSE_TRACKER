@@ -15,7 +15,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models import OTP_PASSWORD, OTP_PURGE, OTP_RESTORE, OTP_SIGNUP, OTP_USERNAME, AppSetting, EmailOtp, RecoveryOtp, User
+from ..models import OTP_LOGIN, OTP_PASSWORD, OTP_PURGE, OTP_RESTORE, OTP_SIGNUP, OTP_USERNAME, AppSetting, EmailOtp, RecoveryOtp, User
 from ..timeutil import now_local
 from .mailer import send_email
 
@@ -27,6 +27,7 @@ _PURPOSE_TEXT = {
     OTP_SIGNUP: ("confirm your email address", "confirm your email"),
     OTP_PASSWORD: ("change your password", "password change"),
     OTP_USERNAME: ("change your username", "username change"),
+    OTP_LOGIN: ("sign in", "sign in"),
 }
 
 

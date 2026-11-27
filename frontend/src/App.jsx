@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { canUseSplits, hasFeature, useAuth } from './auth'
 import AppUpdateGate from './components/AppUpdateGate'
 import Layout from './components/Layout'
+import PasscodeGate from './components/Passcode'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
@@ -89,7 +90,9 @@ export default function App() {
       <Route
         element={
           <Protected>
-            <Layout />
+            <PasscodeGate>
+              <Layout />
+            </PasscodeGate>
           </Protected>
         }
       >

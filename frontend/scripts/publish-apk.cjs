@@ -27,7 +27,9 @@ const outDir = path.resolve(front, '..', 'mobile-app')
 const keystore = process.env.EXPENSE_TRACKER_KEYSTORE || path.join(os.homedir(), '.android-keys', 'keystore.properties')
 
 if (!fs.existsSync(keystore)) {
-  console.error(`No signing key settings at ${keystore}.\nAsk the app's maintainer for the key file; see mobile-app/README.md.`)
+  console.error(`No signing key settings at ${keystore}.\n` +
+    'You don\'t need the key: publish from GitHub instead (Actions -> "Publish Android app" -> Run workflow), which signs\n' +
+    'the app with the key kept in the repository\'s secrets. See "Android app" in the README.')
   process.exit(1)
 }
 

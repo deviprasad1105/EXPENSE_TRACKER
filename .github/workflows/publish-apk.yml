@@ -1,0 +1,122 @@
+# Builds the Android app from this branch, signs it with the release key kept in the repository's secrets, and
+# commits mobile-app/ExpenseTracker.apk + version.json back to the same branch. Anyone with write access can run it
+# (Actions -> Publish Android app -> Run workflow), so nobody needs a copy of the key on their own computer.
+#
+# Secrets (Settings -> Secrets and variables -> Actions):
+#   ANDROID_KEYSTORE_BASE64   the release .jks, base64-encoded
+#   ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD
+name: Publish Android app
+
+on:
+  workflow_dispatch:
+    inputs:
+      require:
+        description: "Every older app must update before it can be used"
+        type: boolean
+        default: false
+      min_version:
+        description: "Or: versions below this version code must update (leave empty to keep the current minimum)"
+        type: string
+        default: ""
+      bump:
+        description: "Raise the version (turn off only to rebuild the same version)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-apk
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::The ANDROID_KEYSTORE_BASE64 secret is missing. Ask the repository owner to add the signing key secrets."
+            exit 1
+          fi
+          dir="$RUNNER_TEMP/android-keys"
+          mkdir -p "$dir"
+          echo "$KEYSTORE_BASE64" | base64 -d > "$dir/release.jks"
+          {
+            echo "storeFile=$dir/release.jks"
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > "$dir/keystore.properties"
+          echo "EXPENSE_TRACKER_KEYSTORE=$dir/keystore.properties" >> "$GITHUB_ENV"
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Signing certificate of the published app
+        run: |
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
+          echo "APKSIGNER=$apksigner" >> "$GITHUB_ENV"
+          "$apksigner" verify --print-certs mobile-app/ExpenseTracker.apk | grep "SHA-256" | head -1 > "$RUNNER_TEMP/old-cert.txt"
+          cat "$RUNNER_TEMP/old-cert.txt"
+
+      - name: Build and sign
+        working-directory: frontend
+        env:
+          BUMP: ${{ inputs.bump }}
+          REQUIRE: ${{ inputs.require }}
+          MIN_VERSION: ${{ inputs.min_version }}
+        run: |
+          args=""
+          if [ "$BUMP" != "true" ]; then args="$args --no-bump"; fi
+          if [ "$REQUIRE" = "true" ]; then args="$args --require";
+          elif [ -n "$MIN_VERSION" ]; then
+            case "$MIN_VERSION" in *[!0-9]*) echo "::error::min_version must be a number"; exit 1;; esac
+            args="$args --min=$MIN_VERSION"
+          fi
+          npm run publish:apk -- $args
+
+      - name: Same key as before (so it installs over the old app)
+        run: |
+          "$APKSIGNER" verify --print-certs mobile-app/ExpenseTracker.apk | grep "SHA-256" | head -1 > "$RUNNER_TEMP/new-cert.txt"
+          if ! cmp -s "$RUNNER_TEMP/old-cert.txt" "$RUNNER_TEMP/new-cert.txt"; then
+            echo "::error::The new APK is signed with a different key than the published one. Phones could not update. Check the signing secrets."
+            exit 1
+          fi
+
+      - name: Commit the new APK
+        run: |
+          version=$(node -p "require('./frontend/app-version.json').versionName")
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add mobile-app frontend/app-version.json
+          git commit -m "Android app $version (built by $GITHUB_ACTOR with the Publish Android app workflow)"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Remove the key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/android-keys"

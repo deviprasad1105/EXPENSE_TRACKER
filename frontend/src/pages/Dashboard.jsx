@@ -36,7 +36,9 @@ const LEVEL = {
   WARN: { label: 'Near limit', Icon: WarningAmberRounded, cls: 'warn' },
   OVER: { label: 'Over budget', Icon: ErrorRounded, cls: 'bad' },
 }
-const TONE_ICON = { good: TrendingDownRounded, bad: TrendingUpRounded, neutral: InfoOutlined }
+// An insight about a change points the way the number moved (green or red says whether that's good); others get a plain icon
+const DIR_ICON = { up: TrendingUpRounded, down: TrendingDownRounded }
+const TONE_ICON = { good: CheckCircleRounded, bad: WarningAmberRounded, neutral: InfoOutlined }
 const SECTIONS = [
   ['total', 'All spending'],
   ['expenses', 'Expenses'],
@@ -616,7 +618,7 @@ export default function Dashboard() {
         {data.insights.length > 0 && (
           <ul className="insight-list">
             {data.insights.map((i) => {
-              const Icon = TONE_ICON[i.tone]
+              const Icon = DIR_ICON[i.dir] || TONE_ICON[i.tone] || InfoOutlined
               return (
                 <li key={i.text} className={i.tone}>
                   <Icon style={{ fontSize: 18 }} />

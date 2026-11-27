@@ -13,16 +13,24 @@ Rules (all enforced here):
 - Every change notifies the other members.
 """
 
+from datetime import timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, object_session
 
 from ..database import get_db
 from ..deps import FEATURE_SPLIT, get_current_user, has_feature, require_feature
 from ..models import (
+    SHARE_AMOUNT,
     SHARE_EQUAL,
+    SPLIT_ASK,
+    SPLIT_DONE,
+    SPLIT_SELF,
+    SPLIT_SKIPPED,
+    BankMessage,
+    SplitPayee,
     STATUS_APPROVED,
     Notification,
     SplitBill,
@@ -39,7 +47,10 @@ from ..schemas import (
     SplitMemberAdd,
     SplitMemberRemove,
     SplitMemberUpdate,
+    SplitPayeeIn,
+    SplitPromptAnswer,
     SplitSettlementIn,
+    SplitShareIn,
     UserBrief,
 )
 from ..services.splits import (
@@ -51,6 +62,7 @@ from ..services.splits import (
     pair_debts,
     remove_participant,
 )
+from ..services.split_payees import normal_vpa
 from ..timeutil import now_local, today_local
 
 router = APIRouter(prefix="/api/splits", tags=["split bills"])
@@ -341,6 +353,11 @@ def delete_group(group_id: int, user: User = Depends(get_current_user), db: Sess
             f"Settle up first: {len(debts)} balance(s) totalling {_money(open_total)} are still open in this group",
         )
     _notify(db, group, user, "deleted the group. All balances were settled.")
+    # Payments asked about for this group forget it (older databases have no foreign keys on these columns)
+    payee_ids = [p.id for p in group.payees]
+    if payee_ids:
+        db.execute(update(BankMessage).where(BankMessage.split_payee_id.in_(payee_ids))
+                   .values(split_payee_id=None, split_bill_id=None, split_status=None))
     db.delete(group)
     db.commit()
 
@@ -526,6 +543,7 @@ def update_bill(bill_id: int, data: SplitBillIn, user: User = Depends(get_curren
 def delete_bill(bill_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     group, bill = _load_bill(db, bill_id, user)
     _notify(db, group, user, f"deleted the bill '{bill.title}' of {_money(bill.total_amount)}")
+    db.execute(update(BankMessage).where(BankMessage.split_bill_id == bill.id).values(split_bill_id=None))
     group.bills.remove(bill)
     db.commit()
 
@@ -577,3 +595,144 @@ def delete_settlement(settlement_id: int, user: User = Depends(get_current_user)
     _notify(db, group, user, f"deleted a recorded payment of {_money(st.amount)}", extra_user_ids=extra)
     group.settlements.remove(st)
     db.commit()
+
+
+
+# ---------- payees the group pays together, and the "split this?" pop-up ----------
+# Payments older than this are no longer asked about
+PROMPT_DAYS = 30
+
+
+def _payee_out(p: SplitPayee) -> dict:
+    ids = [int(x) for x in (p.default_members or "").split(",") if x.strip().isdigit()]
+    return {"id": p.id, "group_id": p.group_id, "label": p.label, "vpa": p.vpa, "name_match": p.name_match,
+            "default_member_ids": ids, "is_active": p.is_active, "created_at": p.created_at}
+
+
+def _apply_payee(group: SplitGroup, p: SplitPayee, data: SplitPayeeIn) -> None:
+    vpa, word = normal_vpa(data.vpa), (data.name_match or "").strip() or None
+    if not vpa and not word:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Enter the UPI ID, or a word from the name the bank shows (e.g. DMART)")
+    active = {m.id for m in group.members if m.active}
+    if not set(data.default_member_ids) <= active:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose people who are in the group")
+    p.label, p.vpa, p.name_match, p.is_active = data.label.strip(), vpa, word, data.is_active
+    p.default_members = ",".join(str(i) for i in dict.fromkeys(data.default_member_ids)) or None
+
+
+@router.get("/groups/{group_id}/payees")
+def list_payees(group_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The payees you added to this group (each member keeps their own: they match only your payments)."""
+    _load_group(db, group_id, user)
+    rows = db.scalars(select(SplitPayee).where(SplitPayee.group_id == group_id, SplitPayee.user_id == user.id).order_by(SplitPayee.id))
+    return [_payee_out(p) for p in rows]
+
+
+@router.post("/groups/{group_id}/payees", status_code=201)
+def add_payee(group_id: int, data: SplitPayeeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    group, _ = _load_group(db, group_id, user)
+    vpa = normal_vpa(data.vpa)
+    if vpa and db.scalar(select(SplitPayee.id).where(SplitPayee.user_id == user.id, SplitPayee.vpa == vpa, SplitPayee.is_active.is_(True))):
+        raise HTTPException(status.HTTP_409_CONFLICT, "You already split payments to this UPI ID in a group. One UPI ID can belong to one group.")
+    p = SplitPayee(group_id=group.id, user_id=user.id, label="")
+    _apply_payee(group, p, data)
+    db.add(p)
+    db.commit()
+    return _payee_out(p)
+
+
+def _my_payee(db: Session, payee_id: int, user: User) -> tuple[SplitGroup, SplitPayee]:
+    p = db.get(SplitPayee, payee_id)
+    if not p or p.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Payee not found")
+    group, _ = _load_group(db, p.group_id, user)
+    return group, p
+
+
+@router.put("/payees/{payee_id}")
+def update_payee(payee_id: int, data: SplitPayeeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    group, p = _my_payee(db, payee_id, user)
+    _apply_payee(group, p, data)
+    db.commit()
+    return _payee_out(p)
+
+
+@router.delete("/payees/{payee_id}", status_code=204)
+def delete_payee(payee_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _, p = _my_payee(db, payee_id, user)
+    # Questions still waiting about it go away; splits already made stay
+    for msg in db.scalars(select(BankMessage).where(BankMessage.split_payee_id == p.id)):
+        msg.split_payee_id = None
+        if msg.split_status == SPLIT_ASK:
+            msg.split_status = None
+    db.delete(p)
+    db.commit()
+
+
+def _prompt_out(msg: BankMessage, user: User) -> dict | None:
+    p = msg.split_payee
+    group = p and p.group
+    me = group and _member_of(group, user.id)
+    if not me:
+        return None
+    defaults = _payee_out(p)["default_member_ids"]
+    active = [m for m in group.members if m.active]
+    return {
+        "id": msg.id,
+        "amount": msg.amount,
+        "date": msg.txn_date or msg.received_at.date(),
+        "party": msg.name or msg.party,
+        "vpa": msg.vpa,
+        "body": msg.body,
+        "label": p.label,
+        "group": {"id": group.id, "name": group.name},
+        "me": me.id,
+        "members": [_person(m) for m in active],
+        "default_member_ids": [i for i in defaults if any(m.id == i for m in active)] or [m.id for m in active],
+    }
+
+
+@router.get("/prompts")
+def list_prompts(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Payments to the user's split payees still waiting for an answer, newest first."""
+    since = now_local() - timedelta(days=PROMPT_DAYS)
+    rows = db.scalars(select(BankMessage).where(
+        BankMessage.user_id == user.id, BankMessage.split_status == SPLIT_ASK, BankMessage.received_at >= since,
+    ).order_by(BankMessage.received_at.desc()).limit(20))
+    return [out for msg in rows if (out := _prompt_out(msg, user))]
+
+
+@router.post("/prompts/{message_id}")
+def answer_prompt(message_id: int, data: SplitPromptAnswer, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Split it among the chosen members (amounts can be changed), add it as yours alone (SELF), or not (SKIP)."""
+    msg = db.get(BankMessage, message_id)
+    if not msg or msg.user_id != user.id or msg.split_status != SPLIT_ASK:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "This payment has already been answered")
+    if data.action == "SKIP" or not msg.split_payee:
+        msg.split_status = SPLIT_SKIPPED
+        db.commit()
+        return {"status": msg.split_status}
+    group, me = _load_group(db, msg.split_payee.group_id, user)
+    if data.action == "SELF":
+        shares = [SplitShareIn(member_id=me.id)]
+    else:
+        if not data.shares:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose who shares it, or tap “Only me”")
+        fixed = sum((s.amount for s in data.shares if s.amount is not None), Decimal(0))
+        if fixed > msg.amount or (all(s.amount is not None for s in data.shares) and fixed != msg.amount):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"The amounts must add up to {_money(msg.amount)} (now {_money(fixed)})")
+        shares = [SplitShareIn(member_id=s.member_id, share_type=SHARE_EQUAL if s.amount is None else SHARE_AMOUNT,
+                               share_value=s.amount) for s in data.shares]
+    title = (data.title or msg.split_payee.label or msg.name or "Shared payment").strip()[:100]
+    bill_in = SplitBillIn(title=title, total_amount=msg.amount, bill_date=min(msg.txn_date or today_local(), today_local()),
+                          paid_by=me.id, shares=shares, note=f"Paid by UPI to {msg.vpa or msg.party or msg.split_payee.label}"[:500])
+    bill = SplitBill(group_id=group.id, created_by=user.id, title="", total_amount=0, bill_date=bill_in.bill_date, paid_by=me.id)
+    _apply_bill(group, bill, bill_in)
+    group.bills.append(bill)
+    db.flush()
+    msg.split_bill_id = bill.id
+    msg.split_status = SPLIT_SELF if data.action == "SELF" else SPLIT_DONE
+    if data.action == "SPLIT":
+        _notify(db, group, user, f"added the bill '{bill.title}' of {_money(bill.total_amount)}, paid by {me.name}")
+    db.commit()
+    return {"status": msg.split_status, "bill_id": bill.id, "group_id": group.id}

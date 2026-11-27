@@ -27,6 +27,7 @@ from ..models import (
     AccountTransfer, BankMessage, Expense, Fund, Notification, UpiEvent, User,
 )
 from ..timeutil import now_local, today_local
+from . import split_payees
 from .accounts import resolve_account
 from .aliases import label_new
 from .bank_sms import (
@@ -247,6 +248,7 @@ def record_message(db: Session, user: User, sender: str | None, body: str, recei
     for attr in ("kind", "direction", "channel", "amount", "bank", "last4", "ref", "balance", "txn_date", "due_date", "min_due"):
         setattr(msg, attr, getattr(parsed, attr))
     msg.party = parsed.party and parsed.party[:120]
+    msg.vpa = parsed.vpa and parsed.vpa[:100]
     accounts = list(db.scalars(select(Account).where(Account.user_id == user.id)))
 
     if parsed.kind == KIND_BILL:
@@ -281,8 +283,27 @@ def record_message(db: Session, user: User, sender: str | None, body: str, recei
             create_record(db, user, msg)
         except HTTPException as e:
             msg.status, msg.reason = MSG_PENDING, str(e.detail)
+    # Paid a shop a split group shares: ask whether to split it (whether or not it was recorded yet)
+    split_payees.attach(db, user, msg)
     db.flush()
     return msg, True
+
+
+def record_failed(db: Session, user: User, sender: str | None, body: str, received_at: datetime | None,
+                  source: str) -> BankMessage:
+    """Keep a message that couldn't be recorded because of an error, so the user sees it in "To review"."""
+    body = (body or "").strip()[:MAX_BODY]
+    received = _received(received_at)
+    digest = _body_hash(user.id, sender, body, received)
+    seen = db.scalar(select(BankMessage).where(BankMessage.user_id == user.id, BankMessage.body_hash == digest).limit(1))
+    if seen:
+        return seen
+    msg = BankMessage(user_id=user.id, received_at=received, source=source, sender=(sender or "")[:80] or None,
+                      body=body, body_hash=digest, status=MSG_FAILED,
+                      reason="Something went wrong reading this message. Add it by hand if it is a transaction.")
+    db.add(msg)
+    db.flush()
+    return msg
 
 
 def _record_bill(db: Session, user: User, msg: BankMessage, parsed: ParsedBank, accounts: list[Account]) -> BankMessage:

@@ -38,6 +38,8 @@ const api = axios.create({ baseURL: `${isApp ? SITE_ORIGIN : ''}/api` })
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
   if (token) config.headers.Authorization = `Bearer ${token}`
+  // Tells the server a sign-in came from the Android app, and which version
+  if (isApp) config.headers['X-Client'] = `android-app/${APP_VERSION.versionName}`
   return config
 })
 

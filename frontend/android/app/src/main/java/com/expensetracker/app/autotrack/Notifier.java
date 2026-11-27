@@ -26,11 +26,14 @@ public final class Notifier {
     static final String CHANNEL = "autotrack";
     public static final String EXTRA_ROUTE = "autotrack_route";
     static final String ROUTE = "/auto-tracking";
+    // The pop-up shows on any page; the splits list is a sensible page behind it
+    static final String SPLIT_ROUTE = "/splits";
 
     private Notifier() {}
 
     static void announce(Context c, JSONArray results) {
         if (results == null || results.length() == 0 || !allowed(c)) return;
+        askSplits(c, results);
         int recorded = 0, review = 0, bills = 0;
         JSONObject only = null;
         for (int i = 0; i < results.length(); i++) {
@@ -46,13 +49,30 @@ public final class Notifier {
         int total = recorded + review + bills;
         if (total == 0) return;
         if (total == 1) {
-            show(c, (int) (only.optLong("id") % Integer.MAX_VALUE), titleFor(only), textFor(only));
+            show(c, (int) (only.optLong("id") % Integer.MAX_VALUE), titleFor(only), textFor(only), ROUTE);
         } else {
             StringBuilder t = new StringBuilder();
             if (recorded > 0) t.append(recorded).append(" recorded");
             if (review > 0) t.append(t.length() > 0 ? ", " : "").append(review).append(" to review");
             if (bills > 0) t.append(t.length() > 0 ? ", " : "").append(bills).append(bills == 1 ? " bill due" : " bills due");
-            show(c, 1, "Auto-tracking", t.toString());
+            show(c, 1, "Auto-tracking", t.toString(), ROUTE);
+        }
+    }
+
+    /** "Split ₹900 at DMart?": a payment to a shop one of the user's split groups shares. Tapping opens the question. */
+    private static void askSplits(Context c, JSONArray results) {
+        for (int i = 0; i < results.length(); i++) {
+            JSONObject r = results.optJSONObject(i);
+            if (r == null || !"ASK".equals(r.optString("split_status"))) continue;
+            String label = r.optString("split_label", "");
+            String shop = label, group = "your group";
+            int dot = label.lastIndexOf(" · ");
+            if (dot > 0) {
+                shop = label.substring(0, dot);
+                group = label.substring(dot + 3);
+            }
+            show(c, (int) ((r.optLong("id") + 500000) % Integer.MAX_VALUE), "Split " + money(r, "amount") + " at " + shop + "?",
+                "Tap to split it with " + group + ", or keep it as yours.", SPLIT_ROUTE);
         }
     }
 
@@ -95,7 +115,7 @@ public final class Notifier {
         return NotificationManagerCompat.from(c).areNotificationsEnabled();
     }
 
-    private static void show(Context c, int id, String title, String text) {
+    private static void show(Context c, int id, String title, String text, String route) {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = c.getSystemService(NotificationManager.class);
             if (nm != null && nm.getNotificationChannel(CHANNEL) == null) {
@@ -105,12 +125,12 @@ public final class Notifier {
             }
         }
         Intent open = new Intent(c, MainActivity.class)
-            .putExtra(EXTRA_ROUTE, ROUTE)
+            .putExtra(EXTRA_ROUTE, route)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0);
         PendingIntent tap = PendingIntent.getActivity(c, id, open, flags);
         NotificationCompat.Builder b = new NotificationCompat.Builder(c, CHANNEL)
-            .setSmallIcon(c.getApplicationInfo().icon)
+            .setSmallIcon(com.expensetracker.app.R.drawable.ic_stat_autotrack)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(new NotificationCompat.BigTextStyle().bigText(text))

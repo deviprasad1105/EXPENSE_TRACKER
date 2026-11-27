@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class ORM(BaseModel):
@@ -34,11 +34,74 @@ class LoginOut(BaseModel):
     # Signed in with a temporary password: send password_token with the new password to /login/new-password
     password_change_required: bool = False
     password_token: str | None = None
+    # The admin turned on "email code at sign-in": send email_token with the emailed code to /login/email-code
+    email_code_required: bool = False
+    email_token: str | None = None
+    email_hint: str | None = None
+    expires_in_seconds: int | None = None
 
 
 class MfaLoginIn(BaseModel):
     mfa_token: str = Field(min_length=10, max_length=1000)
     code: str = Field(min_length=1, max_length=20, description="6-digit code from the app, or a recovery code")
+
+
+class EmailCodeLoginIn(BaseModel):
+    email_token: str = Field(min_length=10, max_length=1000)
+    code: str = Field(min_length=1, max_length=10)
+
+
+class EmailCodeResendIn(BaseModel):
+    email_token: str = Field(min_length=10, max_length=1000)
+
+
+class SecurityPolicy(BaseModel):
+    """App-wide sign-in rules (Admin -> Settings)."""
+
+    login_email_otp: bool = False
+    passcode_required: bool = False
+
+
+class PasscodeSetIn(BaseModel):
+    passcode: str = Field(pattern=r"^\d{4,6}$", description="4 to 6 digits")
+    # Needed to change a passcode that is already set (not for the first one)
+    password: str | None = Field(default=None, max_length=100)
+
+
+class PasscodeVerifyIn(BaseModel):
+    passcode: str = Field(min_length=1, max_length=10)
+
+
+class LoginEventOut(ORM):
+    id: int
+    user_id: int
+    username: str | None = None
+    full_name: str | None = None
+    created_at: datetime
+    result: str
+    detail: str | None = None
+    ip: str | None = None
+    platform: str
+    app_version: str | None = None
+    device: str | None = None
+    os: str | None = None
+    browser: str | None = None
+    user_agent: str | None = None
+
+
+class LoginDeviceOut(BaseModel):
+    """One device a user signs in from: the sign-ins grouped by device, browser and app/web."""
+
+    device: str | None = None
+    os: str | None = None
+    browser: str | None = None
+    platform: str
+    app_version: str | None = None
+    first_seen: datetime
+    last_seen: datetime
+    last_ip: str | None = None
+    ips: list[str] = []
+    sign_ins: int
 
 
 class MfaStatusOut(BaseModel):
@@ -110,6 +173,7 @@ class UserOut(ORM):
     background_updated_at: datetime | None = None
     email_verified: bool = True
     mfa_enabled: bool = False
+    passcode_set: bool = False
 
 
 class ManagedUserOut(UserOut):
@@ -118,6 +182,14 @@ class ManagedUserOut(UserOut):
 
     org_admin_id: int | None = None
     org_locked: bool = False
+
+
+class AdminUserOut(ManagedUserOut):
+    """The admin's user list: also the last sign-in (from the sign-in log, which only admins see)."""
+
+    last_login_at: datetime | None = None
+    last_login_ip: str | None = None
+    last_login_device: str | None = None
 
 
 class OrgMemberCreate(BaseModel):
@@ -720,12 +792,31 @@ class DeviceTokenOut(BaseModel):
 
 
 class BankMessageIn(BaseModel):
+    """One message from the phone. Too-long text is cut rather than refused: a refusal (422) would make the phone
+    drop the whole batch it was sent in."""
+
     sender: str | None = Field(default=None, max_length=80)
-    body: str = Field(min_length=1, max_length=2000)
+    body: str = Field(default="", max_length=2000)
     # When the phone received it: milliseconds since 1970 (what Android gives), or a date-time
     received_ms: int | None = None
     received_at: datetime | None = None
     source: Literal["SMS", "NOTIFICATION", "PASTE"] = "PASTE"
+
+    @field_validator("sender", mode="before")
+    @classmethod
+    def _cut_sender(cls, v):
+        return str(v).strip()[:80] or None if v is not None else None
+
+    @field_validator("body", mode="before")
+    @classmethod
+    def _cut_body(cls, v):
+        return str(v or "")[:2000]
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _known_source(cls, v):
+        v = str(v or "PASTE").upper()
+        return v if v in ("SMS", "NOTIFICATION", "PASTE") else "NOTIFICATION"
 
 
 class BankMessagesIn(BaseModel):
@@ -760,6 +851,11 @@ class BankMessageOut(ORM):
     expense_id: int | None
     fund_id: int | None
     transfer_id: int | None
+    vpa: str | None = None
+    # ASK: the "split this?" pop-up is waiting (a payment to a payee a split group shares)
+    split_status: str | None = None
+    split_payee_id: int | None = None
+    split_label: str | None = None
 
 
 class BankBatchOut(BaseModel):
@@ -823,6 +919,29 @@ class SplitBillIn(BaseModel):
     paid_by: int = Field(description="Member id of whoever paid")
     note: str | None = Field(default=None, max_length=500)
     shares: list[SplitShareIn] = Field(min_length=1)
+
+
+class SplitPayeeIn(BaseModel):
+    """A shop or person the group pays together: its UPI ID, and/or a word in its name as banks write it."""
+
+    label: str = Field(min_length=1, max_length=100)
+    vpa: str | None = Field(default=None, max_length=100, pattern=r"^\s*$|^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$")
+    name_match: str | None = Field(default=None, max_length=60)
+    default_member_ids: list[int] = Field(default_factory=list, description="Ticked to begin with; empty = everyone")
+    is_active: bool = True
+
+
+class SplitPromptShare(BaseModel):
+    member_id: int
+    amount: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
+
+
+class SplitPromptAnswer(BaseModel):
+    """SPLIT with `shares` (amounts optional: blank ones share what's left equally), SELF (only me) or SKIP."""
+
+    action: str = Field(pattern="^(SPLIT|SELF|SKIP)$")
+    title: str | None = Field(default=None, max_length=100)
+    shares: list[SplitPromptShare] = Field(default_factory=list)
 
 
 class SplitMemberAdd(BaseModel):

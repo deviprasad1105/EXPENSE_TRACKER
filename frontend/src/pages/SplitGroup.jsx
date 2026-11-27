@@ -23,6 +23,7 @@ import { useAuth } from '../auth'
 import Avatar from '../components/Avatar'
 import BillForm, { handle, personName as name } from '../components/BillForm'
 import Modal from '../components/Modal'
+import SplitPayees from '../components/SplitPayees'
 import { Alert, EmptyRow, Msg, PageHeader, StatTile } from '../components/ui'
 import DateInput from '../components/DateInput'
 
@@ -693,6 +694,7 @@ export default function SplitGroup() {
           </ul>
         </div>
       )}
+      {tab === 'members' && <SplitPayees group={group} />}
 
       {tab === 'payments' && (
         <div className="card flush">

@@ -97,6 +97,11 @@ class User(Base):
     mfa_enabled_at: Mapped[datetime | None] = mapped_column(DateTime)
     mfa_last_step: Mapped[int | None] = mapped_column(Integer)
     mfa_recovery_hashes: Mapped[str | None] = mapped_column(String(1000))
+    # Passcode (4-6 digits, bcrypt) that opens the app on a device where they are already signed in. Asked for only
+    # while the admin has turned passcodes on (Admin -> Settings); wrong ones in a row sign them out everywhere.
+    passcode_hash: Mapped[str | None] = mapped_column(String(200))
+    passcode_set_at: Mapped[datetime | None] = mapped_column(DateTime)
+    passcode_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     manager: Mapped["User | None"] = relationship(
         remote_side="User.id", back_populates="reports", foreign_keys="User.manager_id"
@@ -106,6 +111,10 @@ class User(Base):
         remote_side="User.id", back_populates="org_members", foreign_keys="User.org_admin_id"
     )
     org_members: Mapped[list["User"]] = relationship(back_populates="org_admin", foreign_keys="User.org_admin_id")
+
+    @property
+    def passcode_set(self) -> bool:
+        return bool(self.passcode_hash)
 
     @property
     def org_locked(self) -> bool:
@@ -520,6 +529,21 @@ class BankMessage(Base):
     expense_id: Mapped[int | None] = mapped_column(ForeignKey("expenses.id", ondelete="SET NULL"))
     fund_id: Mapped[int | None] = mapped_column(ForeignKey("funds.id", ondelete="SET NULL"))
     transfer_id: Mapped[int | None] = mapped_column(ForeignKey("account_transfers.id", ondelete="SET NULL"))
+    # The UPI ID that was paid, when the message names it
+    vpa: Mapped[str | None] = mapped_column(String(100))
+    # A payment to a payee one of the user's split groups shares (split_payees): ASK until the user answers the
+    # "split this?" pop-up, then SPLIT (a split bill was added), SELF (added to the group as theirs alone) or SKIPPED
+    split_payee_id: Mapped[int | None] = mapped_column(ForeignKey("split_payees.id", ondelete="SET NULL"), index=True)
+    split_status: Mapped[str | None] = mapped_column(String(8))
+    split_bill_id: Mapped[int | None] = mapped_column(ForeignKey("split_bills.id", ondelete="SET NULL"))
+
+    split_payee: Mapped["SplitPayee | None"] = relationship(foreign_keys=[split_payee_id])
+
+    @property
+    def split_label(self) -> str | None:
+        """'DMart · Flatmates': the payee and its group, for the "split this?" question."""
+        p = self.split_payee
+        return f"{p.label} · {p.group.name}" if p else None
 
 
 class DataShare(Base):
@@ -617,6 +641,8 @@ OTP_USERNAME = "USERNAME"
 # Codes for a deleted account, sent to the email it used: bring it back, or erase its backup for good
 OTP_RESTORE = "RESTORE"
 OTP_PURGE = "PURGE"
+# Sign-in code, asked after the password while the admin has turned "email code at sign-in" on
+OTP_LOGIN = "LOGIN"
 
 
 class EmailOtp(Base):
@@ -662,6 +688,32 @@ class AppSetting(Base):
     value: Mapped[str] = mapped_column(String(200), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=now_local)
     updated_by: Mapped[str | None] = mapped_column(String(50))
+
+
+LOGIN_OK, LOGIN_FAILED = "SUCCESS", "FAILED"
+
+
+class LoginEvent(Base):
+    """A sign-in to an account (or a failed try): when, from which IP address and on which device. Only admins see
+    these (Admin -> Sign-ins); the user is not shown them. Kept for LOGIN_EVENT_DAYS."""
+
+    __tablename__ = "login_events"
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local, index=True)
+    # SUCCESS or FAILED; detail says which step (wrong password, wrong code...)
+    result: Mapped[str] = mapped_column(String(10), nullable=False)
+    detail: Mapped[str | None] = mapped_column(String(60))
+    ip: Mapped[str | None] = mapped_column(String(45))
+    # APP (the Android app) or WEB (a browser)
+    platform: Mapped[str] = mapped_column(String(10), nullable=False)
+    app_version: Mapped[str | None] = mapped_column(String(20))
+    # Read from the browser's user agent: "Samsung SM-S918B · Android 14", "Chrome 131 · Windows 10"
+    device: Mapped[str | None] = mapped_column(String(120))
+    os: Mapped[str | None] = mapped_column(String(40))
+    browser: Mapped[str | None] = mapped_column(String(40))
+    user_agent: Mapped[str | None] = mapped_column(String(400))
 
 
 class DataBackup(Base):
@@ -710,6 +762,7 @@ class SplitGroup(Base):
     members: Mapped[list["SplitMember"]] = relationship(back_populates="group", cascade="all, delete-orphan")
     bills: Mapped[list["SplitBill"]] = relationship(back_populates="group", cascade="all, delete-orphan")
     settlements: Mapped[list["SplitSettlement"]] = relationship(back_populates="group", cascade="all, delete-orphan")
+    payees: Mapped[list["SplitPayee"]] = relationship(back_populates="group", cascade="all, delete-orphan")
 
 
 class SplitMember(Base):
@@ -811,6 +864,35 @@ class SplitSettlement(Base):
     group: Mapped[SplitGroup] = relationship(back_populates="settlements")
     payer: Mapped[SplitMember] = relationship(foreign_keys=[from_member])
     payee: Mapped[SplitMember] = relationship(foreign_keys=[to_member])
+
+
+SPLIT_ASK, SPLIT_DONE, SPLIT_SELF, SPLIT_SKIPPED = "ASK", "SPLIT", "SELF", "SKIPPED"
+
+
+class SplitPayee(Base):
+    """A shop or person a split group pays together (e.g. the DMart the flatmates shop at), by its UPI ID and/or a
+    word in its name. When the member who added it pays them (read by auto-tracking), the app asks
+    "Split this with <group>?" with the group's members, amounts they can change, "Only me" and "Cancel".
+
+    Personal to that member: it only matches their own payments, and nothing else in their records changes."""
+
+    __tablename__ = "split_payees"
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("split_groups.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # What the pop-up and the split bill call it ("DMart groceries")
+    label: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Matched exactly (lower-case), e.g. dmart.12345@icici
+    vpa: Mapped[str | None] = mapped_column(String(100))
+    # Or a word in the payee's name as the bank writes it, e.g. DMART (for messages that don't show the UPI ID)
+    name_match: Mapped[str | None] = mapped_column(String(60))
+    # Members ticked in the pop-up to begin with (comma-separated member ids; empty = everyone in the group)
+    default_members: Mapped[str | None] = mapped_column(String(500))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_local)
+
+    group: Mapped[SplitGroup] = relationship(back_populates="payees")
 
 
 class JobRun(Base):

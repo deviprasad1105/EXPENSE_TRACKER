@@ -23,8 +23,65 @@ export async function setPhoneSources({ enabled, sms, notifications }) {
 
 /** Stop reading on this phone and forget its token (the server's copy is removed too when `everywhere`). */
 export async function unlinkPhone({ everywhere = false } = {}) {
-  if (everywhere) await api.delete('/autotrack/device-token')
+  if (everywhere) {
+    await api.delete('/autotrack/device-token')
+    setWanted(false)
+  }
   if (AutoTrack) await AutoTrack.configure({ enabled: false, sms: false, notifications: false, clearToken: true })
+}
+
+// Remembered on the phone: the user turned auto-tracking on here, so it is linked again after signing back in
+const WANTED = 'autotrack-wanted'
+function setWanted(on) {
+  try {
+    if (on) localStorage.setItem(WANTED, '1')
+    else localStorage.removeItem(WANTED)
+  } catch {
+    /* storage blocked: they turn it on again by hand */
+  }
+}
+const wanted = () => {
+  try {
+    return localStorage.getItem(WANTED) === '1'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * One tap: turn auto-tracking on (recording automatically), link this phone for SMS and bank-app notifications,
+ * and ask Android for everything at once (SMS, notifications). Returns the phone's status; the caller then opens
+ * whatever Android only allows from its settings screens (openSettingsLeft).
+ */
+export async function turnOnEverything() {
+  const { data: current } = await api.get('/autotrack/settings')
+  await api.put('/autotrack/settings', { enabled: true, mode: current.enabled ? current.mode : 'AUTO', since: current.since || null })
+  await linkPhone({ sms: true, notifications: true })
+  setWanted(true)
+  return AutoTrack.requestAll()
+}
+
+/**
+ * The two things Android only allows from its own screens: reading bank-app notifications (Notification access)
+ * and not being put to sleep (battery). Both open together: the battery question on top, then Notification access.
+ */
+export async function openSettingsLeft(status) {
+  if (!status.notificationAccess) await AutoTrack.openNotificationAccess()
+  if (!status.batteryFree) await AutoTrack.requestBatteryFree()
+}
+
+/**
+ * When the app opens: send anything waiting, and link the phone again if the user had auto-tracking on here but
+ * signed out meanwhile (signing out unlinks the phone).
+ */
+export async function resumeOnOpen() {
+  if (!AutoTrack) return
+  const status = await AutoTrack.status()
+  if (!status.linked && wanted() && status.sms) {
+    const { data } = await api.get('/autotrack/settings')
+    if (data.enabled) await linkPhone({ sms: true, notifications: true })
+  }
+  await AutoTrack.flush()
 }
 
 /**

@@ -112,6 +112,13 @@ To make older apps update before they can be used (after a change they can't wor
 `npm run publish:apk -- --require` (every older version) or `-- --min=5` (versions below 5). They then show
 "Update required" over the whole app, including the sign-in page. Otherwise the previous minimum is kept.
 
+**Publishing without the key (GitHub Actions):** anyone with write access to the repository can publish the app from
+GitHub: **Actions → Publish Android app → Run workflow**, pick the branch, and optionally "require" an update. The
+workflow (`.github/workflows/publish-apk.yml`) builds the APK from that branch, signs it with the release key kept in
+the repository's encrypted secrets (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`,
+`ANDROID_KEY_PASSWORD`), checks it is signed with the same key as the published app, and commits `mobile-app/` and
+`frontend/app-version.json` back to that branch. Nobody needs the key file on their own computer.
+
 **Signing:** release APKs are signed with one key so updates install over the old app. The key is never in this public
 repository: it lives in `~/.android-keys/` (`expense-tracker-release.jks` plus `keystore.properties` with `storeFile`,
 `storePassword`, `keyAlias`, `keyPassword`), or wherever `EXPENSE_TRACKER_KEYSTORE` points. Anyone who publishes the app

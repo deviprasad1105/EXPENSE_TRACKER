@@ -36,4 +36,5 @@ in the app.
 
 For developers: after merging web changes, run `npm run publish:apk` in `frontend/`. It raises the version, builds a
 signed APK and puts it here with `version.json`; then commit this folder and `frontend/app-version.json`. It needs the
-release signing key (see "Android app" in the README in the repository root).
+release signing key. Without it, publish from GitHub: **Actions → Publish Android app → Run workflow** signs the app
+with the key kept in the repository's secrets (see "Android app" in the README in the repository root).
