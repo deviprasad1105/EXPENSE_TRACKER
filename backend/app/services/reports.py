@@ -1,245 +1,208 @@
+from datetime import date
 from io import BytesIO
 
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, PieChart, Reference
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
-from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import mm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Paragraph, Spacer
 
 from ..models import Expense, User
 from ..timeutil import now_local
 from .export_safe import defuse_formulas, pdf_text
+from .report_style import (
+    H2, NOTE, SUBTITLE, TITLE, XL_BORDER, XL_FONT, XL_INR, XL_TOTAL_FILL, build_pdf as _build, content_width, grid,
+    inr, rupees, tiles, xl_header, xl_title, xl_use_rubik,
+)
 
-HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
-HEADER_FONT = Font(bold=True, color="FFFFFF")
-THIN = Side(style="thin", color="BFBFBF")
-BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-MONEY = "#,##0.00"
-
-
-def _header(ws, row: int, values: list[str]):
-    for col, value in enumerate(values, start=1):
-        cell = ws.cell(row=row, column=col, value=value)
-        cell.fill = HEADER_FILL
-        cell.font = HEADER_FONT
-        cell.alignment = Alignment(horizontal="center")
-        cell.border = BORDER
+PDF_TOP_ITEMS = 25  # the PDF lists the biggest items; every entry is still in the detailed list
 
 
-def _autosize(ws):
-    for col in ws.columns:
-        width = max((len(str(c.value)) for c in col if c.value is not None), default=8)
-        ws.column_dimensions[get_column_letter(col[0].column)].width = min(max(width + 2, 10), 50)
+def _when(d) -> str:
+    """'2026-04-23' or a date → '23 Apr 2026'."""
+    if isinstance(d, str):
+        d = date.fromisoformat(d[:10])
+    return d.strftime("%d %b %Y")
+
+
+def _dmy(d) -> str:
+    if isinstance(d, str):
+        d = date.fromisoformat(d[:10])
+    return d.strftime("%d-%m-%Y")
+
+
+def _period(summary) -> str:
+    return f"{_when(summary['start'])} to {_when(summary['end'])}"
+
+
+# ---------- Excel ----------
+def _table(ws, top: int, labels: list[str], aligns: str, rows: list[list], formats: dict | None = None) -> int:
+    """Header + bordered body. formats: {column index: number format}. Returns the last row written."""
+    xl_header(ws, top, labels, aligns)
+    formats = formats or {}
+    for r, values in enumerate(rows, start=top + 1):
+        for c, v in enumerate(values):
+            cell = ws.cell(row=r, column=c + 1, value=v)
+            cell.border = XL_BORDER
+            cell.alignment = Alignment(horizontal={"L": "left", "R": "right", "C": "center"}[aligns[c]], vertical="top")
+            if c in formats:
+                cell.number_format = formats[c]
+    return top + len(rows)
+
+
+def _widths(ws, widths: list[float]) -> None:
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
 
 
 def build_excel(user: User, expenses: list[Expense], summary: dict, bal: dict) -> bytes:
     wb = Workbook()
+    who = f"{user.full_name} ({user.username})"
 
     # --- Summary sheet ---
     ws = wb.active
     ws.title = "Summary"
-    ws["A1"] = "Expense Report"
-    ws["A1"].font = Font(bold=True, size=16)
+    xl_title(ws, "Expense Report", f"{who} · {_period(summary)} · generated {now_local():%d %b %Y, %H:%M}")
     info = [
-        ("User", f"{user.full_name} ({user.username})"),
-        ("Period", f"{summary['start']} to {summary['end']}"),
-        ("Generated", now_local().strftime("%Y-%m-%d %H:%M")),
-        ("Total spent in period", summary["total"]),
-        ("Number of entries", summary["count"]),
-        ("Average per day", summary["average_per_day"]),
-        ("Days with no entry", len(summary["missed_days"])),
-        ("Total funds (all time)", bal["total_funds"]),
-        ("Total expenses (all time)", bal["total_expenses"]),
-        ("Available balance", bal["balance"]),
+        ("Total spent in period", summary["total"], XL_INR),
+        ("Number of entries", summary["count"], "0"),
+        ("Average per day", summary["average_per_day"], XL_INR),
+        ("Days with no entry", len(summary["missed_days"]), "0"),
+        ("Total funds (all time)", bal["total_funds"], XL_INR),
+        ("Total expenses (all time)", bal["total_expenses"], XL_INR),
+        ("Available balance", bal["balance"], XL_INR),
     ]
-    for i, (label, value) in enumerate(info, start=3):
-        ws.cell(row=i, column=1, value=label).font = Font(bold=True)
-        cell = ws.cell(row=i, column=2, value=value)
-        if isinstance(value, float):
-            cell.number_format = MONEY
+    xl_header(ws, 4, ["Figure", "Value"], "LR")
+    for i, (label, value, fmt) in enumerate(info, start=5):
+        a = ws.cell(row=i, column=1, value=label)
+        b = ws.cell(row=i, column=2, value=value)
+        a.border = b.border = XL_BORDER
+        a.font = Font(name=XL_FONT, bold=True)
+        b.number_format = fmt
+    row = 5 + len(info) + 2
 
-    row = len(info) + 5
-    ws.cell(row=row - 1, column=1, value="By category").font = Font(bold=True, size=12)
-    _header(ws, row, ["Category", "Amount", "% of total"])
-    cat_start = row + 1
-    for r, c in enumerate(summary["by_category"], start=cat_start):
-        ws.cell(row=r, column=1, value=c["category"]).border = BORDER
-        ws.cell(row=r, column=2, value=c["amount"]).number_format = MONEY
-        pct = ws.cell(row=r, column=3, value=(c["amount"] / summary["total"]) if summary["total"] else 0)
-        pct.number_format = "0.0%"
-    cat_end = cat_start + len(summary["by_category"]) - 1
-
-    if summary["by_category"]:
+    ws.cell(row=row, column=1, value="By category").font = Font(name=XL_FONT, bold=True, size=12)
+    total = summary["total"] or 0
+    cats = [[c["category"], c["amount"], (c["amount"] / total) if total else 0] for c in summary["by_category"]]
+    cat_end = _table(ws, row + 1, ["Category", "Amount (₹)", "% of total"], "LRR", cats, {1: XL_INR, 2: "0.0%"})
+    if cats:
         pie = PieChart()
         pie.title = "Spending by category"
-        pie.add_data(Reference(ws, min_col=2, min_row=cat_start - 1, max_row=cat_end), titles_from_data=True)
-        pie.set_categories(Reference(ws, min_col=1, min_row=cat_start, max_row=cat_end))
+        pie.add_data(Reference(ws, min_col=2, min_row=row + 1, max_row=cat_end), titles_from_data=True)
+        pie.set_categories(Reference(ws, min_col=1, min_row=row + 2, max_row=cat_end))
         pie.height, pie.width = 8, 12
-        ws.add_chart(pie, "E3")
+        ws.add_chart(pie, "E4")
+    row = cat_end + 2
 
-    row = cat_end + 3
-    ws.cell(row=row - 1, column=1, value="By item").font = Font(bold=True, size=12)
-    _header(ws, row, ["Item", "Times", "Quantity", "Amount"])
-    for r, it in enumerate(summary["by_item"], start=row + 1):
-        ws.cell(row=r, column=1, value=it["item"])
-        ws.cell(row=r, column=2, value=it["count"])
-        ws.cell(row=r, column=3, value=it["quantity"])
-        ws.cell(row=r, column=4, value=it["amount"]).number_format = MONEY
-    _autosize(ws)
+    ws.cell(row=row, column=1, value="By item").font = Font(name=XL_FONT, bold=True, size=12)
+    items = [[i["item"], i["count"], i["quantity"], i["amount"]] for i in summary["by_item"]]
+    _table(ws, row + 1, ["Item", "Times", "Quantity", "Amount (₹)"], "LRRR", items, {3: XL_INR})
+    _widths(ws, [48, 16, 12, 16])
+    ws.freeze_panes = "A5"
 
     # --- Totals per period (daily / weekly / monthly / quarterly / yearly) ---
     periods = summary["trend"]
     granularity = summary.get("granularity", "daily").capitalize()
     wd = wb.create_sheet(f"{granularity} Totals")
-    _header(wd, 1, ["Period", "Starts", "Expenses", "Funds added"])
-    for r, p in enumerate(periods, start=2):
-        wd.cell(row=r, column=1, value=p["label"])
-        wd.cell(row=r, column=2, value=p["period"])
-        wd.cell(row=r, column=3, value=p["expenses"]).number_format = MONEY
-        wd.cell(row=r, column=4, value=p["funds"]).number_format = MONEY
+    last = _table(wd, 1, ["Period", "Starts", "Expenses (₹)", "Funds added (₹)"], "LLRR",
+                  [[p["label"], p["period"], p["expenses"], p["funds"]] for p in periods], {2: XL_INR, 3: XL_INR})
     if periods:
         bar = BarChart()
         bar.title = f"{granularity} spending"
-        bar.add_data(Reference(wd, min_col=3, min_row=1, max_row=len(periods) + 1), titles_from_data=True)
-        bar.set_categories(Reference(wd, min_col=1, min_row=2, max_row=len(periods) + 1))
+        bar.add_data(Reference(wd, min_col=3, min_row=1, max_row=last), titles_from_data=True)
+        bar.set_categories(Reference(wd, min_col=1, min_row=2, max_row=last))
         bar.height, bar.width = 9, 22
         wd.add_chart(bar, "F2")
-    _autosize(wd)
+    _widths(wd, [18, 14, 16, 16])
+    wd.freeze_panes = "A2"
 
     # --- Detailed list sheet ---
     wl = wb.create_sheet("Detailed List")
-    _header(wl, 1, ["Date", "Item", "Category", "Qty", "Amount", "Extra item", "Note", "Created at"])
-    for r, e in enumerate(expenses, start=2):
-        values = [
-            e.expense_date.isoformat(),
-            e.item_name,
-            e.category,
-            e.quantity,
-            float(e.amount),
-            "Yes" if e.is_extra else "No",
-            e.note or "",
-            e.created_at.strftime("%Y-%m-%d %H:%M"),
-        ]
-        for c, v in enumerate(values, start=1):
-            cell = wl.cell(row=r, column=c, value=v)
-            cell.border = BORDER
-        wl.cell(row=r, column=5).number_format = MONEY
+    rows = [[e.expense_date, e.item_name, e.category, e.quantity, float(e.amount), "Yes" if e.is_extra else "No",
+             e.note or "", e.created_at.strftime("%d-%m-%Y %H:%M")] for e in expenses]
+    _table(wl, 1, ["Date", "Item", "Category", "Qty", "Amount (₹)", "Extra item", "Note", "Created at"], "LLLRRCLL",
+           rows, {0: "dd-mm-yyyy", 4: XL_INR})
     total_row = len(expenses) + 2
-    wl.cell(row=total_row, column=4, value="TOTAL").font = Font(bold=True)
+    label = wl.cell(row=total_row, column=4, value="TOTAL")
     tot = wl.cell(row=total_row, column=5, value=f"=SUM(E2:E{max(total_row - 1, 2)})")
-    tot.font = Font(bold=True)
-    tot.number_format = MONEY
+    for c in range(1, 9):
+        wl.cell(row=total_row, column=c).fill = XL_TOTAL_FILL
+        wl.cell(row=total_row, column=c).border = XL_BORDER
+    label.font = tot.font = Font(name=XL_FONT, bold=True)
+    label.alignment = tot.alignment = Alignment(horizontal="right")
+    tot.number_format = XL_INR
     wl.freeze_panes = "A2"
     wl.auto_filter.ref = f"A1:H{max(total_row - 1, 1)}"
-    _autosize(wl)
+    _widths(wl, [12, 48, 16, 7, 14, 10, 32, 17])
 
+    xl_use_rubik(wb)
     buf = BytesIO()
     defuse_formulas(wb)
     wb.save(buf)
     return buf.getvalue()
 
 
+# ---------- PDF ----------
 def build_pdf(user: User, expenses: list[Expense], summary: dict, bal: dict) -> bytes:
     buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm, topMargin=15 * mm, bottomMargin=15 * mm)
-    styles = getSampleStyleSheet()
-    small = styles["BodyText"].clone("small", fontSize=8, leading=10)
-
-    def table(data, widths, money_cols=()):
-        t = Table(data, colWidths=widths, repeatRows=1)
-        style = [
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E79")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#BFBFBF")),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F6FA")]),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ]
-        for c in money_cols:
-            style.append(("ALIGN", (c, 1), (c, -1), "RIGHT"))
-        t.setStyle(TableStyle(style))
-        return t
-
-    money = lambda v: f"{v:,.2f}"  # noqa: E731
+    width = content_width(A4)
     story = [
-        Paragraph("Expense Report", styles["Title"]),
-        Paragraph(
-            f"<b>User:</b> {pdf_text(user.full_name)} ({pdf_text(user.username)}) &nbsp;&nbsp; <b>Period:</b> {summary['start']} to {summary['end']}"
-            f" &nbsp;&nbsp; <b>Generated:</b> {now_local().strftime('%Y-%m-%d %H:%M')}",
-            styles["Normal"],
-        ),
-        Spacer(1, 8),
-        Paragraph("Summary", styles["Heading2"]),
-        table(
-            [
-                ["Total spent", "Entries", "Avg / day", "Days missed", "Total funds", "Available balance"],
-                [
-                    money(summary["total"]),
-                    str(summary["count"]),
-                    money(summary["average_per_day"]),
-                    str(len(summary["missed_days"])),
-                    money(bal["total_funds"]),
-                    money(bal["balance"]),
-                ],
-            ],
-            [30 * mm] * 6,
-        ),
-        Spacer(1, 8),
+        Paragraph("Expense Report", TITLE),
+        Paragraph(f"{pdf_text(user.full_name)} ({pdf_text(user.username)}) · {_period(summary)}", SUBTITLE),
+        Spacer(1, 10),
+        tiles([
+            ("Total spent", rupees(summary["total"])),
+            ("Entries", str(summary["count"])),
+            ("Average per day", rupees(summary["average_per_day"])),
+            ("Days with no entry", str(len(summary["missed_days"]))),
+            ("Total funds (all time)", rupees(bal["total_funds"])),
+            ("Available balance", rupees(bal["balance"])),
+        ], width),
     ]
 
     granularity = summary.get("granularity", "daily")
     if summary.get("trend") and granularity != "daily":
+        trend = summary["trend"]
         story += [
-            Paragraph(f"{granularity.capitalize()} totals", styles["Heading2"]),
-            table(
-                [["Period", "Starts", "Expenses", "Funds added"]]
-                + [[p["label"], p["period"], money(p["expenses"]), money(p["funds"])] for p in summary["trend"]],
-                [45 * mm, 35 * mm, 40 * mm, 40 * mm],
-                money_cols=(2, 3),
-            ),
-            Spacer(1, 8),
+            Paragraph(f"{granularity.capitalize()} totals", H2),
+            grid([("Period", "L", 3), ("Starts", "L", 2), ("Expenses (₹)", "R", 2.5), ("Funds added (₹)", "R", 2.5)],
+                 [[p["label"], _dmy(p["period"]), inr(p["expenses"]), inr(p["funds"])] for p in trend]
+                 + [["Total", "", inr(sum(p["expenses"] for p in trend)), inr(sum(p["funds"] for p in trend))]],
+                 width, bold=[len(trend)], shade=[len(trend)]),
         ]
 
+    total = summary["total"] or 0
     if summary["by_category"]:
+        cats = summary["by_category"]
         story += [
-            Paragraph("By category", styles["Heading2"]),
-            table(
-                [["Category", "Amount", "% of total"]]
-                + [
-                    [c["category"], money(c["amount"]), f"{(c['amount'] / summary['total'] * 100) if summary['total'] else 0:.1f}%"]
-                    for c in summary["by_category"]
-                ],
-                [70 * mm, 40 * mm, 30 * mm],
-                money_cols=(1, 2),
-            ),
-            Spacer(1, 8),
+            Paragraph("By category", H2),
+            grid([("Category", "L", 6), ("Amount (₹)", "R", 2.5), ("% of total", "R", 1.5)],
+                 [[c["category"], inr(c["amount"]), f"{(c['amount'] / total * 100) if total else 0:.1f}%"] for c in cats]
+                 + [["Total", inr(total), "100.0%" if total else "0.0%"]],
+                 width, bold=[len(cats)], shade=[len(cats)]),
         ]
+
     if summary["by_item"]:
+        items = sorted(summary["by_item"], key=lambda i: i["amount"], reverse=True)
+        shown = items[:PDF_TOP_ITEMS]
         story += [
-            Paragraph("By item", styles["Heading2"]),
-            table(
-                [["Item", "Times", "Quantity", "Amount"]]
-                + [[i["item"], str(i["count"]), str(i["quantity"]), money(i["amount"])] for i in summary["by_item"]],
-                [70 * mm, 25 * mm, 25 * mm, 40 * mm],
-                money_cols=(3,),
-            ),
-            Spacer(1, 8),
+            Paragraph("Top items" if len(items) > len(shown) else "By item", H2),
+            grid([("Item", "L", 6.2), ("Times", "R", 1), ("Quantity", "R", 1.2), ("Amount (₹)", "R", 1.8)],
+                 [[i["item"], str(i["count"]), str(i["quantity"]), inr(i["amount"])] for i in shown], width),
         ]
+        if len(items) > len(shown):
+            story.append(Paragraph(
+                f"The {len(shown)} biggest of {len(items)} items. Every entry is in the detailed list below and in the Excel workbook.",
+                NOTE))
 
-    story.append(Paragraph("Detailed list", styles["Heading2"]))
-    rows = [["Date", "Item", "Category", "Qty", "Amount", "Note"]]
-    for e in expenses:
-        name = e.item_name + (" (extra)" if e.is_extra else "")
-        rows.append([e.expense_date.isoformat(), Paragraph(pdf_text(name), small), e.category, str(e.quantity), money(float(e.amount)), Paragraph(pdf_text(e.note), small)])
-    rows.append(["", "", "", "TOTAL", money(summary["total"]), ""])
-    detail = table(rows, [22 * mm, 45 * mm, 28 * mm, 12 * mm, 25 * mm, 48 * mm], money_cols=(4,))
-    detail.setStyle(TableStyle([("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold")]))
-    story.append(detail)
+    story.append(Paragraph("Detailed list", H2))
+    rows = [[e.expense_date.strftime("%d-%m-%Y"), e.item_name + (" (extra)" if e.is_extra else ""), e.category,
+             str(e.quantity), inr(float(e.amount)), e.note or ""] for e in expenses]
+    rows.append(["", "", "", "Total", inr(total), ""])
+    story.append(grid([("Date", "L", 1.7), ("Item", "L", 5), ("Category", "L", 1.9), ("Qty", "R", 0.8),
+                       ("Amount (₹)", "R", 1.8), ("Note", "L", 2.8)], rows, width,
+                      bold=[len(rows) - 1], shade=[len(rows) - 1]))
 
-    doc.build(story)
+    _build(buf, story, A4, "Expense Report")
     return buf.getvalue()

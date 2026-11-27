@@ -1,20 +1,20 @@
 # Python dependencies for the backend and the Vercel function (api/index.py).
 # Kept at the repo root because Vercel's parser does not follow '-r' includes.
-fastapi==0.115.6
+fastapi==0.165.0
 uvicorn[standard]==0.34.0
 SQLAlchemy==2.0.36
 psycopg[binary]==3.2.3
 pydantic==2.10.4
 pydantic-settings==2.7.0
 email-validator==2.2.0
-PyJWT==2.10.1
+PyJWT==2.15.1
 bcrypt==4.2.1
-python-multipart==0.0.20
+python-multipart==0.0.34
 APScheduler==3.11.0
 openpyxl==3.1.5
 reportlab==4.2.5
 # Importing past records: PDF tables, Word .docx, old Excel .xls
-pdfplumber==0.11.4
+pdfplumber==0.11.11
 python-docx==1.1.2
 xlrd==2.0.1
 # Opening password-protected Excel / Word files (PDF passwords are handled by pdfplumber)

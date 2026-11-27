@@ -216,17 +216,13 @@ export default function Admin() {
               </div>
             </div>
             <div className="table-wrap">
-              <table className="table">
+              <table className="table users-table">
                 <thead>
                   <tr>
                     <th>User</th>
-                    <th>Status</th>
-                    <th>Role</th>
+                    <th>Role &amp; reporting</th>
                     <th>Plan</th>
-                    <th>Reports to</th>
-                    <th>Organisation</th>
-                    <th>Registered</th>
-                    <th>Last sign-in</th>
+                    <th>Joined · last sign-in</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -236,15 +232,13 @@ export default function Admin() {
                       <td>
                         <div className="cell-user">
                           <Avatar user={u} size={34} />
-                          <div>
+                          <div style={{ minWidth: 0 }}>
                             <b>{u.full_name}</b>
-                            <small>
-                              @{u.username} · {u.email}
-                            </small>
+                            <small>@{u.username}</small>
+                            <small title={u.email}>{u.email}</small>
                           </div>
                         </div>
-                      </td>
-                      <td>
+                        <div className="user-badges">
                         <span className={`badge ${STATUS_CLS[u.status]}`}>{u.status.toLowerCase()}</span>{' '}
                         {!u.email_verified && (
                           <span className="badge warn" title="They haven’t entered the code we emailed them, so they can’t be approved yet">
@@ -266,8 +260,11 @@ export default function Admin() {
                             <Lock size={11} /> org locked
                           </span>
                         )}
+                        </div>
                       </td>
                       <td>
+                        <div className="role-stack">
+                        <label className="mini-label">Role</label>
                         <select
                           value={u.role}
                           disabled={u.id === me.id}
@@ -277,6 +274,54 @@ export default function Admin() {
                           <option value="ORG_ADMIN">Org admin</option>
                           <option value="ADMIN">Admin</option>
                         </select>
+                        <label className="mini-label">Reports to</label>
+                        {u.role === 'ADMIN' ? (
+                          <span className="muted small">Nobody (admin)</span>
+                        ) : (
+                        <select
+                          value={u.manager_id || ''}
+                          onChange={(e) =>
+                            act(
+                              () => api.patch(`/admin/users/${u.id}`, e.target.value ? { manager_id: Number(e.target.value) } : { clear_manager: true }),
+                              'Reporting line updated',
+                            )
+                          }
+                        >
+                          <option value="">No manager</option>
+                          {users
+                            .filter((m) => m.id !== u.id && m.status === 'APPROVED')
+                            .map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.full_name} (@{m.username})
+                              </option>
+                            ))}
+                        </select>
+                        )}
+                        {u.manager_id && !byId[u.manager_id] && <span className="muted"> #{u.manager_id}</span>}
+                        <label className="mini-label">Organisation</label>
+                        {u.role === 'ORG_ADMIN' ? (
+                          <span className="badge info">Heads organisation</span>
+                        ) : u.role === 'ADMIN' ? (
+                          <span className="muted small">—</span>
+                        ) : (
+                          <select
+                            value={u.org_admin_id || ''}
+                            onChange={(e) =>
+                              act(
+                                () => api.patch(`/admin/users/${u.id}`, e.target.value ? { org_admin_id: Number(e.target.value) } : { clear_org: true }),
+                                'Organisation updated',
+                              )
+                            }
+                          >
+                            <option value="">None</option>
+                            {orgAdmins.map((o) => (
+                              <option key={o.id} value={o.id}>
+                                {o.full_name} (@{o.username})
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        </div>
                       </td>
                       <td>
                         {u.role === 'ADMIN' ? (
@@ -310,64 +355,15 @@ export default function Admin() {
                           </div>
                         )}
                       </td>
-                      <td>
-                        {u.role === 'ADMIN' ? (
-                          <span className="muted small">Nobody (admin)</span>
-                        ) : (
-                        <select
-                          value={u.manager_id || ''}
-                          onChange={(e) =>
-                            act(
-                              () => api.patch(`/admin/users/${u.id}`, e.target.value ? { manager_id: Number(e.target.value) } : { clear_manager: true }),
-                              'Reporting line updated',
-                            )
-                          }
-                        >
-                          <option value="">No manager</option>
-                          {users
-                            .filter((m) => m.id !== u.id && m.status === 'APPROVED')
-                            .map((m) => (
-                              <option key={m.id} value={m.id}>
-                                {m.full_name} (@{m.username})
-                              </option>
-                            ))}
-                        </select>
-                        )}
-                        {u.manager_id && !byId[u.manager_id] && <span className="muted"> #{u.manager_id}</span>}
-                      </td>
-                      <td>
-                        {u.role === 'ORG_ADMIN' ? (
-                          <span className="badge info">Heads organisation</span>
-                        ) : u.role === 'ADMIN' ? (
-                          <span className="muted small">—</span>
-                        ) : (
-                          <select
-                            value={u.org_admin_id || ''}
-                            onChange={(e) =>
-                              act(
-                                () => api.patch(`/admin/users/${u.id}`, e.target.value ? { org_admin_id: Number(e.target.value) } : { clear_org: true }),
-                                'Organisation updated',
-                              )
-                            }
-                          >
-                            <option value="">None</option>
-                            {orgAdmins.map((o) => (
-                              <option key={o.id} value={o.id}>
-                                {o.full_name} (@{o.username})
-                              </option>
-                            ))}
-                          </select>
-                        )}
-                      </td>
-                      <td className="muted" style={{ whiteSpace: 'nowrap' }}>{u.created_at.slice(0, 10)}</td>
                       <td className="small">
+                        <div className="muted" style={{ whiteSpace: 'nowrap' }}>Joined {u.created_at.slice(0, 10)}</div>
                         {u.last_login_at ? (
                           <button type="button" className="link-button" title="All their sign-ins and devices" onClick={() => showLogins(u)} style={{ textAlign: 'left' }}>
                             <div style={{ whiteSpace: 'nowrap' }}>{fmt(u.last_login_at)}</div>
                             <div className="muted">{[u.last_login_ip, u.last_login_device].filter(Boolean).join(' · ')}</div>
                           </button>
                         ) : (
-                          <span className="muted">—</span>
+                          <div className="muted">Never signed in</div>
                         )}
                       </td>
                       <td>

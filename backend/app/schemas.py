@@ -875,6 +875,17 @@ class BankAcceptIn(BaseModel):
 
 
 # ---------- sharing ----------
+class BankBulkIn(BaseModel):
+    """Act on many waiting messages at once (chosen with the checkboxes, or "Select all")."""
+
+    ids: list[int] = Field(min_length=1, max_length=2000)
+    action: Literal["record", "dismiss", "delete"]
+    # Applied to each message before it is recorded
+    account_id: int | None = None
+    category: str | None = Field(default=None, max_length=50)
+    suggestion: Literal["EXPENSE", "INCOME", "TRANSFER"] | None = None
+
+
 class ShareIn(BaseModel):
     viewer_username: str
 

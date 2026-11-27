@@ -16,6 +16,7 @@ import hashlib
 import re
 import secrets
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select
@@ -31,7 +32,7 @@ from . import split_payees
 from .accounts import resolve_account
 from .aliases import label_new
 from .bank_sms import (
-    CH_ATM, CH_CARD_BILL, CH_UPI, CREDIT, DEBIT, KIND_BILL, NotATransaction, ParsedBank, Unreadable, guess_category,
+    CH_ATM, CH_CARD, CH_CARD_BILL, CH_UPI, CREDIT, DEBIT, KIND_BILL, NotATransaction, ParsedBank, Unreadable, guess_category,
     parse_bank_message,
 )
 from .budgets import check_budgets
@@ -380,6 +381,158 @@ def accept(db: Session, user: User, msg: BankMessage, changes: dict) -> None:
     if msg.suggestion != SUG_TRANSFER:
         msg.to_account_id = None
     create_record(db, user, msg)
+    learn_account(db, user, msg)
+
+
+# ---------- learning an account's last digits ----------
+_WHICH_ACCOUNT = "Which account?"
+
+
+def learn_account(db: Session, user: User, msg: BankMessage) -> int:
+    """The user chose the account for a message that carried its last digits: remember the digits on that account
+    (when it has none and no other account uses them), and fill in the other waiting messages with the same digits.
+    Returns how many other messages were filled in."""
+    if not (msg.last4 and msg.account_id):
+        return 0
+    account = db.get(Account, msg.account_id)
+    if not account or account.user_id != user.id:
+        return 0
+    if not account.last4:
+        clash = db.scalar(select(Account.id).where(Account.user_id == user.id, Account.id != account.id,
+                                                   Account.last4 == msg.last4))
+        if clash:
+            return 0
+        account.last4 = msg.last4[-4:]
+    elif not (account.last4.endswith(msg.last4) or msg.last4.endswith(account.last4)):
+        return 0
+    filled = 0
+    for other in db.scalars(select(BankMessage).where(
+            BankMessage.user_id == user.id, BankMessage.status == MSG_PENDING, BankMessage.last4 == msg.last4,
+            BankMessage.account_id.is_(None), BankMessage.id != msg.id)):
+        if other.suggestion == SUG_TRANSFER and other.channel == CH_CARD_BILL and other.direction == CREDIT:
+            other.to_account_id = account.id
+        else:
+            other.account_id = account.id
+        if other.reason and other.reason.startswith(_WHICH_ACCOUNT):
+            other.reason = _missing(other)
+        filled += 1
+    return filled
+
+
+# ---------- many at once ----------
+def bulk(db: Session, user: User, ids: list[int], action: str, changes: dict) -> dict:
+    """Record, skip or remove the chosen messages. `changes` (account_id, category, suggestion) apply to each before
+    it is recorded. The user picked these on purpose, so 'may be the same as …' doesn't stop them."""
+    rows = db.scalars(select(BankMessage).where(BankMessage.user_id == user.id, BankMessage.id.in_(ids))).all()
+    done, skipped, why = 0, 0, {}
+    if changes.get("account_id"):
+        resolve_account(db, user.id, changes["account_id"])
+    for msg in sorted(rows, key=lambda m: m.received_at):
+        if action == "delete":
+            db.delete(msg)
+            done += 1
+            continue
+        if msg.status not in (MSG_PENDING, MSG_FAILED, MSG_BILL):
+            skipped += 1
+            why["Already dealt with"] = why.get("Already dealt with", 0) + 1
+            continue
+        if action == "dismiss":
+            dismiss(msg)
+            done += 1
+            continue
+        if msg.status == MSG_BILL:
+            skipped += 1
+            why["Bills are not recorded"] = why.get("Bills are not recorded", 0) + 1
+            continue
+        try:
+            with db.begin_nested():
+                if changes.get("suggestion"):
+                    msg.suggestion = changes["suggestion"]
+                if not msg.suggestion:
+                    msg.suggestion = SUG_INCOME if msg.direction == CREDIT else SUG_EXPENSE
+                if changes.get("account_id"):
+                    if msg.suggestion == SUG_TRANSFER and msg.account_id and not msg.to_account_id:
+                        msg.to_account_id = changes["account_id"]
+                    else:
+                        msg.account_id = changes["account_id"]
+                if changes.get("category") and msg.suggestion == SUG_EXPENSE:
+                    msg.category = changes["category"]
+                if msg.suggestion != SUG_TRANSFER:
+                    msg.to_account_id = None
+                create_record(db, user, msg)
+                learn_account(db, user, msg)
+            done += 1
+        except HTTPException as e:
+            skipped += 1
+            reason = str(e.detail)
+            why[reason.split(".")[0]] = why.get(reason.split(".")[0], 0) + 1
+            msg.reason = reason[:300]
+    return {"done": done, "skipped": skipped, "reasons": why}
+
+
+# ---------- payments with no message: the balance check ----------
+GAP_DAYS = 90
+
+
+def balance_gaps(db: Session, user: User) -> list[dict]:
+    """Money that moved with no message. Many bank messages carry the balance after the payment: if the balance
+    changed by more than the messages in between explain, a payment (or money received) was never seen."""
+    since = now_local() - timedelta(days=GAP_DAYS)
+    rows = db.scalars(select(BankMessage).where(
+        BankMessage.user_id == user.id, BankMessage.received_at >= since, BankMessage.amount.is_not(None),
+        BankMessage.direction.is_not(None), BankMessage.kind != KIND_BILL,
+        BankMessage.status.in_((MSG_CREATED, MSG_PENDING, MSG_DISMISSED)),
+    ).order_by(BankMessage.received_at, BankMessage.id)).all()
+    accounts = {}
+    for m in rows:
+        if m.last4 and not (m.channel == CH_CARD or (m.channel == CH_CARD_BILL and m.direction == CREDIT)):
+            accounts.setdefault((m.bank or "", m.last4), []).append(m)
+    gaps = []
+    for (bank, last4), msgs in accounts.items():
+        prev, moved = None, Decimal(0)
+        for m in msgs:
+            signed = m.amount if m.direction == CREDIT else -m.amount
+            if prev is None:
+                if m.balance is not None:
+                    prev, moved = m, Decimal(0)
+                continue
+            moved += signed
+            if m.balance is None:
+                continue
+            gap = m.balance - (prev.balance + moved)
+            if abs(gap) >= 1:
+                gaps.append({
+                    "key": f"{last4}-{prev.id}-{m.id}", "bank": bank or None, "last4": last4,
+                    "direction": DEBIT if gap < 0 else CREDIT, "amount": abs(gap).quantize(Decimal("0.01")),
+                    "after": prev.received_at, "before": m.received_at,
+                    "after_balance": prev.balance, "before_balance": m.balance, "account_id": prev.account_id or m.account_id,
+                })
+            prev, moved = m, Decimal(0)
+    return sorted(gaps, key=lambda g: g["before"], reverse=True)
+
+
+def review_gap(db: Session, user: User, key: str) -> BankMessage:
+    """Put a balance gap in "To review", as an expense (or money received) to fill in."""
+    gap = next((g for g in balance_gaps(db, user) if g["key"] == key), None)
+    if gap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That gap is already explained")
+    out = gap["direction"] == DEBIT
+    body = (f"Balance check: {gap['amount']} {'left' if out else 'came into'} A/c ••{gap['last4']} "
+            f"between {gap['after']:%d %b %H:%M} and {gap['before']:%d %b %H:%M} with no message "
+            f"(balance {gap['after_balance']} → {gap['before_balance']}).")
+    received = gap["before"] - timedelta(seconds=1)
+    msg = BankMessage(
+        user_id=user.id, received_at=received, source="BALANCE", sender=gap["bank"], body=body,
+        body_hash=_body_hash(user.id, "BALANCE", key, received), status=MSG_PENDING, kind="TXN",
+        direction=gap["direction"], channel="BANK", amount=gap["amount"], bank=gap["bank"], last4=gap["last4"],
+        txn_date=gap["before"].date(), suggestion=SUG_EXPENSE if out else SUG_INCOME,
+        name="Payment with no message" if out else "Money received with no message",
+        category="General" if out else None, account_id=gap["account_id"],
+        reason="Found by the balance check: change the name and category to what it was.",
+    )
+    db.add(msg)
+    db.flush()
+    return msg
 
 
 def dismiss(msg: BankMessage) -> None:
@@ -395,5 +548,5 @@ def ready_to_accept(msg: BankMessage) -> bool:
 
 __all__ = [
     "MODE_AUTO", "MODE_REVIEW", "SUG_EXPENSE", "SUG_INCOME", "SUG_TRANSFER", "accept", "create_record", "default_since",
-    "dismiss", "match_account", "new_device_token", "ready_to_accept", "record_message", "user_for_device_token",
+    "balance_gaps", "bulk", "dismiss", "learn_account", "match_account", "review_gap", "new_device_token", "ready_to_accept", "record_message", "user_for_device_token",
 ]

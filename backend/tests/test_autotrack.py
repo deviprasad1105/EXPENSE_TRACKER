@@ -342,3 +342,90 @@ def test_phone_batch_with_odd_fields_is_not_refused(client, asha):
     ]})
     assert r.status_code == 200, r.text
     assert r.json()["counts"].get("EMPTY") == 1 and len(r.json()["results"]) == 2
+
+
+# ---------- formats from more banks ----------
+@pytest.mark.parametrize("sender,text,expect", [
+    ("VM-UNIONB-S", "A/c *1234 Debited for Rs:400.00 on 20-11-2026 13:22:11 by Mob Bk ref no 431234567801 Avl Bal Rs:1,200.00.",
+     dict(direction=DEBIT, amount=Decimal("400.00"), balance=Decimal("1200.00"))),
+    ("VM-BOBTXN-S", "Rs.1000.00 Dr. from A/C XXXXXX1234 and Cr. to swiggy@icici. Ref:431234567898. AvlBal:Rs5000.00",
+     dict(direction=DEBIT, amount=Decimal("1000.00"), party="swiggy@icici")),
+    ("VM-CANBNK-S", "An amount of INR 600.00 has been DEBITED to your account XXX1234 on 20/11/2026 towards UPI/431234567899/ZEPTO. "
+     "Total Avail.bal INR 7,000.00. - Canara Bank", dict(direction=DEBIT, party="ZEPTO", balance=Decimal("7000.00"))),
+    ("AX-ICICIB-S", "INR 3,499.00 spent using ICICI Bank Card XX9876 on 20-Nov-26 on FLIPKART. Avl Limit: INR 1,20,000.00.",
+     dict(direction=DEBIT, amount=Decimal("3499.00"), party="FLIPKART", channel=CH_CARD)),
+    ("JM-AXISBK-S", "Spent\nCard no. XX4321\nINR 2350\n20-11-26 19:10:01\nDMART\nAvl Lmt INR 85000\nSMS BLOCK 4321 to 919951860002",
+     dict(direction=DEBIT, amount=Decimal("2350"), party="DMART", last4="4321")),
+    ("AD-SBIINB-S", "Your A/C XXXXX1234 Credited INR 50,000.00 on 20/11/26 -Deposit by transfer from ACME PVT LTD. Avl Bal INR 62,345.67",
+     dict(direction=CREDIT, party="ACME PVT LTD")),
+    ("BP-PNBSMS-S", "A/c XX1234 debited INR 300.00 Dt 20-11-26 thru UPI:431234567897.Bal INR 9,876.00 Not u?Fwd this SMS to 9264092640 to block UPI",
+     dict(direction=DEBIT, party=None)),
+    ("VM-INDBNK-S", "Your a/c no. XXXXX1234 is debited for Rs.250.00 on 20-11-2026 and credited to a/c no. XXXXX5678 (UPI Ref no 431234567802)",
+     dict(direction=DEBIT, party="A/c ••5678")),
+])
+def test_reads_more_bank_formats(sender, text, expect):
+    got = parse_bank_message(text, sender, R)
+    for key, value in expect.items():
+        assert getattr(got, key) == value, (key, getattr(got, key))
+
+
+# ---------- many at once ----------
+def _unknown_account(n, amount, last4="7777"):
+    return (f"INR {amount}.00 debited from A/c no. XX{last4} on {DMY} UPI/P2M/63123456{n:04d}/SHOP {n}. - Axis Bank")
+
+
+def test_bulk_record_with_one_account_and_it_is_remembered(client, db, asha):
+    _settings(client, asha)
+    out = _send(client, asha, *[_unknown_account(n, 100 + n) for n in range(5)])
+    ids = [m["id"] for m in out["results"]]
+    assert all(m["account_id"] is None and m["reason"].startswith("Which account?") for m in out["results"])
+    # Record the first two into Cash: the digits 7777 are remembered, so the other three get the account too
+    r = client.post("/api/autotrack/messages/bulk", json={"ids": ids[:2], "action": "record", "account_id": asha.ids["Cash"],
+                                                          "category": "Shopping"}, headers=headers(asha))
+    assert r.status_code == 200 and r.json()["done"] == 2, r.text
+    rest = [db.get(BankMessage, i) for i in ids[2:]]
+    assert all(m.account_id == asha.ids["Cash"] and m.reason is None for m in rest)
+    assert {e.category for e in db.scalars(select(Expense))} == {"Shopping"}
+    # Select all → record: the rest go in with their own (now known) account
+    r = client.post("/api/autotrack/messages/bulk", json={"ids": ids, "action": "record"}, headers=headers(asha))
+    assert r.json()["done"] == 3 and r.json()["skipped"] == 2
+    assert len(db.scalars(select(Expense)).all()) == 5
+
+
+def test_bulk_dismiss_and_delete_only_touch_own_messages(client, db, asha, make_user):
+    _settings(client, asha)
+    ids = [m["id"] for m in _send(client, asha, *[_unknown_account(n, 50 + n) for n in range(3)])["results"]]
+    other = make_user("ravi", expense=True, upi=True)
+    r = client.post("/api/autotrack/messages/bulk", json={"ids": ids, "action": "delete"}, headers=headers(other))
+    assert r.json()["done"] == 0 and len(db.scalars(select(BankMessage)).all()) == 3
+    r = client.post("/api/autotrack/messages/bulk", json={"ids": ids[:2], "action": "dismiss"}, headers=headers(asha))
+    assert r.json()["done"] == 2
+    r = client.post("/api/autotrack/messages/bulk", json={"ids": ids, "action": "delete"}, headers=headers(asha))
+    assert r.json()["done"] == 3 and not db.scalars(select(BankMessage)).all()
+
+
+# ---------- payments with no message ----------
+def _with_balance(n, amount, balance, minutes, direction="debited"):
+    when = datetime.combine(DAY, datetime.min.time()) + timedelta(hours=9, minutes=minutes)
+    return {"sender": "AX-AXISBK", "source": "SMS", "received_at": when.isoformat(),
+            "body": f"INR {amount}.00 {direction} from A/c no. XX1234 on {DMY} UPI/P2M/6312999{n:05d}/SHOP {n}. Avl bal INR {balance}.00"}
+
+
+def test_balance_check_finds_a_payment_with_no_message(client, db, asha):
+    _settings(client, asha)
+    # 10,000 → paid 100 → 9,900. Then a 500 payment sent no SMS. Then paid 200 → balance 9,200 (not 9,700)
+    _send(client, asha, _with_balance(1, 100, 9900, 0), _with_balance(2, 200, 9200, 30))
+    gaps = client.get("/api/autotrack/gaps", headers=headers(asha)).json()
+    assert len(gaps) == 1 and gaps[0]["direction"] == "DEBIT" and Decimal(gaps[0]["amount"]) == Decimal("500.00")
+    assert gaps[0]["last4"] == "1234"
+    r = client.post(f"/api/autotrack/gaps/{gaps[0]['key']}/review", headers=headers(asha))
+    assert r.status_code == 200 and r.json()["status"] == "PENDING" and r.json()["source"] == "BALANCE"
+    assert r.json()["account_id"] == asha.ids["Axis Bank"] and r.json()["suggestion"] == "EXPENSE"
+    # Now explained: no gap left
+    assert client.get("/api/autotrack/gaps", headers=headers(asha)).json() == []
+
+
+def test_balance_check_is_quiet_when_everything_adds_up(client, asha):
+    _settings(client, asha)
+    _send(client, asha, _with_balance(1, 100, 9900, 0), _with_balance(2, 200, 9700, 30))
+    assert client.get("/api/autotrack/gaps", headers=headers(asha)).json() == []

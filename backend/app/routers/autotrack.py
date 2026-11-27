@@ -20,7 +20,7 @@ from ..deps import FEATURE_UPI, get_current_user, has_feature
 from ..models import MSG_BILL, MSG_FAILED, MSG_PENDING, STATUS_APPROVED, BankMessage, User
 from ..ratelimit import RateLimiter
 from ..schemas import (
-    AutoTrackSettingsIn, AutoTrackSettingsOut, BankAcceptIn, BankBatchOut, BankMessageIn, BankMessageOut, BankMessagesIn,
+    AutoTrackSettingsIn, AutoTrackSettingsOut, BankAcceptIn, BankBulkIn, BankBatchOut, BankMessageIn, BankMessageOut, BankMessagesIn,
     DeviceTokenOut,
 )
 from ..services import autotrack as svc
@@ -168,6 +168,27 @@ def accept_all(user: User = Depends(get_current_user), db: Session = Depends(get
             skipped += 1
     db.commit()
     return {"recorded": done, "left": skipped}
+
+
+@router.post("/messages/bulk")
+def bulk_messages(data: BankBulkIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Record, skip or remove many messages at once. Returns how many were done and why any were left."""
+    result = svc.bulk(db, user, data.ids, data.action, data.model_dump(include={"account_id", "category", "suggestion"}))
+    db.commit()
+    return result
+
+
+@router.get("/gaps")
+def balance_gaps(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Money that moved with no bank message, found from the balance the bank's messages show (last 90 days)."""
+    return svc.balance_gaps(db, user)
+
+
+@router.post("/gaps/{key}/review", response_model=BankMessageOut)
+def review_gap(key: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    msg = svc.review_gap(db, user, key[:80])
+    db.commit()
+    return msg
 
 
 @router.post("/messages/{message_id}/dismiss", response_model=BankMessageOut)

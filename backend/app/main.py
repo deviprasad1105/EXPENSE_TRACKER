@@ -132,6 +132,9 @@ async def security_headers(request: Request, call_next):
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
     if request.url.path.startswith("/api/") and not request.url.path.startswith("/api/docs"):
         response.headers.setdefault("Cache-Control", "no-store")
+        # API answers are data, never a page: nothing in them may run, load or be framed
+        response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+        response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
     if settings.is_production:
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response
