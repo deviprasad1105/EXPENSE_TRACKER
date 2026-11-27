@@ -1,12 +1,11 @@
 // The Android app is published in the repository's mobile-app/ folder by the "Publish Android app" workflow.
-// Downloads always start from GitHub's page for the file, after the person taps Download there: neither the website
-// nor the app downloads or installs an APK by itself (a site that pushes app files is what Google Safe Browsing
-// flags as dangerous).
+// The APK downloads only when the person taps a download button: neither the website nor the app downloads or
+// installs an APK by itself (a site that pushes app files is what Google Safe Browsing flags as dangerous).
 import { APP_VERSION, isApp } from './api'
 
 const REPO = 'https://github.com/deviprasad1105/EXPENSE_TRACKER'
-// GitHub's page for the APK, with its Download button
-export const APP_PAGE_URL = `${REPO}/blob/main/mobile-app/ExpenseTracker.apk`
+// The APK itself: tapping a link to it downloads the file straight away
+export const APP_DOWNLOAD_URL = `${REPO}/raw/main/mobile-app/ExpenseTracker.apk`
 // Published next to the APK: the newest app's version, and the oldest one still allowed
 const VERSION_URL = 'https://raw.githubusercontent.com/deviprasad1105/EXPENSE_TRACKER/main/mobile-app/version.json'
 

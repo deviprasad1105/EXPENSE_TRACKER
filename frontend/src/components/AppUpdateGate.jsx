@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { ExternalLink, X } from 'lucide-react'
+import { Download, X } from 'lucide-react'
 import { isApp } from '../api'
-import { APP_PAGE_URL, checkAppUpdate } from '../appUpdate'
+import { APP_DOWNLOAD_URL, checkAppUpdate } from '../appUpdate'
 import Logo from './Logo'
 
 const LATER_KEY = 'app-update-later'
@@ -10,7 +10,7 @@ const LATER_KEY = 'app-update-later'
  * Android app only. When a newer app is published (mobile-app/version.json):
  * - an optional update shows a banner ("Later" hides it until the app is opened again);
  * - a required one (this version is below minVersionCode) covers the whole app until it is updated.
- * "Get the update" opens the download page in the browser; the app itself never downloads or installs anything.
+ * "Download update" downloads the new APK in the browser; the app itself never downloads or installs anything.
  */
 export default function AppUpdateGate() {
   const [update, setUpdate] = useState(null)
@@ -37,8 +37,8 @@ export default function AppUpdateGate() {
 
   const actions = (
     <div className="app-update-actions">
-      <button className="btn" onClick={() => window.open(APP_PAGE_URL, '_system')}>
-        <ExternalLink size={16} /> Get the update
+      <button className="btn" onClick={() => window.open(APP_DOWNLOAD_URL, '_system')}>
+        <Download size={16} /> Download update
       </button>
       {!required && (
         <button className="btn ghost" onClick={later}>
@@ -49,7 +49,7 @@ export default function AppUpdateGate() {
   )
   const how = (
     <p className="app-update-note">
-      Opens the download page in your browser: tap <b>Download</b>, then open the file to install it over this app. Your data is safe and you stay
+      Downloads in your browser: open the file when it finishes to install it over this app. Your data is safe and you stay
       signed in.
     </p>
   )
