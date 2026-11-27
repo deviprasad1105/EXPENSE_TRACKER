@@ -1,8 +1,8 @@
-import { ExternalLink, Smartphone } from 'lucide-react'
+import { Download, Smartphone } from 'lucide-react'
 import { APP_VERSION } from '../api'
-import { APP_PAGE_URL } from '../appUpdate'
+import { APP_DOWNLOAD_URL } from '../appUpdate'
 
-/** Website only (Profile): where to get the Android app. The download itself happens on GitHub, when the person asks. */
+/** Website only (Profile): where to get the Android app. The APK downloads only when the button is tapped. */
 export default function GetAndroidApp() {
   return (
     <div className="card" id="android-app">
@@ -18,12 +18,12 @@ export default function GetAndroidApp() {
         </div>
       </div>
       <ol className="muted" style={{ margin: '0 0 14px', paddingLeft: 20, lineHeight: 1.7 }}>
-        <li>On your Android phone, open the download page and tap <b>Download</b>.</li>
+        <li>On your Android phone, tap <b>Download the app</b>.</li>
         <li>Open the downloaded file. Android asks once to allow installs from your browser: allow it.</li>
         <li>Open Expense Tracker and sign in with the same account.</li>
       </ol>
-      <a className="btn" href={APP_PAGE_URL} target="_blank" rel="noopener noreferrer">
-        <ExternalLink size={16} /> Open the download page
+      <a className="btn" href={APP_DOWNLOAD_URL} rel="noopener noreferrer">
+        <Download size={16} /> Download the app
       </a>
     </div>
   )
