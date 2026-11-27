@@ -1,6 +1,7 @@
+import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
+import { isApp } from './api'
 import { canUseSplits, hasFeature, useAuth } from './auth'
-import AppUpdateGate from './components/AppUpdateGate'
 import Layout from './components/Layout'
 import PasscodeGate from './components/Passcode'
 import Login from './pages/Login'
@@ -75,10 +76,17 @@ function NoFeatures() {
   )
 }
 
+// The in-app update prompt (and the APK link it needs) is loaded only inside the Android app, never on the website
+const AppUpdateGate = isApp ? lazy(() => import('./components/AppUpdateGate')) : null
+
 export default function App() {
   return (
     <>
-    <AppUpdateGate />
+    {AppUpdateGate && (
+      <Suspense fallback={null}>
+        <AppUpdateGate />
+      </Suspense>
+    )}
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />

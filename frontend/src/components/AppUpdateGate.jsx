@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { registerPlugin } from '@capacitor/core'
 import { Download, RefreshCw, ShieldAlert, X } from 'lucide-react'
-import { APP_APK_URL, APP_DOWNLOAD_URL, checkAppUpdate, isApp } from '../api'
+import { isApp } from '../api'
+import { APP_APK_URL, APP_DOWNLOAD_URL, checkAppUpdate } from '../appUpdate'
 import Logo from './Logo'
 
 // Native side: android/app/src/main/java/com/expensetracker/app/update/AppUpdatePlugin.java (app 1.4 and later)
