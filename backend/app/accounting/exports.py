@@ -12,36 +12,21 @@ from io import BytesIO
 from itertools import zip_longest
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles import Alignment, Border, Font, PatternFill
 from openpyxl.utils import get_column_letter
-from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import mm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Paragraph, Spacer
 
 from ..services.export_safe import defuse_formulas, pdf_text
+from ..services.report_style import (
+    NOTE, SUBTITLE, TITLE, XL_BORDER, XL_INR, XL_THIN, build_pdf, content_width, grid, inr, xl_header,
+    xl_use_rubik,
+)
 from ..timeutil import now_local
 from .chart import fy_label
 
 ZERO = Decimal(0)
-# Indian grouping in Excel: crores and lakhs need their own sections
-XL_INR = r"[>=10000000]##\,##\,##\,##0.00;[>=100000]##\,##\,##0.00;##,##0.00"
 TYPE_ABBR = {"PAYMENT": "Pymt", "RECEIPT": "Rcpt", "CONTRA": "Ctra", "JOURNAL": "Jrnl", "SALES": "Sale", "PURCHASE": "Purc"}
-
-
-def inr(value) -> str:
-    """12345678.5 → '1,23,45,678.50'."""
-    d = Decimal(value or 0).quantize(Decimal("0.01"))
-    sign, whole, frac = ("-" if d < 0 else ""), *f"{abs(d):.2f}".split(".")
-    head, tail = whole[:-3], whole[-3:]
-    parts = []
-    while len(head) > 2:
-        parts.insert(0, head[-2:])
-        head = head[:-2]
-    if head:
-        parts.insert(0, head)
-    return sign + ",".join(parts + [tail]) + "." + frac
 
 
 @dataclass
@@ -228,6 +213,10 @@ def brs_doc(r: dict, business: str) -> Doc:
 
 
 # ---------- writers ----------
+def _align(col: Col) -> str:
+    return "R" if col.money else "L"
+
+
 def to_xlsx(doc: Doc) -> bytes:
     wb = Workbook()
     ws = wb.active
@@ -235,90 +224,74 @@ def to_xlsx(doc: Doc) -> bytes:
     width = len(doc.columns)
     ws.cell(row=1, column=1, value=doc.business).font = Font(bold=True, size=13)
     ws.cell(row=2, column=1, value=doc.title).font = Font(bold=True, size=12)
-    ws.cell(row=3, column=1, value=doc.subtitle).font = Font(italic=True, color="555555")
+    ws.cell(row=3, column=1, value=doc.subtitle).font = Font(italic=True, color="6B7280")
     for r in (1, 2, 3):
         ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=width)
-    thin = Side(style="thin", color="BFBFBF")
     head = 5
+    xl_header(ws, head, [c.label for c in doc.columns], "".join(_align(c) for c in doc.columns))
     for c, col in enumerate(doc.columns, start=1):
-        cell = ws.cell(row=head, column=c, value=col.label)
-        cell.font, cell.fill = Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor="1F4E79")
-        cell.alignment = Alignment(horizontal="right" if col.money else "left")
         ws.column_dimensions[get_column_letter(c)].width = max(10, col.width * 0.55)
     for i, row in enumerate(doc.rows, start=head + 1):
         for c, (col, value) in enumerate(zip(doc.columns, row.cells), start=1):
             if isinstance(value, date):
                 value = value.strftime("%d-%m-%Y")
+            if isinstance(value, str) and not col.money:
+                lead = len(value) - len(value.lstrip(" "))
+                value = value.lstrip(" ")
+            else:
+                lead = 0
             cell = ws.cell(row=i, column=c, value=float(value) if col.money and isinstance(value, Decimal) else value)
+            cell.border = XL_BORDER
             if col.money:
                 cell.number_format = XL_INR
-            elif row.indent and c in (1, 2, 3):
-                cell.alignment = Alignment(indent=row.indent * 2)
+                cell.alignment = Alignment(horizontal="right", vertical="top")
+            else:
+                cell.alignment = Alignment(indent=row.indent * 2 + lead // 2, vertical="top", wrap_text=True)
             if row.bold:
                 cell.font = Font(bold=True)
             if row.shade:
-                cell.fill = PatternFill("solid", fgColor="EEF2F7")
-                cell.border = Border(top=thin)
+                cell.fill = PatternFill("solid", fgColor="EBEDF9")
+                cell.border = Border(left=XL_THIN, right=XL_THIN, bottom=XL_THIN, top=XL_THIN)
     if doc.note:
         ws.cell(row=head + len(doc.rows) + 2, column=1, value=doc.note).font = Font(italic=True, color="AA5500")
     ws.cell(row=head + len(doc.rows) + 3, column=1, value=f"Generated {now_local():%d %b %Y %H:%M}").font = Font(color="888888")
     ws.freeze_panes = ws.cell(row=head + 1, column=1)
+    xl_use_rubik(wb)
     defuse_formulas(wb)
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
 
 
+def _two_sided(doc: Doc) -> bool:
+    """Trading, P&L and Balance Sheet: Particulars | Amount | Particulars | Amount."""
+    return [c.money for c in doc.columns] == [False, True, False, True]
+
+
 def to_pdf(doc: Doc) -> bytes:
     buf = BytesIO()
     size = landscape(A4) if doc.landscape else A4
-    pdf = SimpleDocTemplate(buf, pagesize=size, leftMargin=12 * mm, rightMargin=12 * mm, topMargin=12 * mm,
-                            bottomMargin=12 * mm, title=doc.title)
-    styles = getSampleStyleSheet()
-    small = styles["BodyText"].clone("small", fontSize=8, leading=10)
-    bold = small.clone("smallbold", fontName="Helvetica-Bold")
-    story = [
-        Paragraph(pdf_text(doc.business), styles["Title"]),
-        Paragraph(f"<b>{pdf_text(doc.title)}</b>", styles["Heading3"]),
-        Paragraph(pdf_text(doc.subtitle), styles["Normal"]),
-        Spacer(1, 6),
-    ]
-    available = size[0] - 24 * mm
-    widths = [c.width for c in doc.columns]
-    widths = [w * available / sum(widths) for w in widths]
-    data = [[c.label for c in doc.columns]]
-    styling = [
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E79")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LINEBELOW", (0, 0), (-1, -1), 0.25, colors.HexColor("#DDDDDD")),
-    ]
-    for c, col in enumerate(doc.columns):
-        if col.money:
-            styling.append(("ALIGN", (c, 0), (c, -1), "RIGHT"))
-    for i, row in enumerate(doc.rows, start=1):
-        cells = []
-        for col, value in zip(doc.columns, row.cells):
-            if col.money:
-                cells.append("" if value is None else inr(value))
-            else:
-                text = value.strftime("%d-%m-%Y") if isinstance(value, date) else ("" if value is None else str(value))
-                indent = "&nbsp;" * 4 * row.indent if col is doc.columns[0] or col is doc.columns[min(2, len(doc.columns) - 1)] else ""
-                cells.append(Paragraph(indent + pdf_text(text), bold if row.bold else small))
-        data.append(cells)
+    width = content_width(size)
+    rows, bold, shade, indent = [], [], [], {}
+    for i, row in enumerate(doc.rows):
+        rows.append(["" if v is None else (inr(v) if col.money else (v.strftime("%d-%m-%Y") if isinstance(v, date) else str(v)))
+                     for col, v in zip(doc.columns, row.cells)])
         if row.bold:
-            styling.append(("FONTNAME", (0, i), (-1, i), "Helvetica-Bold"))
+            bold.append(i)
         if row.shade:
-            styling.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#EEF2F7")))
-    table = Table(data, colWidths=widths, repeatRows=1)
-    table.setStyle(TableStyle(styling))
-    story.append(table)
+            shade.append(i)
+        if row.indent:
+            indent[i] = row.indent
+    story = [
+        Paragraph(pdf_text(doc.title), TITLE),
+        Paragraph(f"{pdf_text(doc.business)} · {pdf_text(doc.subtitle)}", SUBTITLE),
+        Spacer(1, 10),
+        grid([(c.label, _align(c), c.width) for c in doc.columns], rows, width, bold=bold, shade=shade, indent=indent,
+             zebra=False, divide_after=[1] if _two_sided(doc) else []),
+    ]
     if doc.note:
-        story += [Spacer(1, 6), Paragraph(f"<i>{pdf_text(doc.note)}</i>", small)]
-    story += [Spacer(1, 4), Paragraph(f"Generated {now_local():%d %b %Y %H:%M}", small)]
-    pdf.build(story)
+        story.append(Paragraph(pdf_text(doc.note), NOTE))
+    build_pdf(buf, story, size, doc.title)
     return buf.getvalue()
 
 
