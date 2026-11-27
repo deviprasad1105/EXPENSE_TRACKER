@@ -36,7 +36,6 @@ class Settings(BaseSettings):
     # And at most LOGIN_IP_MAX_ATTEMPTS sign-in attempts per IP address per minute
     login_ip_max_attempts: int = 20
 
-    edit_window_days: int = 3
     username_lock_days: int = 15
     max_avatar_bytes: int = 2_000_000
     max_background_bytes: int = 5_000_000

@@ -1107,7 +1107,7 @@ function Review({ source, replaceId, onReplace, step, setStep, onBack, onCancel,
           )}
         </div>
         <p className="hint">
-          Records keep their original date and appear in Expenses, Balance, the Dashboard and Reports; transfers move money between your accounts and opening balances are added to them. They can be edited for 3 days from today, don’t trigger budget alerts, and post to your books if you use Accounting. You can undo the whole import from Import history.
+          Records keep their original date and appear in Expenses, Balance, the Dashboard and Reports; transfers move money between your accounts and opening balances are added to them. They can be edited like any other entry, don’t trigger budget alerts, and post to your books if you use Accounting. You can undo the whole import from Import history.
         </p>
       </div>
     </>

@@ -243,6 +243,8 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 .center { display: grid; place-items: center; height: 100vh; color: var(--muted); }
 .row-between { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .stack { display: flex; flex-direction: column; gap: 6px; }
+/* A table that stacks into cards on phones (.table.stack, below) is a normal table elsewhere, not the .stack column */
+.table.stack { display: table; }
 
 /* ---------- forms ---------- */
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; align-items: end; }

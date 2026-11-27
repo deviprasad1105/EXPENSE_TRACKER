@@ -138,7 +138,10 @@ Most changes are web changes: deploy them to Vercel as usual, then run `npm run 
   amount every day. Items can be disabled without losing history.
 - **Daily entry**: your daily items are pre-filled for the chosen date. Untick, adjust, add **extra items**, then
   **Confirm & Save**. Future dates are rejected.
-- **3-day edit lock**: the owner can edit or delete an expense only within `EDIT_WINDOW_DAYS` (3) of saving it.
+- **Edit at any time**: the owner can edit or delete any expense or money received, however old. Balances, budgets,
+  reports and the books follow it, and so do the records that keep a copy of its amount: an investment it was added
+  to (its invested amount and value), a bill payment and a subscription charge (`backend/app/services/linked.py`).
+  Only a locked accounting period (Accounting → Settings → lock date) still blocks changes.
   Admins can always change it.
 - **Reminders**: every day at `REMINDER_HOUR:REMINDER_MINUTE` users with no entry for that day get a notification
   (plus email if SMTP is set), and so does their direct manager. Missed days are back-filled for the last 7 days.
@@ -272,8 +275,8 @@ Most changes are web changes: deploy them to Vercel as usual, then run `npm run 
   - **Your choices are remembered**: the categories, moves and accounts you chose are filled in again the next time
     the same names come up, e.g. in the next year's file.
   - A description longer than 100 characters is kept in full in the note.
-  - **After the import**: records keep their original date and show on every page; the 3-day edit window starts on
-    the import day; no budget alert is sent; they post to the books like any other record. A whole history from
+  - **After the import**: records keep their original date and show on every page; they can be edited like any
+    other record; no budget alert is sent; they post to the books like any other record. A whole history from
     another app (e.g. a Money Manager export with transfers and opening balances) ends with every account at the
     balance the other app shows. Records older than the accounting books move the books' start back to their
     financial year (the review says so first), so a migration loses nothing.
@@ -391,7 +394,7 @@ Most changes are web changes: deploy them to Vercel as usual, then run `npm run 
 
 | Who is viewing | Can see | Can change |
 |---|---|---|
-| Owner | own data | yes (3-day lock applies) |
+| Owner | own data | yes, at any time (except in a locked accounting period) |
 | **Manager at any level above** (A manages B, B manages C, so B sees C and A sees B and C; A's own manager sees all three) | the team's data | **no**, read-only |
 | User the owner shared with (*Team & Sharing*) | the owner's data | **no**, read-only |
 | Admin | everyone | yes, including locked entries; approves users, username requests and account deletion requests, sets managers, deletes users (even in split groups: they stay there as a guest) |

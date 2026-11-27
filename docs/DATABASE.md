@@ -283,7 +283,7 @@ Every saved expense, one row per item per day.
 | `note` | VARCHAR2(500) | Optional. |
 | `is_extra` | SMALLINT | 1 = added as an extra item, not from the daily list. |
 | `daily_item_id` | INTEGER, FK → `daily_items.id`, nullable | The template it came from. Lets Daily Entry show "already saved". |
-| `created_at` | DATE | When it was saved. **Start of the 3-day edit window.** |
+| `created_at` | DATE | When it was saved. |
 | `updated_at` | DATE | Last edit. |
 | `created_by` | INTEGER, FK → `app_users.id` | Who saved it (the owner, or an admin acting for them). |
 | `account_id` | INTEGER, FK → `accounts.id`, nullable | The account it was paid from. Empty on create means the primary account; `NULL` if the user has no accounts. |
@@ -292,8 +292,9 @@ Every saved expense, one row per item per day.
 | `alias_id` | INTEGER, FK → `transaction_aliases.id`, nullable | The alias naming it. Cleared when the user renames the record by hand. |
 | `origin` | VARCHAR(10), nullable | `UPI` when the UPI tracker recorded it; `NULL` when typed or imported. |
 
-**Edit lock:** the owner may edit or delete a row only until `created_at + EDIT_WINDOW_DAYS` (3 days). After that
-the API refuses with 403. Admins can always edit or delete. Managers and people it was shared with can never
+**Editing:** the owner (and admins) may edit or delete a row at any time, unless it is dated in a locked accounting
+period. An investment holding it was added to (`investment_links`), a bill payment and a subscription charge follow
+the new amount (`services/linked.py`). Managers and people it was shared with can never
 change it.
 
 ## FUNDS
@@ -315,8 +316,8 @@ Money added to the balance (salary, pocket money…).
 | `alias_id` | INTEGER, FK → `transaction_aliases.id`, nullable | The alias naming it. Cleared when the user renames the record by hand. |
 | `origin` | VARCHAR(10), nullable | `UPI` when the UPI tracker recorded it; `NULL` when typed or imported. |
 
-**Edit lock:** as for expenses, the owner may change `source`, `category` and `note` only until
-`created_at + EDIT_WINDOW_DAYS`; admins always. Older ones of a payee get a new category through an alias.
+**Editing:** as for expenses, the owner (and admins) may change `source`, `category` and `note` at any time. All of
+a payee's entries get a new category at once through an alias.
 
 **Available balance** = `SUM(funds.amount)` − `SUM(expenses.amount)` for the user, over all time.
 
@@ -767,7 +768,7 @@ A readable name for a payee (*Settings → Transaction aliases*). Unique per (`u
 **Rules:** new expenses and money received (typed, imported or from the UPI tracker) are named as they are saved.
 Old records are renamed only when the user ticks them in the preview. Renaming an alias renames every record it names;
 deleting it can put the original descriptions back. Records dated in a locked accounting period are never changed.
-Renaming doesn't set `updated_at`, so it neither counts as an edit for an import Undo nor touches the 3-day edit window.
+Renaming doesn't set `updated_at`, so it doesn't count as an edit for an import Undo.
 
 ### USER_CATEGORIES
 Categories the user added (`is_hidden` false), and ones they hid from every category list (`is_hidden` true, a default
@@ -897,8 +898,8 @@ next year's file). One row per user, kind and value; unique on (`user_id`, `kind
 
 | Viewer → target | See | Change |
 |---|---|---|
-| Same user | ✔ | ✔ (expenses only within 3 days of creation) |
-| Admin | ✔ everyone | ✔ everything, including locked expenses; can delete users |
+| Same user | ✔ | ✔ (at any time, except in a locked accounting period) |
+| Admin | ✔ everyone | ✔ everything; can delete users |
 | Manager, at any level above the target | ✔ | ✘ |
 | Viewer in `DATA_SHARES` | ✔ | ✘ |
 | Anyone else | ✘ | ✘ |

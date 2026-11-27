@@ -442,9 +442,8 @@ class ExpenseOut(ORM):
     account_id: int | None = None
     created_at: datetime
     updated_at: datetime | None
-    locked: bool = False
+    # Whether the viewer can change it (the owner and admin, at any time)
     editable: bool = False
-    lock_at: datetime | None = None
     raw_name: str | None = None
     alias_id: int | None = None
     # Which payee it is (for "always use this category for it")
@@ -477,7 +476,7 @@ class FundOut(ORM, FundIn):
     alias_id: int | None = None
     payee_key: str | None = None
     origin: str | None = None
-    # Whether the viewer can change it now (the owner: within the edit window, as for expenses)
+    # Whether the viewer can change it (the owner and admin, at any time, as for expenses)
     editable: bool = False
 
 

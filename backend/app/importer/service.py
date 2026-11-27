@@ -15,7 +15,7 @@ imported, Purge & re-import replaces that import: the corrected file is checked 
 records, imported, then the earlier import is removed entirely (also records edited since).
 
 Imported records are ordinary expenses and money received: they show on every page and post to the books. Their
-original date is kept; the edit window starts on the day of the import; no budget alert is sent for them.
+original date is kept; they can be edited like any other; no budget alert is sent for them.
 A split row becomes an expense for the user's share, and a split bill (paid by the user) for the part paid for
 the others, who then owe it. A split someone else paid ("Paid by" column) becomes an expense for the user's share
 (from no account: no money left the user's accounts) and a split bill paid by that person, which the user owes.

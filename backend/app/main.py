@@ -20,6 +20,7 @@ from .routers import (
     mfa, notifications, org, passcode, profile, recover, reports, shares, splits, subscriptions, upi,
 )
 from .security import hash_password
+from .services import linked  # noqa: F401  (registers: linked records follow an edited expense or transfer)
 from .services.cards import card_reminder_job
 from .services.reminders import daily_reminder_job
 from .services.subscriptions import subscription_job
