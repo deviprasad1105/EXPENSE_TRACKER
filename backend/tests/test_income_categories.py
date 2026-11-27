@@ -74,7 +74,7 @@ def test_alias_gives_money_received_its_income_category(client, make_user):
     assert cats == ["Money received", "Rent from builder"]
 
 
-def test_edit_category_within_the_window(client, db, make_user):
+def test_edit_category_at_any_time(client, db, make_user):
     u = make_user("asha")
     h = headers(u)
     f = _fund(client, u, source="Patel Har")
@@ -85,8 +85,10 @@ def test_edit_category_within_the_window(client, db, make_user):
     row = db.get(Fund, f["id"])
     row.created_at = now_local() - timedelta(days=10)
     db.commit()
-    assert client.put(f"/api/funds/{f['id']}", json={"category": "Salary"}, headers=h).status_code == 403
-    assert client.get("/api/funds", headers=h).json()[0]["editable"] is False
+    # Saved long ago: the owner can still change it
+    assert client.get("/api/funds", headers=h).json()[0]["editable"] is True
+    r = client.put(f"/api/funds/{f['id']}", json={"category": "Salary"}, headers=h)
+    assert r.status_code == 200 and r.json()["category"] == "Salary"
     # Someone else can't change it
     other = make_user("ravi")
     assert client.put(f"/api/funds/{f['id']}", json={"category": "Salary"}, headers=headers(other)).status_code in (403, 404)
