@@ -11,6 +11,7 @@ from ..config import settings
 from ..database import get_db
 from ..deps import ORG_LOCKED_MESSAGE, accessible_users, can_write, get_current_user
 from ..models import (
+    OTP_LOGIN,
     OTP_SIGNUP,
     ROLE_ADMIN,
     STATUS_APPROVED,
@@ -24,21 +25,25 @@ from ..models import (
 from ..ratelimit import RateLimiter
 from ..schemas import (
     AccessibleUser,
+    EmailCodeLoginIn,
+    EmailCodeResendIn,
     ForgotPasswordIn,
     LoginOut,
     MfaLoginIn,
     OtpSentOut,
     RegisterIn,
     ResendSignupOtpIn,
+    SecurityPolicy,
     NewPasswordIn,
     TokenOut,
     UserOut,
     VerifyEmailIn,
 )
 from ..security import (
-    MFA_TICKET, NEW_PASSWORD_TICKET, create_access_token, create_ticket, decode_ticket, hash_password, verify_password,
+    EMAIL_CODE_TICKET, MFA_TICKET, NEW_PASSWORD_TICKET, create_access_token, create_ticket, decode_ticket, hash_password, verify_password,
 )
 from ..services import mfa, otp
+from ..services import security_policy as policy
 from ..services.mailer import send_email
 from ..timeutil import now_local
 from .profile import account_exists
@@ -199,9 +204,12 @@ def _check_can_sign_in(user: User) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, ORG_LOCKED_MESSAGE)
 
 
-def _signed_in(db: Session, user: User) -> LoginOut:
+def _signed_in(db: Session, user: User, request: Request | None, how: str = "Password") -> LoginOut:
     if user.failed_logins or user.login_blocked_until:
         user.failed_logins, user.login_blocked_until = 0, None
+    # Signing in with the password also clears wrong passcodes (that is how a forgotten passcode is got past)
+    user.passcode_failures = 0
+    policy.record_login(db, user, request, ok=True, detail=how)
     db.commit()
     return LoginOut(access_token=create_access_token(user.id, user.token_version))
 
@@ -225,24 +233,39 @@ def _expire_temp_passwords(db: Session, user: User) -> None:
     )
 
 
-def _after_password(db: Session, user: User, reset: PasswordReset | None = None) -> LoginOut:
+def _after_password(db: Session, user: User, request: Request, reset: PasswordReset | None = None) -> LoginOut:
     """The password step passed. Next comes the authenticator code (two-step sign-in on), then a new password (when
-    a temporary password was used), else a session."""
+    a temporary password was used) or the emailed code (when the admin turned that on), else a session."""
     rid = {"rid": reset.id} if reset else {}
     if user.mfa_enabled:
         db.commit()
         return LoginOut(mfa_required=True, mfa_token=create_ticket(MFA_TICKET, user.id, user.token_version, settings.mfa_login_minutes, **rid))
-    return _after_code(db, user, reset)
+    return _after_code(db, user, reset, request)
 
 
-def _after_code(db: Session, user: User, reset: PasswordReset | None) -> LoginOut:
+def _email_code_step(db: Session, user: User) -> LoginOut:
+    """Email a sign-in code (older ones stop working) and return the ticket to send back with it."""
+    expires, sent = otp.issue(db, user, OTP_LOGIN)
+    otp.require_sent(sent)
+    minutes = otp.minutes_for(db, OTP_LOGIN) + 1
+    return LoginOut(
+        email_code_required=True, email_hint=policy.mask_email(user.email), expires_in_seconds=otp.seconds_left(expires),
+        email_token=create_ticket(EMAIL_CODE_TICKET, user.id, user.token_version, minutes),
+    )
+
+
+def _after_code(db: Session, user: User, reset: PasswordReset | None, request: Request | None,
+                how: str = "Password") -> LoginOut:
     if reset:
+        # The temporary password came by email, so it already proves the address: no emailed code on top
         db.commit()
         return LoginOut(
             password_change_required=True,
             password_token=create_ticket(NEW_PASSWORD_TICKET, user.id, user.token_version, NEW_PASSWORD_MINUTES, rid=reset.id),
         )
-    return _signed_in(db, user)
+    if policy.login_email_otp(db):
+        return _email_code_step(db, user)
+    return _signed_in(db, user, request, how)
 
 
 def _reset_from_ticket(db: Session, user: User, ticket: dict) -> PasswordReset | None:
@@ -270,13 +293,13 @@ def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: Ses
         _check_can_sign_in(user)
         # They remembered it: a temporary password sent meanwhile stops working
         _expire_temp_passwords(db, user)
-        return _after_password(db, user)
+        return _after_password(db, user, request)
     reset = _active_temp_password(db, user) if user else None
     if reset and verify_password(form.password, reset.temp_password_hash):
         _check_can_sign_in(user)
-        return _after_password(db, user, reset)
+        return _after_password(db, user, request, reset)
     if user:
-        _record_failed_login(db, user, request)
+        _record_failed_login(db, user, request, "Wrong password")
     raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username/email or password")
 
 
@@ -294,18 +317,59 @@ def login_mfa(data: MfaLoginIn, request: Request, db: Session = Depends(get_db))
     reset = _reset_from_ticket(db, user, ticket) if ticket.get("rid") else None
     used = mfa.verify(user, data.code)
     if not used:
-        _record_failed_login(db, user, request)
+        _record_failed_login(db, user, request, "Wrong authenticator code")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "The code is incorrect. Check that your phone's time is set automatically.")
     if used == "RECOVERY":
         left = mfa.recovery_left(user)
         db.add(Notification(user_id=user.id, kind="SECURITY", message=(
             f"A recovery code was used to sign in (from {_client_ip(request)}). {left} recovery code(s) left. "
             "If this wasn't you, change your password and make new recovery codes in Settings → Security.")))
-    return _after_code(db, user, reset)
+    return _after_code(db, user, reset, request, "Password + authenticator")
+
+
+def _email_ticket_user(db: Session, token: str) -> User:
+    ticket = decode_ticket(token, EMAIL_CODE_TICKET)
+    user = db.get(User, ticket["sub"]) if ticket else None
+    if not user or user.token_version != ticket["ver"]:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "This sign-in has expired. Enter your password again.")
+    _check_not_blocked(user)
+    _check_can_sign_in(user)
+    return user
+
+
+@router.post("/login/email-code", response_model=LoginOut)
+def login_email_code(data: EmailCodeLoginIn, request: Request, db: Session = Depends(get_db)):
+    """Last step while the admin has "email code at sign-in" on: the code emailed after the password."""
+    if not login_limiter.hit(f"mail:{_client_ip(request)}"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many attempts. Wait a minute and try again.")
+    user = _email_ticket_user(db, data.email_token)
+    try:
+        otp.consume(db, user, OTP_LOGIN, data.code)
+    except HTTPException:
+        _record_failed_login(db, user, request, "Wrong email code")
+        raise
+    return _signed_in(db, user, request, "Password + email code")
+
+
+@router.post("/login/email-code/resend", response_model=LoginOut)
+def resend_login_email_code(data: EmailCodeResendIn, request: Request, db: Session = Depends(get_db)):
+    if not public_form_limiter.hit(f"mail-resend:{_client_ip(request)}"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests. Wait a minute and try again.")
+    user = _email_ticket_user(db, data.email_token)
+    wait = otp.resend_wait_seconds(db, user.id, OTP_LOGIN)
+    if wait:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, f"Wait {wait} second(s) before asking for another code.")
+    return _email_code_step(db, user)
+
+
+@router.get("/security-policy", response_model=SecurityPolicy)
+def security_policy(db: Session = Depends(get_db)):
+    """The sign-in rules the admin has turned on (the app needs to know whether to ask for a passcode)."""
+    return SecurityPolicy(**policy.policy(db))
 
 
 @router.post("/login/new-password", response_model=LoginOut)
-def login_new_password(data: NewPasswordIn, db: Session = Depends(get_db)):
+def login_new_password(data: NewPasswordIn, request: Request, db: Session = Depends(get_db)):
     """Last step after signing in with a temporary password: choose a new password. Signs out every other device."""
     ticket = decode_ticket(data.password_token, NEW_PASSWORD_TICKET)
     user = db.get(User, ticket["sub"]) if ticket else None
@@ -320,7 +384,7 @@ def login_new_password(data: NewPasswordIn, db: Session = Depends(get_db)):
     reset.used_at = now_local()
     _expire_temp_passwords(db, user)
     db.add(Notification(user_id=user.id, kind="SECURITY", message="Your password was changed after signing in with a temporary password."))
-    out = _signed_in(db, user)
+    out = _signed_in(db, user, request, "Temporary password")
     send_email(
         user.email,
         "Expense Tracker: your password was changed",
@@ -331,7 +395,8 @@ def login_new_password(data: NewPasswordIn, db: Session = Depends(get_db)):
     return out
 
 
-def _record_failed_login(db: Session, user: User, request: Request):
+def _record_failed_login(db: Session, user: User, request: Request, detail: str):
+    policy.record_login(db, user, request, ok=False, detail=detail)
     user.failed_logins += 1
     if user.failed_logins >= settings.login_max_failures:
         user.failed_logins = 0

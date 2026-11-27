@@ -5,6 +5,7 @@
 for the phone identifies the user. That token can only send messages, and making a new one or unlinking stops it.
 """
 
+import logging
 from collections import Counter
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -25,11 +26,12 @@ from ..schemas import (
 from ..services import autotrack as svc
 from ..timeutil import today_local
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/autotrack", tags=["autotrack"])
 device_router = APIRouter(prefix="/api/autotrack/device", tags=["autotrack"])
 
 # A first scan of the inbox sends a few batches of up to 500 at once; after that it's one message at a time
-device_limiter = RateLimiter(max_hits=60, per_seconds=60)
+device_limiter = RateLimiter(max_hits=120, per_seconds=60)
 _TZ = ZoneInfo(settings.timezone)
 
 
@@ -57,10 +59,20 @@ def _received(m: BankMessageIn) -> datetime | None:
 
 
 def _record_batch(db: Session, user: User, messages: list[BankMessageIn]) -> BankBatchOut:
+    """Record each message on its own: one that fails (a message nobody foresaw, a database hiccup) is kept as
+    "couldn't read" instead of failing the whole batch, which the phone would otherwise send again and again."""
     results, counts = [], Counter()
     # Oldest first, so "the same payment as an earlier message" points the right way
     for m in sorted(messages, key=lambda m: _received(m) or datetime.max):
-        msg, new = svc.record_message(db, user, m.sender, m.body, _received(m), m.source)
+        if not m.body.strip():
+            counts["EMPTY"] += 1
+            continue
+        try:
+            with db.begin_nested():
+                msg, new = svc.record_message(db, user, m.sender, m.body, _received(m), m.source)
+        except Exception:  # noqa: BLE001 - any one message must not stop the others
+            log.exception("Auto-tracking: couldn't record a message for user %s", user.id)
+            msg, new = svc.record_failed(db, user, m.sender, m.body, _received(m), m.source), True
         counts[msg.status if new else "SEEN"] += 1
         if new:
             results.append(msg)

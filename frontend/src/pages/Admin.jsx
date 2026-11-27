@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ArchiveRestore, AtSign, Check, DatabaseBackup, Download, Eraser, Eye, Lock, MailWarning, Search, Settings2, ShieldCheck, ShieldOff, Trash2, Unlock, UserX, Users, X } from 'lucide-react'
+import { ArchiveRestore, AtSign, Check, History, MonitorSmartphone, DatabaseBackup, Download, Eraser, Eye, Lock, MailWarning, Search, Settings2, ShieldCheck, ShieldOff, Trash2, Unlock, UserX, Users, X } from 'lucide-react'
 import api, { download, errorMessage } from '../api'
 import { useAuth } from '../auth'
 import Avatar from '../components/Avatar'
@@ -24,21 +24,53 @@ export default function Admin() {
   const [search, setSearch] = useState('')
   const [msg, setMsg] = useState(null)
   const [otpCfg, setOtpCfg] = useState(null)
+  const [secCfg, setSecCfg] = useState(null)
+  // Sign-ins tab: whose (null = everyone), their devices and the log
+  const [loginUser, setLoginUser] = useState(null)
+  const [logins, setLogins] = useState([])
+  const [devices, setDevices] = useState([])
+  const [failedOnly, setFailedOnly] = useState(false)
 
   const load = useCallback(async () => {
-    const [u, r, b, d, o] = await Promise.all([
+    const [u, r, b, d, o, sec] = await Promise.all([
       api.get('/admin/users'),
       api.get('/admin/username-requests'),
       api.get('/admin/backups'),
       api.get('/admin/deletion-requests'),
       api.get('/admin/settings/otp'),
+      api.get('/admin/settings/security'),
     ])
     setUsers(u.data)
     setRequests(r.data)
     setBackups(b.data)
     setDeletions(d.data)
     setOtpCfg(o.data)
+    setSecCfg(sec.data)
   }, [])
+
+  const loadLogins = useCallback(async () => {
+    const [l, d] = await Promise.all([
+      api.get('/admin/logins', { params: { ...(loginUser ? { user_id: loginUser } : {}), failed_only: failedOnly, limit: 500 } }),
+      loginUser ? api.get(`/admin/users/${loginUser}/devices`) : Promise.resolve({ data: [] }),
+    ])
+    setLogins(l.data)
+    setDevices(d.data)
+  }, [loginUser, failedOnly])
+  useEffect(() => {
+    if (tab === 'logins') loadLogins().catch((e) => setMsg({ type: 'error', text: errorMessage(e) }))
+  }, [tab, loadLogins])
+
+  const showLogins = (u) => {
+    setLoginUser(u.id)
+    setTab('logins')
+  }
+
+  const saveSecurity = (next) => {
+    const on = (k) => next[k] && !secCfg[k]
+    if (on('login_email_otp') && !window.confirm('Ask everyone for a code from their email each time they sign in?\n\nMake sure email is working first: without the code nobody can sign in (you included).')) return
+    if (on('passcode_required') && !window.confirm('Ask everyone for a passcode each time they open the app or site? Each user chooses theirs the next time they open it.')) return
+    act(async () => setSecCfg((await api.put('/admin/settings/security', next)).data), 'Sign-in security saved')
+  }
   useEffect(() => {
     load()
   }, [load])
@@ -153,6 +185,9 @@ export default function Admin() {
           <button className={tab === 'deletions' ? 'on' : ''} onClick={() => setTab('deletions')}>
             <UserX size={14} /> Deletion requests {pendingDeletions > 0 && <span className="pill">{pendingDeletions}</span>}
           </button>
+          <button className={tab === 'logins' ? 'on' : ''} onClick={() => setTab('logins')}>
+            <History size={14} /> Sign-ins
+          </button>
           <button className={tab === 'backups' ? 'on' : ''} onClick={() => setTab('backups')}>
             <DatabaseBackup size={14} /> Backups
           </button>
@@ -191,6 +226,7 @@ export default function Admin() {
                     <th>Reports to</th>
                     <th>Organisation</th>
                     <th>Registered</th>
+                    <th>Last sign-in</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -324,6 +360,16 @@ export default function Admin() {
                         )}
                       </td>
                       <td className="muted" style={{ whiteSpace: 'nowrap' }}>{u.created_at.slice(0, 10)}</td>
+                      <td className="small">
+                        {u.last_login_at ? (
+                          <button type="button" className="link-button" title="All their sign-ins and devices" onClick={() => showLogins(u)} style={{ textAlign: 'left' }}>
+                            <div style={{ whiteSpace: 'nowrap' }}>{fmt(u.last_login_at)}</div>
+                            <div className="muted">{[u.last_login_ip, u.last_login_device].filter(Boolean).join(' · ')}</div>
+                          </button>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
                       <td>
                         <div className="actions">
                           {u.status !== 'APPROVED' && (
@@ -342,6 +388,9 @@ export default function Admin() {
                               <Eye size={14} />
                             </button>
                           )}
+                          <button className="btn ghost small" title="Sign-ins and devices" onClick={() => showLogins(u)}>
+                            <MonitorSmartphone size={14} />
+                          </button>
                           {u.id !== me.id &&
                             (u.is_locked ? (
                               <button className="btn ghost small" title="Unlock account" onClick={() => act(() => api.post(`/admin/users/${u.id}/unlock`), `@${u.username} unlocked`)}>
@@ -369,7 +418,7 @@ export default function Admin() {
                       </td>
                     </tr>
                   ))}
-                  {!shown.length && <EmptyRow cols={8}>No users match.</EmptyRow>}
+                  {!shown.length && <EmptyRow cols={9}>No users match.</EmptyRow>}
                 </tbody>
               </table>
             </div>
@@ -473,6 +522,131 @@ export default function Admin() {
             <button className="btn">Save</button>
           </div>
         </form>
+      )}
+
+      {tab === 'settings' && secCfg && (
+        <div className="card" style={{ maxWidth: 640 }}>
+          <div className="card-head">
+            <div>
+              <h3>Sign-in security</h3>
+              <p>Rules for everyone. Each one can be turned off again at any time.</p>
+            </div>
+          </div>
+          {[
+            ['login_email_otp', 'Email code at sign-in', 'After the password (and the authenticator code, for users who use one), a 6-digit code is emailed and must be entered. It is valid as long as the password-change codes above.'],
+            ['passcode_required', 'Passcode to open the app', 'Each user chooses a 4–6 digit passcode, asked whenever the app or site is opened where they are signed in, and after 5 minutes away. Five wrong passcodes sign them out everywhere.'],
+          ].map(([key, title, text]) => (
+            <div className="setting-row" key={key}>
+              <div>
+                <div className="strong">{title}</div>
+                <div className="hint">{text}</div>
+              </div>
+              <label className="switch">
+                <input type="checkbox" checked={secCfg[key]} onChange={(e) => saveSecurity({ ...secCfg, [key]: e.target.checked })} aria-label={title} />
+                <span />
+              </label>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === 'logins' && (
+        <>
+          <div className="card flush">
+            <div className="toolbar">
+              <select value={loginUser || ''} onChange={(e) => setLoginUser(e.target.value ? Number(e.target.value) : null)} aria-label="Whose sign-ins">
+                <option value="">Everyone</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.full_name} (@{u.username})
+                  </option>
+                ))}
+              </select>
+              <label className="check">
+                <input type="checkbox" checked={failedOnly} onChange={(e) => setFailedOnly(e.target.checked)} /> Failed only
+              </label>
+            </div>
+            {loginUser && (
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Device</th>
+                      <th>Using</th>
+                      <th>IP addresses</th>
+                      <th className="num">Sign-ins</th>
+                      <th>First seen</th>
+                      <th>Last seen</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {devices.map((d, i) => (
+                      <tr key={i}>
+                        <td>
+                          <b>{d.device || 'Unknown device'}</b>
+                          <div className="small muted">{d.os}</div>
+                        </td>
+                        <td>{d.platform === 'APP' ? <span className="badge info">App {d.app_version}</span> : d.browser || 'Browser'}</td>
+                        <td className="small">{d.ips.join(', ')}</td>
+                        <td className="num">{d.sign_ins}</td>
+                        <td className="muted small" style={{ whiteSpace: 'nowrap' }}>{fmt(d.first_seen)}</td>
+                        <td className="muted small" style={{ whiteSpace: 'nowrap' }}>{fmt(d.last_seen)}</td>
+                      </tr>
+                    ))}
+                    {!devices.length && <EmptyRow cols={6}>No sign-ins recorded yet.</EmptyRow>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          <div className="card flush">
+            <div className="card-head">
+              <div>
+                <h3>Sign-in log</h3>
+                <p>Every sign-in and failed try, newest first, kept for 180 days. Only admins see this.</p>
+              </div>
+            </div>
+            <div className="table-wrap" style={{ marginTop: 12 }}>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    {!loginUser && <th>User</th>}
+                    <th>Result</th>
+                    <th>IP address</th>
+                    <th>Device</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logins.map((e) => (
+                    <tr key={e.id}>
+                      <td className="muted" style={{ whiteSpace: 'nowrap' }}>{fmt(e.created_at)}</td>
+                      {!loginUser && (
+                        <td>
+                          <button type="button" className="link-button" onClick={() => setLoginUser(e.user_id)}>
+                            @{e.username}
+                          </button>
+                        </td>
+                      )}
+                      <td>
+                        <span className={`badge ${e.result === 'SUCCESS' ? 'ok' : 'bad'}`}>{e.result === 'SUCCESS' ? 'signed in' : 'failed'}</span>
+                        {e.detail && <div className="small muted">{e.detail}</div>}
+                      </td>
+                      <td>{e.ip || '—'}</td>
+                      <td title={e.user_agent || ''}>
+                        {e.device || 'Unknown device'}
+                        <div className="small muted">
+                          {[e.os, e.platform === 'APP' ? `app ${e.app_version || ''}` : e.browser].filter(Boolean).join(' · ')}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {!logins.length && <EmptyRow cols={loginUser ? 4 : 5}>No sign-ins recorded yet.</EmptyRow>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
       )}
 
       {tab === 'requests' && (

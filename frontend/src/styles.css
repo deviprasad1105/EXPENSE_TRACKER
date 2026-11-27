@@ -1224,3 +1224,9 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 .app-update-card h2 { margin: 0; font-size: 24px; }
 .app-update-card p { margin: 0; color: var(--text-2); }
 .app-update-card .app-update-actions { justify-content: center; }
+
+/* "Split this?" pop-up (components/SplitPrompt.jsx) */
+.split-prompt-list { display: flex; flex-direction: column; gap: 2px; max-height: 50vh; overflow-y: auto; }
+.split-prompt-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.split-prompt-row:last-child { border-bottom: 0; }
+.split-prompt-row .check { flex: 1; min-width: 0; }

@@ -307,3 +307,38 @@ def test_upi_app_payment_asks_which_account_when_there_are_several(client, asha)
 def test_skips_upi_app_offers_and_pending_payments(text):
     with pytest.raises(NotATransaction):
         parse_bank_message(text, "PhonePe", R)
+
+
+def test_one_bad_message_doesnt_fail_the_batch(client, db, asha, monkeypatch):
+    """A message that crashes the reader is kept as "couldn't read"; the rest of the batch is still recorded."""
+    _settings(client, asha)
+    from app.services import autotrack as svc
+    real = svc.parse_bank_message
+
+    def flaky(body, sender, day):
+        if "BOOM" in body:
+            raise ValueError("unexpected layout")
+        return real(body, sender, day)
+
+    monkeypatch.setattr(svc, "parse_bank_message", flaky)
+    token = client.post("/api/autotrack/device-token", headers=headers(asha)).json()["token"]
+    r = client.post("/api/autotrack/device/messages", headers={"X-Device-Token": token}, json={"messages": [
+        {"sender": "AX-AXISBK", "body": "INR 99.00 debited BOOM from A/c XX1234", "source": "SMS"},
+        {"sender": "AX-AXISBK", "body": UPI, "source": "SMS"},
+    ]})
+    assert r.status_code == 200, r.text
+    assert sorted(m["status"] for m in r.json()["results"]) == ["FAILED", "PENDING"]
+
+
+def test_phone_batch_with_odd_fields_is_not_refused(client, asha):
+    """Long sender names, empty bodies or an unknown source used to make the server refuse (422) the whole batch,
+    and the phone then threw all of it away."""
+    _settings(client, asha)
+    token = client.post("/api/autotrack/device-token", headers=headers(asha)).json()["token"]
+    r = client.post("/api/autotrack/device/messages", headers={"X-Device-Token": token}, json={"messages": [
+        {"sender": "A very long bank app name " * 5, "body": UPI, "source": "NOTIFICATION"},
+        {"sender": "AX-AXISBK", "body": "", "source": "SMS"},
+        {"sender": "AX-AXISBK", "body": UPI.replace("250.00", "251.00").replace("631234567890", "631234567891"), "source": "RCS"},
+    ]})
+    assert r.status_code == 200, r.text
+    assert r.json()["counts"].get("EMPTY") == 1 and len(r.json()["results"]) == 2

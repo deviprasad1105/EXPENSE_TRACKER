@@ -4,6 +4,7 @@ import AddRounded from '@mui/icons-material/AddRounded'
 import AccountBalanceOutlined from '@mui/icons-material/AccountBalanceOutlined'
 import SavingsOutlined from '@mui/icons-material/SavingsOutlined'
 import ShowChartRounded from '@mui/icons-material/ShowChartRounded'
+import TrendingDownRounded from '@mui/icons-material/TrendingDownRounded'
 import TrendingUpRounded from '@mui/icons-material/TrendingUpRounded'
 import api, { errorMessage, money, niceDate } from '../api'
 import { useAuth } from '../auth'
@@ -162,7 +163,7 @@ export default function Investments({ embedded = false }) {
             label="Gain / loss"
             value={data.gain == null ? '—' : `${Number(data.gain) > 0 ? '+' : ''}${money(data.gain)}`}
             sub={data.gain == null ? 'Needs both invested and current value' : `${data.gain_percent ?? 0}% on holdings with both figures`}
-            icon={TrendingUpRounded}
+            icon={data.gain != null && Number(data.gain) < 0 ? TrendingDownRounded : TrendingUpRounded}
             negative={data.gain != null && Number(data.gain) < 0}
           />
           <StatTile

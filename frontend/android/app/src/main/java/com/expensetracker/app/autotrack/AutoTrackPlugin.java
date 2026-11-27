@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
+import android.os.PowerManager;
 import android.provider.Settings;
 import android.provider.Telephony;
 
@@ -49,7 +50,15 @@ public class AutoTrackPlugin extends Plugin {
         o.put("linked", AutoTrackStore.linked(getContext()));
         o.put("queued", AutoTrackStore.queued(getContext()));
         o.put("sdk", Build.VERSION.SDK_INT);
+        o.put("batteryFree", batteryFree());
         return o;
+    }
+
+    /** Android won't put the app to sleep to save battery (which delays or stops sending in the background). */
+    private boolean batteryFree() {
+        if (Build.VERSION.SDK_INT < 23) return true;
+        PowerManager pm = (PowerManager) getContext().getSystemService(android.content.Context.POWER_SERVICE);
+        return pm == null || pm.isIgnoringBatteryOptimizations(getContext().getPackageName());
     }
 
     @Override
@@ -95,6 +104,41 @@ public class AutoTrackPlugin extends Plugin {
         } else {
             requestPermissionForAlias("notify", call, "afterPermission");
         }
+    }
+
+    /** Everything auto-tracking asks Android for, in one go: reading SMS and showing notifications. */
+    @PluginMethod
+    public void requestAll(PluginCall call) {
+        boolean sms = getPermissionState("sms") == PermissionState.GRANTED;
+        boolean notify = Build.VERSION.SDK_INT < 33 || getPermissionState("notify") == PermissionState.GRANTED;
+        if (sms && notify) {
+            call.resolve(statusObject());
+        } else if (sms) {
+            requestPermissionForAlias("notify", call, "afterPermission");
+        } else if (notify) {
+            requestPermissionForAlias("sms", call, "afterPermission");
+        } else {
+            requestPermissionForAliases(new String[] { "sms", "notify" }, call, "afterPermission");
+        }
+    }
+
+    /** Ask Android to let the app keep sending in the background (the "Allow / Deny" battery dialog). */
+    @PluginMethod
+    public void requestBatteryFree(PluginCall call) {
+        if (batteryFree()) {
+            call.resolve(statusObject());
+            return;
+        }
+        Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + getContext().getPackageName()));
+        try {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+        } catch (Exception e) {
+            // Some phones don't have this dialog: the battery settings list instead
+            startSettings(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS), call);
+            return;
+        }
+        call.resolve(statusObject());
     }
 
     @PermissionCallback
@@ -179,7 +223,11 @@ public class AutoTrackPlugin extends Plugin {
     /** Send whatever is waiting now (e.g. when the app opens). */
     @PluginMethod
     public void flush(PluginCall call) {
-        Uploader.flushAsync(getContext(), () -> call.resolve(statusObject()));
+        Uploader.flushAsync(getContext(), () -> {
+            // Some couldn't go now (offline): WorkManager sends them once the phone is online
+            if (AutoTrackStore.queued(getContext()) > 0) UploadWorker.schedule(getContext());
+            call.resolve(statusObject());
+        });
     }
 
     /** The page a tapped notification asked for, once. */

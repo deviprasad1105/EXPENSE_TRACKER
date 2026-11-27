@@ -65,14 +65,17 @@ export function AuthProvider({ children }) {
 
   const startSession = async (token) => {
     localStorage.setItem('token', token)
+    // Just signed in with the password: no passcode needed on this device until the app is next opened
+    markUnlocked()
     setLoading(true)
     await loadMe()
   }
 
-  // What a sign-in step returned: a session, or the next step ({ mfaToken } or { passwordToken })
+  // What a sign-in step returned: a session, or the next step ({ mfaToken }, { passwordToken } or { emailToken })
   const nextStep = async (data) => {
     if (data.mfa_required) return { mfaToken: data.mfa_token }
     if (data.password_change_required) return { passwordToken: data.password_token }
+    if (data.email_code_required) return { emailToken: data.email_token, emailHint: data.email_hint, expiresIn: data.expires_in_seconds }
     await startSession(data.access_token)
     return {}
   }
@@ -86,6 +89,10 @@ export function AuthProvider({ children }) {
 
   const completeMfa = async (mfaToken, code) => nextStep((await api.post('/auth/login/mfa', { mfa_token: mfaToken, code })).data)
 
+  // The admin turned on "email code at sign-in": the code emailed after the password
+  const completeEmailCode = async (emailToken, code) => nextStep((await api.post('/auth/login/email-code', { email_token: emailToken, code })).data)
+  const resendEmailCode = async (emailToken) => nextStep((await api.post('/auth/login/email-code/resend', { email_token: emailToken })).data)
+
   const setNewPassword = async (passwordToken, newPassword) =>
     nextStep((await api.post('/auth/login/new-password', { password_token: passwordToken, new_password: newPassword })).data)
 
@@ -94,6 +101,7 @@ export function AuthProvider({ children }) {
     unlinkPhone().catch(() => {})
     localStorage.removeItem('token')
     sessionStorage.removeItem('tour-seen')
+    lockApp()
     setUser(null)
     setAccessible([])
     setViewUserId(null)
@@ -108,7 +116,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, serverDown, login, completeMfa, setNewPassword, logout, accessible, target, params, setViewUserId, refresh: loadMe, updateUser }}
+      value={{ user, loading, serverDown, login, completeMfa, completeEmailCode, resendEmailCode, setNewPassword, logout, accessible, target, params, setViewUserId, refresh: loadMe, updateUser }}
     >
       {children}
     </AuthContext.Provider>
@@ -116,6 +124,30 @@ export function AuthProvider({ children }) {
 }
 
 export const useAuth = () => useContext(AuthContext)
+
+// Passcode lock (when the admin requires one): unlocked for this tab / app run, until it is locked again
+const UNLOCKED = 'passcode-unlocked'
+export function markUnlocked() {
+  try {
+    sessionStorage.setItem(UNLOCKED, '1')
+  } catch {
+    /* storage blocked: the passcode is asked again next time */
+  }
+}
+export function lockApp() {
+  try {
+    sessionStorage.removeItem(UNLOCKED)
+  } catch {
+    /* nothing to clear */
+  }
+}
+export function isUnlocked() {
+  try {
+    return sessionStorage.getItem(UNLOCKED) === '1'
+  } catch {
+    return false
+  }
+}
 
 /** Features ("subscriptions") the admin grants per user: 'expense', 'split', 'subscription' or 'accounting'.
  * Admins have all of them. Accounting is built from expense tracking, so it needs that too. */

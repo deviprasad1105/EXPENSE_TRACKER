@@ -60,29 +60,29 @@ public final class AutoTrackStore {
             }
             // Oldest dropped first if the phone was offline for a very long time
             while (q.length() > MAX_QUEUE) q.remove(0);
-            prefs(c).edit().putString("queue", q.toString()).apply();
+            // commit, not apply: the process may be stopped right after a message arrives
+            prefs(c).edit().putString("queue", q.toString()).commit();
         }
     }
 
-    /** Take up to `max` waiting messages out of the queue (put them back with requeue if sending fails). */
-    public static JSONArray take(Context c, int max) {
+    /**
+     * The oldest `max` waiting messages, left in the queue: they are removed with drop() only once the server has
+     * them, so nothing is lost if Android stops the app while sending.
+     */
+    public static JSONArray peek(Context c, int max) {
         synchronized (LOCK) {
-            JSONArray q = queue(c), out = new JSONArray(), rest = new JSONArray();
-            for (int i = 0; i < q.length(); i++) {
-                (i < max ? out : rest).put(q.opt(i));
-            }
-            prefs(c).edit().putString("queue", rest.toString()).apply();
+            JSONArray q = queue(c), out = new JSONArray();
+            for (int i = 0; i < q.length() && i < max; i++) out.put(q.opt(i));
             return out;
         }
     }
 
-    public static void requeue(Context c, JSONArray messages) {
+    /** Remove the oldest `n` messages (the ones just sent). New ones are only ever added at the end. */
+    public static void drop(Context c, int n) {
         synchronized (LOCK) {
-            JSONArray q = queue(c), merged = new JSONArray();
-            for (int i = 0; i < messages.length(); i++) merged.put(messages.opt(i));
-            for (int i = 0; i < q.length(); i++) merged.put(q.opt(i));
-            while (merged.length() > MAX_QUEUE) merged.remove(0);
-            prefs(c).edit().putString("queue", merged.toString()).apply();
+            JSONArray q = queue(c), rest = new JSONArray();
+            for (int i = n; i < q.length(); i++) rest.put(q.opt(i));
+            prefs(c).edit().putString("queue", rest.toString()).commit();
         }
     }
 

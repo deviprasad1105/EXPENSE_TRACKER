@@ -2,7 +2,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
-from sqlalchemy import delete, exists, or_, select, update
+from sqlalchemy import delete, exists, func, or_, select, update
 from sqlalchemy.orm import Session, defer
 
 from ..accounting.lifecycle import delete_books
@@ -22,6 +22,7 @@ from ..models import (
     BankMessage,
     CardBill,
     Holding,
+    LoginEvent,
     Bill,
     BillPayment,
     InvestmentLink,
@@ -37,6 +38,7 @@ from ..models import (
     SplitBill,
     SplitGroup,
     SplitMember,
+    SplitPayee,
     SplitSettlement,
     Subscription,
     SubscriptionCharge,
@@ -51,6 +53,10 @@ from ..models import (
     UsernameChangeRequest,
 )
 from ..schemas import (
+    AdminUserOut,
+    LoginDeviceOut,
+    LoginEventOut,
+    SecurityPolicy,
     AccountDeletionOut,
     AdminReason,
     AdminUserUpdate,
@@ -62,6 +68,7 @@ from ..schemas import (
 )
 from ..security import hash_password
 from ..services import mfa, otp
+from ..services import security_policy as policy
 from ..services.mailer import send_email
 from ..services.backup import (
     KIND_USER,
@@ -85,12 +92,24 @@ def _get_user(db: Session, user_id: int) -> User:
     return user
 
 
-@router.get("/users", response_model=list[ManagedUserOut])
+@router.get("/users", response_model=list[AdminUserOut])
 def list_users(status_filter: str | None = None, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     stmt = select(User).order_by(User.created_at.desc())
     if status_filter:
         stmt = stmt.where(User.status == status_filter)
-    return db.scalars(stmt).all()
+    users = db.scalars(stmt).all()
+    # Each user's latest successful sign-in
+    latest = (select(LoginEvent.user_id, func.max(LoginEvent.id).label("id"))
+              .where(LoginEvent.result == "SUCCESS").group_by(LoginEvent.user_id).subquery())
+    last = {e.user_id: e for e in db.scalars(select(LoginEvent).join(latest, LoginEvent.id == latest.c.id))}
+    out = []
+    for u in users:
+        row = AdminUserOut.model_validate(u)
+        if e := last.get(u.id):
+            row.last_login_at, row.last_login_ip = e.created_at, e.ip
+            row.last_login_device = " · ".join(x for x in (e.device, "app" if e.platform == "APP" else e.browser) if x) or None
+        out.append(row)
+    return out
 
 
 @router.post("/users/{user_id}/approve", response_model=ManagedUserOut)
@@ -295,7 +314,7 @@ def delete_account(db: Session, user: User, actor: User, reason: str | None, kee
     for model, col in (
         (UserAvatar, UserAvatar.user_id), (UserBackground, UserBackground.user_id), (Notification, Notification.user_id),
         (UsernameChangeRequest, UsernameChangeRequest.user_id), (PasswordReset, PasswordReset.user_id),
-        (EmailOtp, EmailOtp.user_id),
+        (EmailOtp, EmailOtp.user_id), (LoginEvent, LoginEvent.user_id), (SplitPayee, SplitPayee.user_id),
     ):
         db.execute(delete(model).where(col == user.id))
     db.execute(delete(DataShare).where(or_(DataShare.owner_id == user.id, DataShare.viewer_id == user.id)))
@@ -566,3 +585,61 @@ def update_otp_settings(data: OtpSettings, admin: User = Depends(require_admin),
     otp.set_otp_minutes(db, data.signup_minutes, data.account_minutes, admin.username)
     db.commit()
     return OtpSettings(**otp.otp_minutes(db))
+
+
+@router.get("/settings/security", response_model=SecurityPolicy)
+def get_security_settings(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    return SecurityPolicy(**policy.policy(db))
+
+
+@router.put("/settings/security", response_model=SecurityPolicy)
+def update_security_settings(data: SecurityPolicy, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Turn the email code at sign-in and the app passcode on or off, for everyone."""
+    if data.login_email_otp and not policy.login_email_otp(db) and not policy.email_can_be_sent():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Email isn't set up on the server (SMTP_HOST), so nobody could receive the code. Set it up first.")
+    policy.set_policy(db, login_email_otp=data.login_email_otp, passcode_required=data.passcode_required, actor=admin.username)
+    db.commit()
+    return SecurityPolicy(**policy.policy(db))
+
+
+# ---------- sign-in log (admins only; users are not shown it) ----------
+def _event_out(e: LoginEvent, u: User | None) -> LoginEventOut:
+    out = LoginEventOut.model_validate(e)
+    if u:
+        out.username, out.full_name = u.username, u.full_name
+    return out
+
+
+@router.get("/logins", response_model=list[LoginEventOut])
+def list_logins(user_id: int | None = None, failed_only: bool = False, limit: int = 300,
+                admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Sign-ins, newest first: when, from which IP address and on which device. One user's with `user_id`."""
+    stmt = select(LoginEvent, User).join(User, User.id == LoginEvent.user_id)
+    if user_id:
+        stmt = stmt.where(LoginEvent.user_id == user_id)
+    if failed_only:
+        stmt = stmt.where(LoginEvent.result != "SUCCESS")
+    stmt = stmt.order_by(LoginEvent.created_at.desc(), LoginEvent.id.desc()).limit(max(1, min(limit, 2000)))
+    return [_event_out(e, u) for e, u in db.execute(stmt).all()]
+
+
+@router.get("/users/{user_id}/devices", response_model=list[LoginDeviceOut])
+def user_devices(user_id: int, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """The devices a user has signed in from (successful sign-ins), most recently used first."""
+    _get_user(db, user_id)
+    groups: dict[tuple, LoginDeviceOut] = {}
+    rows = db.scalars(select(LoginEvent).where(LoginEvent.user_id == user_id, LoginEvent.result == "SUCCESS")
+                      .order_by(LoginEvent.created_at.desc(), LoginEvent.id.desc()))
+    for e in rows:
+        key = (e.platform, e.device, e.os, e.browser)
+        g = groups.get(key)
+        if g is None:
+            groups[key] = g = LoginDeviceOut(
+                device=e.device, os=e.os, browser=e.browser, platform=e.platform, app_version=e.app_version,
+                first_seen=e.created_at, last_seen=e.created_at, last_ip=e.ip, ips=[], sign_ins=0)
+        g.first_seen = e.created_at
+        g.sign_ins += 1
+        if e.ip and e.ip not in g.ips and len(g.ips) < 10:
+            g.ips.append(e.ip)
+    return list(groups.values())

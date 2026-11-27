@@ -36,7 +36,8 @@ import UploadFileOutlined from '@mui/icons-material/UploadFileOutlined'
 import VisibilityOutlined from '@mui/icons-material/VisibilityOutlined'
 import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded'
 import api, { APP_DOWNLOAD_URL, isApp, todayISO } from '../api'
-import { AutoTrack } from '../autotrack'
+import { AutoTrack, resumeOnOpen } from '../autotrack'
+import SplitPrompt from './SplitPrompt'
 import { canUseSplits, hasFeature, useAuth } from '../auth'
 import Avatar from './Avatar'
 import Tour from './Tour'
@@ -110,7 +111,7 @@ export default function Layout() {
     if (!AutoTrack) return undefined
     const go = () => AutoTrack.takeRoute().then(({ route }) => route && navigate(route)).catch(() => {})
     go()
-    AutoTrack.flush().catch(() => {})
+    resumeOnOpen().catch(() => {})
     window.addEventListener('autotrackRoute', go)
     return () => window.removeEventListener('autotrackRoute', go)
   }, [navigate])
@@ -454,6 +455,7 @@ export default function Layout() {
           </PageBannerContext.Provider>
         </div>
       </main>
+      <SplitPrompt />
       {canAdd && (
         <button className="fab" data-tour="quick-add" onClick={() => setQuickAdd(true)} aria-label="Quick add an expense or money received" title="Quick add">
           <AddRounded style={{ fontSize: 30 }} />

@@ -6,10 +6,11 @@ import { useAuth } from '../auth'
 import AuthShell from '../components/AuthShell'
 import { Alert } from '../components/ui'
 import Logo from '../components/Logo'
+import OtpField from '../components/OtpField'
 import PasswordInput from '../components/PasswordInput'
 
 export default function Login() {
-  const { user, login, completeMfa, setNewPassword } = useAuth()
+  const { user, login, completeMfa, completeEmailCode, resendEmailCode, setNewPassword } = useAuth()
   const navigate = useNavigate()
   const [form, setForm] = useState({ username: '', password: '' })
   const [error, setError] = useState('')
@@ -22,10 +23,16 @@ export default function Login() {
   // Signed in with a temporary password: a new password must be chosen
   const [passwordToken, setPasswordToken] = useState(null)
   const [newPw, setNewPw] = useState({ password: '', confirm: '' })
+  // The admin turned on "email code at sign-in": { token, hint, expiresIn } after the earlier steps
+  const [emailStep, setEmailStep] = useState(null)
 
   // A step returned { mfaToken } or { passwordToken }, or signed in
   const goNext = (res) => {
-    if (res.mfaToken) {
+    if (res.emailToken) {
+      setMfaToken(null)
+      setEmailStep({ token: res.emailToken, hint: res.emailHint, expiresIn: res.expiresIn })
+      setCode('')
+    } else if (res.mfaToken) {
       setMfaToken(res.mfaToken)
       setCode('')
     } else if (res.passwordToken) {
@@ -86,7 +93,29 @@ export default function Login() {
     }
   }
 
+  const submitEmailCode = async (e) => {
+    e.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      goNext(await completeEmailCode(emailStep.token, code.trim()))
+    } catch (err) {
+      setError(errorMessage(err))
+      if ([401, 429].includes(err?.response?.status)) setEmailStep(null)
+      setCode('')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const resendCode = async () => {
+    const r = await resendEmailCode(emailStep.token)
+    setEmailStep({ token: r.emailToken, hint: r.emailHint, expiresIn: r.expiresIn })
+    return { expires_in_seconds: r.expiresIn, message: `We emailed a new code to ${r.emailHint}.` }
+  }
+
   const backToPassword = () => {
+    setEmailStep(null)
     setMfaToken(null)
     setPasswordToken(null)
     setError('')
@@ -119,6 +148,35 @@ export default function Login() {
           </div>
           <button className="btn block" disabled={busy}>
             <KeyRound size={16} /> {busy ? 'Saving…' : 'Save and sign in'}
+          </button>
+          <p className="muted small" style={{ textAlign: 'center', margin: 0 }}>
+            <button type="button" className="link-button" onClick={backToPassword}>
+              <ArrowLeft size={14} /> Back to sign in
+            </button>
+          </p>
+        </form>
+      </AuthShell>
+    )
+  }
+
+  if (emailStep) {
+    return (
+      <AuthShell>
+        <form className="auth-card" onSubmit={submitEmailCode}>
+          <div>
+            <Mail size={36} color="var(--primary)" />
+            <h2>Check your email</h2>
+            <p className="muted">We emailed a 6-digit code to {emailStep.hint}. Enter it to finish signing in.</p>
+          </div>
+          {error && <Alert type="error">{error}</Alert>}
+          <OtpField
+            value={code}
+            onChange={setCode}
+            send={resendCode}
+            initial={{ expires_in_seconds: emailStep.expiresIn, message: `Code sent to ${emailStep.hint}.` }}
+          />
+          <button className="btn block" disabled={busy || code.length !== 6}>
+            <ShieldCheck size={16} /> {busy ? 'Checking…' : 'Verify and sign in'}
           </button>
           <p className="muted small" style={{ textAlign: 'center', margin: 0 }}>
             <button type="button" className="link-button" onClick={backToPassword}>

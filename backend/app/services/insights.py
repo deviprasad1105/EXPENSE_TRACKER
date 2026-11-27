@@ -239,26 +239,29 @@ def _money(v: float) -> str:
 
 
 def _insights(sections, categories, subscriptions, splits, budgets, past: str | None = None) -> list[dict]:
-    """Short sentences about what changed. `tone` is good, bad or neutral. `past` names an earlier month being looked at."""
+    """Short sentences about what changed. `tone` is good, bad or neutral; `dir` (up or down) is which way the number
+    moved, when the sentence is about a change, so the arrow points the right way whatever the tone. `past` names an
+    earlier month being looked at."""
     out = []
     t = sections["total"]
     if past:
         # A finished month: compared whole with the whole month before and with the six-month average
         if t["vs_last_month"] is not None:
             up = t["vs_last_month"] > 0
-            out.append({"tone": "bad" if up else "good",
+            out.append({"tone": "bad" if up else "good", "dir": "up" if up else "down",
                         "text": f"In {past} you spent {_money(t['this_month'])}: {abs(t['vs_last_month']):.0f}% "
                                 f"{'more' if up else 'less'} than the month before ({_money(t['last_month'])})."})
         elif t["this_month"]:
             out.append({"tone": "neutral", "text": f"In {past} you spent {_money(t['this_month'])}."})
         if t["avg_6m"] and t["this_month"]:
             diff = t["this_month"] - t["avg_6m"]
-            out.append({"tone": "bad" if diff > 0 else "good",
+            out.append({"tone": "bad" if diff > 0 else "good", "dir": "up" if diff > 0 else "down",
                         "text": f"That is {_money(abs(diff))} {'above' if diff > 0 else 'below'} the 6-month average of {_money(t['avg_6m'])}."})
     elif t["vs_last_month"] is not None:
         up = t["vs_last_month"] > 0
         out.append({
             "tone": "bad" if up else "good",
+            "dir": "up" if up else "down",
             "text": f"You've spent {_money(t['this_month'])} so far this month: {abs(t['vs_last_month']):.0f}% "
                     f"{'more' if up else 'less'} than by this day last month ({_money(t['last_month_to_date'])}).",
         })
@@ -268,6 +271,7 @@ def _insights(sections, categories, subscriptions, splits, budgets, past: str | 
         diff = t["projected"] - t["avg_6m"]
         out.append({
             "tone": "bad" if diff > 0 else "good",
+            "dir": "up" if diff > 0 else "down",
             "text": f"At this pace the month ends near {_money(t['projected'])}, "
                     f"{_money(abs(diff))} {'above' if diff > 0 else 'below'} your 6-month average of {_money(t['avg_6m'])}.",
         })
@@ -275,11 +279,11 @@ def _insights(sections, categories, subscriptions, splits, budgets, past: str | 
     if changed:
         worst = max(changed, key=lambda c: c["change"])
         if worst["change"] > 0:
-            out.append({"tone": "bad", "text": f"{worst['category']} {'was' if past else 'is'} up {worst['change_pct']:.0f}% on {'the month before' if past else 'last month'} "
+            out.append({"tone": "bad", "dir": "up", "text": f"{worst['category']} {'was' if past else 'is'} up {worst['change_pct']:.0f}% on {'the month before' if past else 'last month'} "
                                                f"({_money(worst['last_month'])} → {_money(worst['this_month'])})."})
         best = min(changed, key=lambda c: c["change"])
         if best["change"] < 0:
-            out.append({"tone": "good", "text": f"{best['category']} {'was' if past else 'is'} down {abs(best['change_pct']):.0f}%: "
+            out.append({"tone": "good", "dir": "down", "text": f"{best['category']} {'was' if past else 'is'} down {abs(best['change_pct']):.0f}%: "
                                                 f"{_money(abs(best['change']))} saved compared with {'the month before' if past else 'last month'}."})
     for b in budgets:
         if b["level"] == "OVER":

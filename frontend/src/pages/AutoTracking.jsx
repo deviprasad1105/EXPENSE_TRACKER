@@ -6,7 +6,7 @@ import EventNoteOutlined from '@mui/icons-material/EventNoteOutlined'
 import MarkChatReadOutlined from '@mui/icons-material/MarkChatReadOutlined'
 import SmsOutlined from '@mui/icons-material/SmsOutlined'
 import api, { errorMessage, isApp, money, niceDate, todayISO } from '../api'
-import { linkPhone, phoneStatus, scanInbox, setPhoneSources, unlinkPhone, AutoTrack } from '../autotrack'
+import { openSettingsLeft, phoneStatus, scanInbox, setPhoneSources, turnOnEverything, unlinkPhone, AutoTrack } from '../autotrack'
 import { Alert, Msg, PageHeader, StatTile } from '../components/ui'
 
 const STATUS = {
@@ -311,52 +311,78 @@ function PhoneCard({ phone, settings, form, run, busy, setMsg }) {
   if (!phone) return <div className="card muted">Checking this phone…</div>
   const restricted = phone.sdk >= 33
   const sources = (over) => ({ enabled: settings?.enabled ?? form?.enabled ?? true, sms: phone.smsOn, notifications: phone.notificationsOn, ...over })
+  const allGood = phone.linked && phone.sms && phone.postNotifications && (!phone.notificationsOn || phone.notificationAccess) && phone.batteryFree
+
+  const readPast = async (since, until) => {
+    setScan((s) => ({ ...s, progress: 'Reading your SMS…' }))
+    const r = await scanInbox(since, until, (done, total) => setScan((s) => ({ ...s, progress: `Sending ${done} of ${total}…` })))
+    setScan((s) => ({ ...s, progress: '' }))
+    return r
+  }
 
   const doScan = () =>
     run('scan', async () => {
-      setScan((s) => ({ ...s, progress: 'Reading your SMS…' }))
-      const r = await scanInbox(from, scan.to, (done, total) => setScan((s) => ({ ...s, progress: `Sending ${done} of ${total}…` })))
-      setScan((s) => ({ ...s, progress: '' }))
+      const r = await readPast(from, scan.to)
       setMsg({
         type: 'ok',
         text: `Looked at ${r.scanned} SMS, ${r.found} from banks: ${summary(r.counts)}.${r.limited ? ' Only the first 5,000 were taken: scan a shorter period for the rest.' : ''}`,
       })
     })
 
+  // One tap: turn it on, link the phone, ask for everything, read this period's messages, then open the two
+  // Android screens that can't be asked from a dialog
+  const turnOn = () =>
+    run('setup', async () => {
+      const status = await turnOnEverything()
+      let found = ''
+      if (status.sms) {
+        const { data } = await api.get('/autotrack/settings')
+        const r = await readPast(data.since || todayISO(), todayISO())
+        found = r.found ? ` Read ${r.found} bank message(s) already on the phone: ${summary(r.counts)}.` : ''
+      }
+      if (!status.sms) {
+        setMsg({ type: 'warn', text: 'Android didn’t allow reading SMS. Follow the steps below, then tap “Turn on” again.' })
+        return
+      }
+      const left = !status.notificationAccess || !status.batteryFree
+      setMsg({
+        type: 'ok',
+        text: `Auto-tracking is on.${found}${left ? ' Last step: Android opens its settings now. Allow Expense Tracker there, then come back.' : ''}`,
+      })
+      if (left) await openSettingsLeft(status)
+    })
+
   return (
     <div className="card">
-      <h3>This phone</h3>
-      {!phone.linked ? (
+      <div className="row-between">
+        <h3>This phone</h3>
+        {phone.linked && <span className={`badge ${allGood ? 'ok' : 'warn'}`}>{allGood ? 'Tracking automatically' : 'Needs attention'}</span>}
+      </div>
+      {!allGood && (
         <>
-          <p className="muted">Link this phone so it can send your bank messages, even when the app is closed. Only bank messages about money are sent; personal messages and one-time passwords never leave the phone.</p>
-          <button className="btn" disabled={!!busy} onClick={() => run('link', async () => {
-            if (!settings?.enabled) await api.put('/autotrack/settings', { enabled: true, mode: form?.mode || 'REVIEW', since: form?.since || null })
-            await linkPhone({ sms: true, notifications: false })
-            await AutoTrack.requestSms()
-            await AutoTrack.requestPostNotifications()
-          })}>
-            <SmsOutlined fontSize="small" /> Link this phone
+          <p className="muted">
+            {phone.linked
+              ? 'Something Android needs is still off. Tap below and allow everything it asks for.'
+              : 'One tap sets everything up: your bank SMS and bank-app alerts are recorded automatically, even when the app is closed. Only bank messages about money are sent; personal messages and one-time passwords never leave the phone.'}
+          </p>
+          <button className="btn block" disabled={!!busy} onClick={turnOn}>
+            <SmsOutlined fontSize="small" /> {busy === 'setup' ? scan.progress || 'Setting up…' : phone.linked ? 'Fix it' : 'Turn on automatic tracking'}
           </button>
         </>
-      ) : (
-        <div className="phone-steps">
-          <Step ok={phone.sms} title="Read bank SMS" text={phone.sms ? 'Allowed. New bank SMS are sent as they arrive.' : 'Not allowed yet.'}>
-            {!phone.sms && (
-              <button className="btn small" disabled={!!busy} onClick={() => run('sms', () => AutoTrack.requestSms())}>
-                Allow
-              </button>
-            )}
-          </Step>
+      )}
+      {phone.linked && (
+        <div className="phone-steps" style={{ marginTop: 12 }}>
+          <Step ok={phone.sms} title="Bank SMS" text={phone.sms ? 'Read as they arrive.' : 'Not allowed yet.'} />
           {!phone.sms && restricted && (
             <Alert type="info">
-              If Android doesn’t show the request, or says the setting is restricted: open <b>App info</b> → <b>⋮</b> (top right) → <b>Allow restricted settings</b>, then come back and press Allow.
-              Android asks for this for apps installed outside the Play Store.{' '}
+              Android blocks this for apps installed outside the Play Store until you allow it: open <b>App info</b> → <b>⋮</b> (top right) → <b>Allow restricted settings</b>,
+              come back and tap <b>Fix it</b>.{' '}
               <button className="btn ghost small" onClick={() => AutoTrack.openAppSettings()}>
                 Open App info
               </button>
             </Alert>
           )}
-          <Step ok={phone.notificationsOn && phone.notificationAccess} title="Bank app notifications" text="For banks that alert in their app instead of by SMS. Only bank, card and payment apps are read; never chats or email.">
+          <Step ok={phone.notificationsOn && phone.notificationAccess} title="Bank app alerts" text="For banks and UPI apps that alert in their app. Only bank, card and payment apps are read; never chats or email.">
             <label className="switch">
               <input
                 type="checkbox"
@@ -370,21 +396,8 @@ function PhoneCard({ phone, settings, form, run, busy, setMsg }) {
               <span />
             </label>
           </Step>
-          {phone.notificationsOn && !phone.notificationAccess && (
-            <Alert type="info">
-              Turn on <b>Expense Tracker</b> in Android’s Notification access.{' '}
-              <button className="btn ghost small" onClick={() => AutoTrack.openNotificationAccess()}>
-                Open Notification access
-              </button>
-            </Alert>
-          )}
-          <Step ok={phone.postNotifications} title="Tell me what was recorded" text="A phone notification for each transaction, tap it to review.">
-            {!phone.postNotifications && (
-              <button className="btn small" disabled={!!busy} onClick={() => run('post', () => AutoTrack.requestPostNotifications())}>
-                Allow
-              </button>
-            )}
-          </Step>
+          <Step ok={phone.postNotifications} title="Tell me what was recorded" text="A notification for each transaction; tap it to change it." />
+          <Step ok={phone.batteryFree} title="Works in the background" text={phone.batteryFree ? 'Android lets it send straight away.' : 'Android may delay sending to save battery.'} />
           {phone.queued > 0 && (
             <Step title={`${phone.queued} message(s) waiting to be sent`} text="They go as soon as the phone is online.">
               <button className="btn small" disabled={!!busy} onClick={() => run('flush', () => AutoTrack.flush())}>
@@ -393,9 +406,9 @@ function PhoneCard({ phone, settings, form, run, busy, setMsg }) {
             </Step>
           )}
           {phone.sms && (
-            <div className="field">
-              <label>Scan past messages</label>
-              <div className="row-between" style={{ justifyContent: 'flex-start' }}>
+            <details className="field">
+              <summary>Read older messages</summary>
+              <div className="row-between" style={{ justifyContent: 'flex-start', marginTop: 8 }}>
                 <input type="date" aria-label="From" value={from} max={scan.to} onChange={(e) => setScan({ ...scan, from: e.target.value })} />
                 <span className="muted">to</span>
                 <input type="date" aria-label="To" value={scan.to} max={todayISO()} onChange={(e) => setScan({ ...scan, to: e.target.value })} />
@@ -404,16 +417,16 @@ function PhoneCard({ phone, settings, form, run, busy, setMsg }) {
                 </button>
               </div>
               <span className="hint">Transactions before “Only transactions from” are skipped, and nothing already recorded is added twice.</span>
-            </div>
+            </details>
           )}
           <div className="form-actions">
             <button className="btn ghost small" disabled={!!busy} onClick={() => window.confirm('Stop reading messages on this phone?') && run('unlink', () => unlinkPhone({ everywhere: true }))}>
-              Unlink this phone
+              Turn off on this phone
             </button>
           </div>
         </div>
       )}
-      {settings?.device_linked && !phone.linked && <p className="hint">Another phone is linked (…{settings.device_hint}). Linking this one stops that one.</p>}
+      {settings?.device_linked && !phone.linked && <p className="hint">Another phone is linked (…{settings.device_hint}). Turning it on here stops that one.</p>}
     </div>
   )
 }

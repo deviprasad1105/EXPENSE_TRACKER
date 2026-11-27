@@ -36,9 +36,6 @@ public class SmsReceiver extends BroadcastReceiver {
                 any = true;
             }
         }
-        if (any) {
-            PendingResult pending = goAsync();
-            Uploader.flushAsync(context, pending::finish);
-        }
+        if (any) UploadWorker.schedule(context);
     }
 }

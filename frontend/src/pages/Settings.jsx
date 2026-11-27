@@ -28,6 +28,7 @@ import AliasModal from '../components/AliasModal'
 import { Msg, PageHeader } from '../components/ui'
 import DateInput from '../components/DateInput'
 import MfaSettings from '../components/MfaSettings'
+import { PasscodeSettings } from '../components/Passcode'
 
 const EMPTY_ACCOUNT = { name: '', bank: '', kind: 'SAVINGS', last4: '', opening_balance: '', is_primary: false, is_active: true }
 const EMPTY_BUDGET = { scope: 'OVERALL', target: '', monthly_limit: '', alert_percent: 90, is_active: true }
@@ -95,6 +96,7 @@ export default function Settings() {
       <div className="card">
         <h3>Security</h3>
         <MfaSettings />
+        <PasscodeSettings />
         <Msg msg={msg} />
         <div className="setting-row">
           <div>

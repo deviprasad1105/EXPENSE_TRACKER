@@ -31,24 +31,32 @@ public final class Uploader {
         }, "autotrack-upload").start();
     }
 
-    public static void flush(Context c) {
+    /**
+     * Send everything waiting. Returns true when the queue is empty (or can't be sent: not linked), false when some
+     * are left for later (offline, server busy): the caller (UploadWorker) then tries again with a growing delay.
+     */
+    public static boolean flush(Context c) {
         synchronized (RUNNING) {
             String base = AutoTrackStore.apiBase(c), token = AutoTrackStore.token(c);
-            if (base == null || token == null) return;
+            if (base == null || token == null) return true;
             while (AutoTrackStore.queued(c) > 0) {
-                JSONArray batch = AutoTrackStore.take(c, BATCH);
+                JSONArray batch = AutoTrackStore.peek(c, BATCH);
                 int code = send(c, base, token, batch);
                 if (code == 401) {
                     // Unlinked on the server (or a new phone was linked): keep nothing for a token that no longer works
                     AutoTrackStore.unlink(c);
-                    return;
+                    AutoTrackStore.drop(c, AutoTrackStore.queued(c));
+                    return true;
                 }
-                if (code < 200 || code >= 300) {
-                    // Offline or the server is busy: keep them for next time (a new message, the app opening, a restart)
-                    if (code != 400 && code != 422) AutoTrackStore.requeue(c, batch);
-                    return;
+                if (code == 400 || code == 413 || code == 422) {
+                    // The server can't take this batch as it is: sending it again would block everything behind it
+                    AutoTrackStore.drop(c, batch.length());
+                    continue;
                 }
+                if (code < 200 || code >= 300) return false;
+                AutoTrackStore.drop(c, batch.length());
             }
+            return true;
         }
     }
 

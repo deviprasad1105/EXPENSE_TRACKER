@@ -64,6 +64,9 @@ Everyone who can log in, plus their role, approval state, reporting line and pre
 | `mfa_enabled_at` | DATE, nullable | When two-step sign-in was turned on. |
 | `mfa_last_step` | INTEGER, nullable | The 30-second time step of the last code used, so a code can't be used twice. |
 | `mfa_recovery_hashes` | VARCHAR2(1000), nullable | Comma-separated hashes of the unused recovery codes (10 are made at a time; each is removed once used). |
+| `passcode_hash` | VARCHAR2(200), nullable | bcrypt of the 4–6 digit passcode that opens the app on a device where they are signed in. Asked only while `passcode_required` is on (APP_SETTINGS). Changing it needs the password. |
+| `passcode_set_at` | DATE, nullable | When the passcode was chosen. |
+| `passcode_failures` | INTEGER | Wrong passcodes in a row. At 5 the user is signed out everywhere (`token_version` + 1); signing in with the password sets it back to 0. |
 
 **How it works**
 - **Registration and approval:** registration creates a `PENDING` row, and every admin gets a notification.
@@ -222,7 +225,29 @@ App-wide settings the admin changes in the app (Admin → Settings), as key / va
 | Key | Meaning |
 |---|---|
 | `otp_signup_minutes` | How long the sign-up email code is valid (1–60, default `OTP_SIGNUP_MINUTES` = 5). |
-| `otp_account_minutes` | How long password / username change codes are valid (1–60, default `OTP_ACCOUNT_MINUTES` = 5). |
+| `otp_account_minutes` | How long password / username change codes are valid (1–60, default `OTP_ACCOUNT_MINUTES` = 5). Also used for sign-in codes. |
+| `login_email_otp` | `1`: after the password (and the authenticator code, if the user turned that on) a 6-digit code is emailed (`email_otps.purpose = 'LOGIN'`) and must be entered to sign in. Not asked after signing in with a temporary password, which came by email. Can only be turned on in production when SMTP is set up. |
+| `passcode_required` | `1`: everyone chooses a passcode (`app_users.passcode_hash`), asked whenever the app or site is opened where they are already signed in, and after 5 minutes in the background. |
+
+## LOGIN_EVENTS
+
+Every sign-in to an account and every failed try (wrong password, authenticator code, email code or passcode), with
+where it came from. Only admins see it (Admin → Sign-ins, and the last sign-in in the Users list); users are not
+shown it. Rows older than 180 days are removed when the user next signs in, and all of a user's rows go when the
+account is deleted.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | INTEGER, PK | |
+| `user_id` | INTEGER, FK → app_users (cascade) | Indexed. |
+| `created_at` | DATE | When. Indexed. |
+| `result` | VARCHAR2(10) | `SUCCESS` or `FAILED`. |
+| `detail` | VARCHAR2(60), nullable | How they signed in (`Password + email code`…), or what was wrong (`Wrong password`…). |
+| `ip` | VARCHAR2(45), nullable | The visitor's IP address (first `X-Forwarded-For` entry behind Vercel). |
+| `platform` | VARCHAR2(10) | `APP` (the Android app, which sends `X-Client: android-app/<version>`) or `WEB`. |
+| `app_version` | VARCHAR2(20), nullable | The Android app's version. |
+| `device` / `os` / `browser` | VARCHAR2, nullable | Read from the user agent: `Samsung SM-S918B` / `Android 14` / `Android WebView`. |
+| `user_agent` | VARCHAR2(400), nullable | The full user agent, as sent. |
 
 ## DAILY_ITEMS
 Each user's own list of things they buy every day (cigarette, chocolate, food…). The Daily Entry page uses it
@@ -438,6 +463,26 @@ Money paid back between two people.
 
 **Balances:** for every pair of people, the shares one owes the other (as payer) minus the reverse, minus
 payments between them. The group is settled when every pair is within one paisa.
+
+### SPLIT_PAYEES
+
+Shops or people a group pays together (Split group → Members → Shared shops and UPI IDs). When the member who added
+one pays it by UPI (read by auto-tracking), the app asks "Split ₹900 at DMart with Flat 4B?" with the group's members
+and amounts they can change (`bank_messages.split_status`). Personal to that member: only their own payments match,
+only money going out (not refunds, card bills or ATM), and only while they are still in the group. One UPI ID belongs
+to one group per member.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | INTEGER, PK | |
+| `group_id` | INTEGER, FK → split_groups (cascade) | |
+| `user_id` | INTEGER, FK → app_users (cascade) | The member whose payments it matches. |
+| `label` | VARCHAR2(100) | What the pop-up and the split bill call it ("DMart groceries"). |
+| `vpa` | VARCHAR2(100), nullable | UPI ID, lower-case, matched exactly. |
+| `name_match` | VARCHAR2(60), nullable | Or a whole word of the payee's name as the bank writes it (`DMART`), for messages without the UPI ID. |
+| `default_members` | VARCHAR2(500), nullable | Member ids ticked to begin with (comma-separated); empty = everyone. |
+| `is_active` | BOOLEAN | Off: payments to it are not asked about. |
+| `created_at` | DATE | |
 
 ## Subscriptions and bills
 
@@ -788,6 +833,11 @@ A message whose date and amount match an existing expense / income / transfer wa
 mode. `APP_USERS` holds the switches: `autotrack_enabled`, `autotrack_mode` (`REVIEW` or `AUTO`), `autotrack_since`
 (transactions before it are skipped; by default the latest existing record's date), and `autotrack_token_hash` /
 `autotrack_token_hint` (the phone's token, which can only send messages; shown once, never stored).
+
+Columns for splitting: `vpa` (the UPI ID paid, when the message shows it), and, for a payment to one of the user's
+`split_payees`, `split_payee_id`, `split_status` (`ASK` while the "Split this?" pop-up waits, then `SPLIT`, `SELF`
+— added to the group as the payer's alone — or `SKIPPED`) and `split_bill_id` (the split bill made). Payments older
+than 30 days are no longer asked about. Answering never changes the expense itself.
 
 ---
 
