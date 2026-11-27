@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Camera, Clock, KeyRound, Lock, Send, Trash2, UserRound, UserX } from 'lucide-react'
-import api, { errorMessage } from '../api'
+import api, { errorMessage, isApp } from '../api'
 import { useAuth } from '../auth'
 import Avatar from '../components/Avatar'
+import GetAndroidApp from '../components/GetAndroidApp'
 import OtpField from '../components/OtpField'
 import { Alert, Msg, PageHeader } from '../components/ui'
 import PasswordInput from '../components/PasswordInput'
@@ -144,6 +145,8 @@ export default function Profile() {
   return (
     <div style={{ maxWidth: 860 }}>
       <PageHeader title="Profile" subtitle="Your photo, personal details and sign-in information." />
+
+      {!isApp && <GetAndroidApp />}
 
       <div className="card">
         <div className="card-head">

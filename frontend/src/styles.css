@@ -1212,9 +1212,7 @@ img.logo { object-fit: contain; border-radius: 22%; background: none; }
 }
 .app-update-close { position: absolute; top: 8px; right: 8px; }
 .app-update-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.app-update-hint { font-size: 13px; color: var(--muted); flex-basis: 100%; }
 .app-update-note { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
-.app-update-note.error { color: var(--danger); }
 .app-update-blocker {
   position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 24px;
   background: linear-gradient(160deg, #1e1b4b 0%, #262067 45%, #312e81 100%);

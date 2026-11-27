@@ -119,7 +119,7 @@ export default function AutoTracking() {
           <div className="card">
             <h3>On your phone</h3>
             <p className="muted">
-              Reading bank SMS needs the Expense Tracker Android app: sign in there and open Auto-tracking. It sends only bank
+              Reading bank SMS needs the Android app: get it from <Link to="/profile#android-app">Profile → Android app</Link>, sign in, and open Auto-tracking there. It sends only bank
               messages about money, never personal messages or one-time passwords.
             </p>
             <p className="muted">

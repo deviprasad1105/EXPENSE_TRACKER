@@ -76,7 +76,7 @@ function NoFeatures() {
   )
 }
 
-// The in-app update prompt (and the APK link it needs) is loaded only inside the Android app, never on the website
+// The "new version" prompt is only for the Android app; the website never loads it
 const AppUpdateGate = isApp ? lazy(() => import('./components/AppUpdateGate')) : null
 
 export default function App() {

@@ -6,14 +6,12 @@ import android.os.Bundle;
 import com.expensetracker.app.autotrack.AutoTrackPlugin;
 import com.expensetracker.app.autotrack.AutoTrackStore;
 import com.expensetracker.app.autotrack.Notifier;
-import com.expensetracker.app.update.AppUpdatePlugin;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(AutoTrackPlugin.class);
-        registerPlugin(AppUpdatePlugin.class);
         super.onCreate(savedInstanceState);
         rememberRoute(getIntent());
     }

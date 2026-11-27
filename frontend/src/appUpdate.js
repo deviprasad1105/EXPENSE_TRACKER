@@ -1,14 +1,14 @@
-// Android app only. Kept out of api.js so the website's bundle carries no link to the APK: AppUpdateGate (the only
-// user) is loaded lazily, and only inside the app (see App.jsx). A file offered for download from a site with a
-// sign-in page is what Google Safe Browsing flags as deceptive.
+// The Android app is published in the repository's mobile-app/ folder by the "Publish Android app" workflow.
+// Downloads always start from GitHub's page for the file, after the person taps Download there: neither the website
+// nor the app downloads or installs an APK by itself (a site that pushes app files is what Google Safe Browsing
+// flags as dangerous).
 import { APP_VERSION, isApp } from './api'
 
-// The Android app, kept in the repository's mobile-app/ folder (public, so anyone can download it)
-export const APP_DOWNLOAD_URL = 'https://github.com/deviprasad1105/EXPENSE_TRACKER/raw/main/mobile-app/ExpenseTracker.apk'
-// Published next to the APK by `npm run publish:apk`: the newest app's version, and the oldest one still allowed
-const APP_RAW = 'https://raw.githubusercontent.com/deviprasad1105/EXPENSE_TRACKER/main/mobile-app'
-// The APK as the app downloads it itself (in-app update), without GitHub's redirect page
-export const APP_APK_URL = `${APP_RAW}/ExpenseTracker.apk`
+const REPO = 'https://github.com/deviprasad1105/EXPENSE_TRACKER'
+// GitHub's page for the APK, with its Download button
+export const APP_PAGE_URL = `${REPO}/blob/main/mobile-app/ExpenseTracker.apk`
+// Published next to the APK: the newest app's version, and the oldest one still allowed
+const VERSION_URL = 'https://raw.githubusercontent.com/deviprasad1105/EXPENSE_TRACKER/main/mobile-app/version.json'
 
 /**
  * Inside the app: { latest: { versionCode, versionName }, required } when a newer app is published, else null.
@@ -17,7 +17,7 @@ export const APP_APK_URL = `${APP_RAW}/ExpenseTracker.apk`
 export async function checkAppUpdate() {
   if (!isApp) return null
   try {
-    const res = await fetch(`${APP_RAW}/version.json?t=${Date.now()}`, { cache: 'no-store' })
+    const res = await fetch(`${VERSION_URL}?t=${Date.now()}`, { cache: 'no-store' })
     if (!res.ok) return null
     const latest = await res.json()
     if (!(Number(latest.versionCode) > APP_VERSION.versionCode)) return null
